@@ -401,30 +401,23 @@ run_abm_simulation <- function(lscape, p, times, x0, abm_pop_size, abm_delta_t,
 #' # If running this example outside of a context where alfakR is loaded,
 #' # the C++ functions (run_karyotype_abm etc.) will not be found.
 #'
-#' if (requireNamespace("alfakR", quietly = TRUE) && # Check if package context exists
-#'     exists("rcpp_prepare_W_structure", where = "package:alfakR", mode="function")) {
 #'
-#'   ode_results <- predict_evo(lscape = landscape_df,
-#'                              p = prob_missegregation,
-#'                              times = simulation_times,
-#'                              x0 = initial_freq,
-#'                              prediction_type = "ODE")
-#'   print(head(ode_results))
-#'
-#'   abm_results <- predict_evo(lscape = landscape_df,
-#'                              p = prob_missegregation,
-#'                              times = simulation_times,
-#'                              x0 = initial_freq,
-#'                              prediction_type = "ABM",
-#'                              abm_pop_size = 1000, # Smaller for quick example
-#'                              abm_delta_t = 0.1,
-#'                              abm_max_pop = 10000,
-#'                              abm_record_interval = 10)
-#'   print(head(abm_results))
-#' } else {
-#'  message("Skipping predict_evo example: alfakR not loaded or Rcpp functions not found.")
-#'  message("Run devtools::load_all() in your package project first, or install the package.")
-#' }
+#' ode_results <- predict_evo(lscape = landscape_df,
+#'                            p = prob_missegregation,
+#'                            times = simulation_times,
+#'                            x0 = initial_freq,
+#'                            prediction_type = "ODE")
+#' print(head(ode_results))
+#' abm_results <- predict_evo(lscape = landscape_df,
+#'                            p = prob_missegregation,
+#'                            times = simulation_times,
+#'                            x0 = initial_freq,
+#'                            prediction_type = "ABM",
+#'                            abm_pop_size = 1000, # Smaller for quick example
+#'                            abm_delta_t = 0.1,
+#'                            abm_max_pop = 10000,
+#'                            abm_record_interval = 10)
+#' print(head(abm_results))
 #' }
 predict_evo <- function(lscape, p, times, x0, prediction_type = "ODE",
                         ode_method = "lsoda",
