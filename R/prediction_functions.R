@@ -316,17 +316,17 @@ run_abm_simulation <- function(lscape, p, times, x0, abm_pop_size, abm_delta_t,
     if(nrow(results_wide_df) > 0 && !("time" %in% names(results_wide_df))) { # Simplified check [cite: 223]
       stop("Internal error: 'time' column lost during ABM processing.", call. = FALSE)
     }
-    final_col_order <- intersect(c("time", all_karyotypes_initial), names(results_wide_df)) [cite: 224]
+    final_col_order <- intersect(c("time", all_karyotypes_initial), names(results_wide_df))
     results_final_df <- results_wide_df[, final_col_order, drop = FALSE]
     
   } else {
-    message("ABM processing resulted in empty data frame or no 'Karyotype' column; returning structure based on initial times and karyotypes.") [cite: 224]
-    results_final_df <- data.frame(time = if(length(times) > 0) unique(times) else numeric(0)) [cite: 225]
-    for (kt_name in all_karyotypes_initial) results_final_df[[kt_name]] <- 0.0 [cite: 225]
+    message("ABM processing resulted in empty data frame or no 'Karyotype' column; returning structure based on initial times and karyotypes.") 
+    results_final_df <- data.frame(time = if(length(times) > 0) unique(times) else numeric(0)) 
+    for (kt_name in all_karyotypes_initial) results_final_df[[kt_name]] <- 0.0 
     
-    if (nrow(results_final_df) == 0 && length(times) == 0) { # Truly empty case [cite: 225]
+    if (nrow(results_final_df) == 0 && length(times) == 0) { # Truly empty case 
       # Streamlined creation of a fully empty data frame with correct column names
-      col_names <- if(length(all_karyotypes_initial) > 0) c("time", all_karyotypes_initial) else "time" [cite: 225]
+      col_names <- if(length(all_karyotypes_initial) > 0) c("time", all_karyotypes_initial) else "time" 
       results_final_df <- stats::setNames(data.frame(matrix(ncol = length(col_names), nrow = 0)), col_names) # from 
     }
   }
