@@ -15,6 +15,7 @@ Imports:
     methods,
     quadprog,
     Rcpp,
-    RSpectra
+    RSpectra,
+    tidyr
 LinkingTo: 
     Rcpp

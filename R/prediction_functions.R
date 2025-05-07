@@ -223,6 +223,7 @@ run_ode_simulation <- function(lscape, p, times, x0, ode_method) {
 #' @param abm_seed RNG seed (-1 for random).
 #' @return Data frame with 'time' column and frequency columns for each karyotype.
 #' @importFrom stats setNames
+#' @importFrom tidyr pivot_wider
 #' @keywords internal
 #' @noRd
 run_abm_simulation <- function(lscape, p, times, x0, abm_pop_size, abm_delta_t,
@@ -231,17 +232,18 @@ run_abm_simulation <- function(lscape, p, times, x0, abm_pop_size, abm_delta_t,
   
   message("Setting up ABM simulation...")
   
-  initial_counts <- round(x0/sum(x0) * abm_pop_size) 
+  initial_counts_raw <- x0 * abm_pop_size
+  initial_counts <- round(initial_counts_raw) 
   if(any(initial_counts < 0)) {
     warning("Negative counts generated for ABM initial population after rounding; treating as 0.", call.=FALSE)
     initial_counts[initial_counts < 0] <- 0 
   }
-  # Create list of initial populations, filtering out zero counts, preserving names
-  initial_pop_list <- as.list(initial_counts[initial_counts > 0]) # Combined unfiltered and filtered [cite: 214]
+  initial_pop_list_unfiltered <- as.list(initial_counts)
+  initial_pop_list <- initial_pop_list_unfiltered[initial_counts > 0] 
   
   if(length(initial_pop_list) == 0) stop("Initial population for ABM is zero after filtering zero counts.", call. = FALSE)
   
-  fitness_map_list <- stats::setNames(as.list(lscape$mean), lscape$k) 
+  fitness_map_list <- stats::setNames(as.list(lscape$mean), lscape$k)
   
   max_time <- max(times, na.rm = TRUE) 
   num_steps <- ceiling(max_time / abm_delta_t)
@@ -254,85 +256,88 @@ run_abm_simulation <- function(lscape, p, times, x0, abm_pop_size, abm_delta_t,
       fitness_map_r        = fitness_map_list,
       p_missegregation     = p,
       dt                   = abm_delta_t,
-      n_steps              = as.integer(num_steps), 
-      max_population_size  = abm_max_pop, 
+      n_steps              = as.integer(num_steps), # Ensure integer
+      max_population_size  = abm_max_pop, # R numeric (double) is fine for C++ long long if value fits
       culling_survival_fraction = abm_culling_survival,
       record_interval      = as.integer(abm_record_interval),
       seed                 = as.integer(abm_seed)
-    ), error = function(e) stop("Error during run_karyotype_abm (C++ call) execution: ", e$message, call. = FALSE) # from 
+    ), error = function(e) stop("Error during run_karyotype_abm (C++ call) execution: ", e$message, call. = FALSE)
   )
   message("ABM simulation finished.")
   
   message("Processing ABM results...")
   if (length(sim_results_list_cpp) == 0) {
-    warning("ABM simulation returned no results from C++.", call. = FALSE) 
-    # More compact empty df creation
-    col_names <- c("time", names(x0))
-    empty_list_cols <- stats::setNames(rep(list(numeric(0)), length(col_names)), col_names)
-    empty_df_res <- as.data.frame(empty_list_cols) # Ensures correct types
+    warning("ABM simulation returned no results from C++.", call. = FALSE)
+    empty_df_res <- data.frame(time = numeric(0))
+    ktypes_all <- names(x0)
+    for (kt_name in ktypes_all) empty_df_res[[kt_name]] <- numeric(0)
     return(empty_df_res)
   }
   
-  # Convert list of named vectors (from C++) to a long data frame - streamlined lapply body
+  # Convert list of named vectors (from C++) to a long data frame
   results_df_list <- lapply(names(sim_results_list_cpp), function(step_name_str) {
-    counts_vec  <- sim_results_list_cpp[[step_name_str]]
-    time_point  <- as.integer(step_name_str) * abm_delta_t
-    karyo_names <- character(0); freq_vec <- numeric(0) # Initialize for empty case
+    counts_vec <- sim_results_list_cpp[[step_name_str]]
+    step_num <- as.integer(step_name_str) 
+    time_point <- step_num * abm_delta_t
     
-    if (length(counts_vec) > 0 && sum(counts_vec, na.rm = TRUE) > 0) {
-      freq_vec    <- counts_vec / sum(counts_vec, na.rm = TRUE) # Combined total_count calc
+    if (length(counts_vec) > 0 && sum(counts_vec, na.rm=TRUE) > 0) { 
+      total_count <- sum(counts_vec, na.rm=TRUE)
+      freq_vec <- counts_vec / total_count
       karyo_names <- names(freq_vec)
-      if(is.null(karyo_names) && length(freq_vec) > 0) {
+      if(is.null(karyo_names) && length(freq_vec) > 0) { # Should have names from C++
         warning(paste0("Step ", step_name_str, ": ABM counts vector missing names. Using V1, V2..."), call.=FALSE)
         karyo_names <- paste0("V", seq_along(freq_vec))
       }
+      
+      data.frame(time = time_point, 
+                 Karyotype = karyo_names, 
+                 Frequency = as.numeric(freq_vec),
+                 stringsAsFactors = FALSE)
+    } else { 
+      data.frame(time = time_point, Karyotype = character(0), Frequency = numeric(0),
+                 stringsAsFactors = FALSE)
     }
-    data.frame(time = time_point, Karyotype = karyo_names, 
-               Frequency = as.numeric(freq_vec), stringsAsFactors = FALSE)
-  }) # from 
+  })
   results_long_df <- do.call(rbind, results_df_list)
   
   all_karyotypes_initial <- names(x0) 
   
-  if (nrow(results_long_df) > 0 && "Karyotype" %in% names(results_long_df)) {
-    # Base R pivot using xtabs
-    # Ensure Karyotype is factor with all potential levels from all_karyotypes_initial
-    # This helps xtabs be aware of them, though it might still drop all-zero columns.
-    results_long_df$Karyotype <- factor(results_long_df$Karyotype, levels = unique(c(all_karyotypes_initial, results_long_df$Karyotype)))
+  if (nrow(results_long_df) > 0 && "Karyotype" %in% names(results_long_df)) { # Check Karyotype col exists
+    results_wide_df <- tidyr::pivot_wider(results_long_df,
+                                          names_from = .data$Karyotype, 
+                                          values_from = .data$Frequency,
+                                          values_fill = 0.0) 
     
-    wide_matrix <- xtabs(Frequency ~ time + Karyotype, data = results_long_df, sparse = FALSE)
-    results_wide_df_temp <- as.data.frame.matrix(wide_matrix)
-    results_wide_df <- data.frame(time = as.numeric(rownames(results_wide_df_temp)), 
-                                  results_wide_df_temp, row.names = NULL)
-    
-    # Ensure all initial karyotypes are present as columns, fill with 0.0 if missing
-    # This is necessary because xtabs might drop columns if a karyotype had zero occurrences.
     missing_cols <- setdiff(all_karyotypes_initial, names(results_wide_df))
     if (length(missing_cols) > 0) {
       for(col_name in missing_cols) results_wide_df[[col_name]] <- 0.0
     }
     
-    # Ensure "time" column is present and then order columns
-    if(nrow(results_wide_df) > 0 && !("time" %in% names(results_wide_df))) { # Simplified check [cite: 223]
-      stop("Internal error: 'time' column lost during ABM processing.", call. = FALSE)
-    }
+    # Ensure "time" column is first, then others
+    time_col_present <- "time" %in% names(results_wide_df)
+    if(!time_col_present && nrow(results_wide_df) > 0) stop("Internal error: 'time' column lost during pivot_wider in ABM processing.", call. = FALSE)
+    
+    # Select and order columns
     final_col_order <- intersect(c("time", all_karyotypes_initial), names(results_wide_df))
+    # Add back any karyotypes from all_karyotypes_initial that might have been completely absent in results
+    # (already handled by missing_cols loop mostly)
+    
     results_final_df <- results_wide_df[, final_col_order, drop = FALSE]
     
   } else {
-    message("ABM processing resulted in empty data frame or no 'Karyotype' column; returning structure based on initial times and karyotypes.") 
-    results_final_df <- data.frame(time = if(length(times) > 0) unique(times) else numeric(0)) 
-    for (kt_name in all_karyotypes_initial) results_final_df[[kt_name]] <- 0.0 
-    
-    if (nrow(results_final_df) == 0 && length(times) == 0) { # Truly empty case 
-      # Streamlined creation of a fully empty data frame with correct column names
-      col_names <- if(length(all_karyotypes_initial) > 0) c("time", all_karyotypes_initial) else "time" 
-      results_final_df <- stats::setNames(data.frame(matrix(ncol = length(col_names), nrow = 0)), col_names) # from 
+    message("ABM processing resulted in empty data frame or no 'Karyotype' column; returning structure based on initial times and karyotypes.")
+    results_final_df <- data.frame(time = if(length(times) > 0) unique(times) else numeric(0))
+    for (kt_name in all_karyotypes_initial) results_final_df[[kt_name]] <- 0.0
+    if (nrow(results_final_df) == 0 && length(times) == 0) { # Truly empty case
+      # Construct an empty df with correct column names if all_karyotypes_initial is also empty
+      col_names_for_empty <- "time"
+      if(length(all_karyotypes_initial) > 0) col_names_for_empty <- c("time", all_karyotypes_initial)
+      results_final_df <- data.frame(matrix(ncol = length(col_names_for_empty), nrow = 0,
+                                            dimnames=list(NULL, col_names_for_empty)))
     }
   }
   results_final_df
 }
-
 # -------------------------------------------------------------
 # Master Prediction Function
 # -------------------------------------------------------------
