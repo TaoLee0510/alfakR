@@ -2,14 +2,14 @@
 # Generator token: 10BE3573-1514-4C36-9D1C-5A225CD40393
 
 run_karyotype_abm <- function(initial_population_r, fitness_map_r, p_missegregation, dt, n_steps, max_population_size, culling_survival_fraction = 0.1, record_interval = 1L, seed = -1L) {
-    .Call('_alfakR_run_karyotype_abm', PACKAGE = 'alfakR', initial_population_r, fitness_map_r, p_missegregation, dt, n_steps, max_population_size, culling_survival_fraction, record_interval, seed)
+    .Call(`_alfakR_run_karyotype_abm`, initial_population_r, fitness_map_r, p_missegregation, dt, n_steps, max_population_size, culling_survival_fraction, record_interval, seed)
 }
 
 rcpp_prepare_W_structure <- function(k_strings) {
-    .Call('_alfakR_rcpp_prepare_W_structure', PACKAGE = 'alfakR', k_strings)
+    .Call(`_alfakR_rcpp_prepare_W_structure`, k_strings)
 }
 
 rcpp_update_W_values <- function(structure, p) {
-    .Call('_alfakR_rcpp_update_W_values', PACKAGE = 'alfakR', structure, p)
+    .Call(`_alfakR_rcpp_update_W_values`, structure, p)
 }
 
