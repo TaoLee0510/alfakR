@@ -231,7 +231,7 @@ run_abm_simulation <- function(lscape, p, times, x0, abm_pop_size, abm_delta_t,
   
   message("Setting up ABM simulation...")
   
-  initial_counts <- round(x0/sum(x0) * abm_pop_size) # Combined raw and round [cite: 213, 214]
+  initial_counts <- round(x0/sum(x0) * abm_pop_size) 
   if(any(initial_counts < 0)) {
     warning("Negative counts generated for ABM initial population after rounding; treating as 0.", call.=FALSE)
     initial_counts[initial_counts < 0] <- 0 
@@ -239,13 +239,13 @@ run_abm_simulation <- function(lscape, p, times, x0, abm_pop_size, abm_delta_t,
   # Create list of initial populations, filtering out zero counts, preserving names
   initial_pop_list <- as.list(initial_counts[initial_counts > 0]) # Combined unfiltered and filtered [cite: 214]
   
-  if(length(initial_pop_list) == 0) stop("Initial population for ABM is zero after filtering zero counts.", call. = FALSE) [cite: 214]
+  if(length(initial_pop_list) == 0) stop("Initial population for ABM is zero after filtering zero counts.", call. = FALSE)
   
   fitness_map_list <- stats::setNames(as.list(lscape$mean), lscape$k) 
   
   max_time <- max(times, na.rm = TRUE) 
   num_steps <- ceiling(max_time / abm_delta_t)
-  if (num_steps <= 0) stop("Number of ABM steps is non-positive (max_time / abm_delta_t). Check 'times' and 'abm_delta_t'.", call. = FALSE) [cite: 214, 215]
+  if (num_steps <= 0) stop("Number of ABM steps is non-positive (max_time / abm_delta_t). Check 'times' and 'abm_delta_t'.", call. = FALSE)
   
   message(sprintf("Starting ABM simulation for %d steps (up to time %.2f)...", num_steps, max_time))
   sim_results_list_cpp <- tryCatch( 
