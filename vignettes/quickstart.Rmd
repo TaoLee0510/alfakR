@@ -17,29 +17,7 @@ knitr::opts_chunk$set(
 outDir_vignette <- tempfile(pattern = "alfakR_tmp_vignette_")
 dir.create(outDir_vignette)
 original_wd <- getwd()
-# Set working directory for alfak output for this vignette run
-# alfak function by default creates output in the current working directory
-# or in a sub-directory relative to it.
-setwd(outDir_vignette) 
 
-# Cleanup function to remove the temporary directory and restore original WD
-cleanup_alfak_dir <- function() {
-  # Ensure we are in a safe directory before attempting to restore original_wd,
-  # especially if original_wd itself became invalid.
-  tryCatch({
-    setwd(original_wd) 
-  }, error = function(e) {
-    # If original_wd is not accessible, go to user's home directory as a fallback
-    # cat("Original working directory not accessible. Moving to home directory.\n")
-    # setwd(Sys.getenv("HOME")) # Or Sys.getenv("USERPROFILE") on Windows
-  })
-  unlink(outDir_vignette, recursive = TRUE, force = TRUE) 
-  # cat("Cleaned up temp directory:", outDir_vignette, "\n") # For debugging
-}
-# Register the cleanup function to be called when the R session (or this environment) ends
-reg.finalizer(globalenv(), cleanup_alfak_dir, onexit = TRUE)
-
-# library(alfakR) # Assumed to be loaded when package vignette is built
 ```
 
 ## Introduction
