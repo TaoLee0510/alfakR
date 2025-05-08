@@ -19,3 +19,9 @@ Imports:
     tidyr
 LinkingTo: 
     Rcpp
+VignetteBuilder: knitr
+Suggests:
+    knitr,
+    rmarkdown,
+    ggplot2
+    
