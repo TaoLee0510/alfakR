@@ -11,6 +11,7 @@ predict_evo(
   x0,
   prediction_type = "ODE",
   ode_method = "lsoda",
+  Nmax = Inf,
   abm_pop_size = 10000,
   abm_delta_t = 0.1,
   abm_max_pop = 1e+07,
@@ -36,6 +37,8 @@ The vector will be reordered to match \code{lscape$k} if names are a setequal ma
 
 \item{ode_method}{character. Method for \code{deSolve::ode} (e.g., "lsoda", "lsodes").
 Used only if \code{prediction_type} is "ODE". Default is "lsoda".}
+
+\item{Nmax}{Optional limit to the number of missegregations allowable (ODE model only).}
 
 \item{abm_pop_size}{integer. Initial total population size for ABM.
 Used only if \code{prediction_type} is "ABM". Default is 1e4.}

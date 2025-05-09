@@ -4,7 +4,7 @@
 \alias{find_steady_state}
 \title{Find Steady State Karyotype Distribution}
 \usage{
-find_steady_state(lscape, p)
+find_steady_state(lscape, p, Nmax = Inf)
 }
 \arguments{
 \item{lscape}{data.frame. Must contain columns 'k' (character, karyotype string,
@@ -12,6 +12,8 @@ e.g., "2.2.1...") and 'mean' (numeric, fitness r_k). All karyotype strings
 in \code{lscape$k} must be unique and represent karyotypes with the same number of chromosome types.}
 
 \item{p}{numeric. Probability of single chromosome missegregation per division (0 <= p <= 1).}
+
+\item{Nmax}{Optional limit to the number of missegregations allowable.}
 }
 \value{
 A named numeric vector of steady-state frequencies, ordered according to

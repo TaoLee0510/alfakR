@@ -110,26 +110,27 @@ vec_to_tag <- function(v) {
 # ODE Simulation Components
 # -------------------------------------------------------------
 
-#' Build Sparse Transition Matrix W using Rcpp Helpers (Internal)
-#' Assumes Rcpp functions `rcpp_prepare_W_structure` and `rcpp_update_W_values`
-#' are available from the compiled package code.
+#' Build Sparse Transition Matrix W using Rcpp Helpers
 #' @param karyotype_strings Character vector of unique karyotype strings.
 #' @param p Single chromosome missegregation probability.
+#' @param Nmax Optional limit to the number of missegregations allowable
 #' @return A sparse matrix (dgCMatrix) representing W (Parent x Daughter transitions).
 #' @importFrom Matrix sparseMatrix
-#' @keywords internal
-#' @noRd
-build_W_rcpp <- function(karyotype_strings, p) {
+#' @export
+#' @examples
+#' \dontrun{
+#'   k_str =c("2.2.1.2","2.2.2.3","2.2.3.2")
+#'   A <- get_A(k_str,0.01)
+#'   A <- get_A(k_str,0.01,Nmax=1) ## approximation of 1 missegregation case
+#' }
+#' 
+build_W_rcpp <- function(karyotype_strings, p,Nmax=Inf) {
   w_structure <- tryCatch(
-    rcpp_prepare_W_structure(karyotype_strings), # C++ function
-    error = function(e) stop("Error in rcpp_prepare_W_structure (C++ call): ", e$message, call. = FALSE)
-  )
-  x_vals <- tryCatch(
-    rcpp_update_W_values(w_structure, p), # C++ function
-    error = function(e) stop("Error in rcpp_update_W_values (C++ call): ", e$message, call. = FALSE)
+    get_A_inputs(karyotype_strings,p,Nmax), # C++ function
+    error = function(e) stop("Error in get_A_inputs(C++ call): ", e$message, call. = FALSE)
   )
   W <- tryCatch(
-    Matrix::sparseMatrix(i = w_structure$i, j = w_structure$j, x = x_vals,
+    Matrix::sparseMatrix(i = w_structure$i, j = w_structure$j, x = w_structure$x,
                          dims = w_structure$dims, dimnames = w_structure$dimnames,
                          repr = "C"), 
     error = function(e) stop("Error creating sparseMatrix from Rcpp results: ", e$message, call. = FALSE)
@@ -137,31 +138,18 @@ build_W_rcpp <- function(karyotype_strings, p) {
   W
 }
 
-#' Create ODE Right-Hand Side Function (Corrected Wbar) (Internal)
-#' @param r Numeric vector of fitness values (r_k).
-#' @param WT Transposed sparse transition matrix W (Daughter x Parent).
-#' @return A function suitable for use with `deSolve::ode`.
+#' A function suitable for use with `deSolve::ode`.
+#' @param time 
+#' @param x state vector.
+#' @param parms A list containing the transition matrix, named A.
+#' @return derivatives
 #' @keywords internal
 #' @noRd
-make_rhs_corrected <- function(r, WT) {
-  N_states <- length(r)
-  function(t, x, parms) {
-    x[x < 1e-16] <- 0 
-    x_sum <- sum(x)
-    if (x_sum > 1e-9) { 
-      x <- x / x_sum
-    } else {
-      return(list(rep(0.0, N_states))) 
-    }
-    rx_vec <- r * x 
-    if(N_states == 1 && is.vector(rx_vec)) rx_vec <- matrix(rx_vec, ncol=1) 
-    prod_term <- as.vector(WT %*% rx_vec) 
-    if(anyNA(prod_term)) stop("Internal error: NA encountered in ODE RHS prod_term. Upstream inputs to r or WT might be problematic.", call. = FALSE)
-    Wbar <- sum(prod_term)
-    if(is.na(Wbar)) stop("Internal error: Wbar is NA in ODE RHS. Prod_term might have NAs not caught.", call. = FALSE)
-    dxdt <- prod_term - x * Wbar
-    list(dxdt)
-  }
+chrmod_rel <- function(time, x, parms) {
+  A <- parms$A
+  g <- as.numeric(x %*% A)        # per‐type contributions
+  phi <- sum(g)                   # average growth
+  list(g - x * phi)               # dx/dt
 }
 
 #' Run ODE Simulation (Internal)
@@ -170,25 +158,22 @@ make_rhs_corrected <- function(r, WT) {
 #' @param times Numeric vector of time points for output.
 #' @param x0 Named numeric vector of initial frequencies (must sum to 1).
 #' @param ode_method Solver method for `deSolve::ode`.
+#' @param Nmax Optional limit to the number of missegregations allowable.
 #' @return Data frame with 'time' column and frequency columns for each karyotype.
 #' @importFrom deSolve ode
 #' @keywords internal
 #' @noRd
-run_ode_simulation <- function(lscape, p, times, x0, ode_method) {
+run_ode_simulation <- function(lscape, p, times, x0, ode_method,Nmax=Inf) {
   message("Setting up ODE simulation...")
   k_strings <- lscape$k
   r_values <- lscape$mean 
   if(any(r_values < 0, na.rm = TRUE)) warning("Negative fitness values found in lscape$mean; ODE behavior might be unexpected.", call. = FALSE)
   
   message("Building sparse W matrix via Rcpp...")
-  W <- build_W_rcpp(k_strings, p) 
-  WT <- Matrix::t(W) # Use Matrix::t for sparse matrices
-  
-  message(sprintf("Running ODE solver ('%s')...", ode_method))
-  rhs_func <- make_rhs_corrected(r_values, WT)
-  
+  W <- build_W_rcpp(k_strings, p, Nmax) 
+  W <- W*r_values
   ode_output <- tryCatch( 
-    deSolve::ode(y = x0, times = times, func = rhs_func, parms = NULL, method = ode_method),
+    deSolve::ode(y = x0, times = times, func = chrmod_rel, parms = list(A=W), method = ode_method),
     error = function(e) stop(sprintf("ODE integration failed with method '%s': %s", ode_method, e$message), call. = FALSE)
   )
   
@@ -368,6 +353,7 @@ run_abm_simulation <- function(lscape, p, times, x0, abm_pop_size, abm_delta_t,
 #'   is exceeded (0 <= x <= 1). Used only if `prediction_type` is "ABM". Default is 0.1.
 #' @param abm_record_interval integer. Record ABM state every N steps.
 #'   Used only if `prediction_type` is "ABM". Default is 10.
+#' @param Nmax Optional limit to the number of missegregations allowable (ODE model only).
 #' @param abm_seed integer. Seed for ABM's random number generator (-1 for a random seed based on device,
 #'   any other integer for a fixed seed). Used only if `prediction_type` is "ABM". Default is -1.
 #'
@@ -420,6 +406,7 @@ run_abm_simulation <- function(lscape, p, times, x0, abm_pop_size, abm_delta_t,
 #' }
 predict_evo <- function(lscape, p, times, x0, prediction_type = "ODE",
                         ode_method = "lsoda",
+                        Nmax=Inf,
                         abm_pop_size = 1e4, abm_delta_t = 0.1, abm_max_pop = 1e7,
                         abm_culling_survival = 0.1, abm_record_interval = 10,
                         abm_seed = -1) {
@@ -473,7 +460,7 @@ predict_evo <- function(lscape, p, times, x0, prediction_type = "ODE",
   
   result_df <- NULL 
   if (prediction_type == "ODE") {
-    result_df <- run_ode_simulation(lscape = lscape, p = p, times = times, x0 = x0, ode_method = ode_method)
+    result_df <- run_ode_simulation(lscape = lscape, p = p, times = times, x0 = x0, ode_method = ode_method,Nmax=Nmax)
   } else if (prediction_type == "ABM") {
     # ABM specific parameter validation
     if (!is.numeric(abm_pop_size) || length(abm_pop_size) != 1 || abm_pop_size <= 0 || floor(abm_pop_size) != abm_pop_size) {
@@ -518,7 +505,7 @@ predict_evo <- function(lscape, p, times, x0, prediction_type = "ODE",
 #'   e.g., "2.2.1...") and 'mean' (numeric, fitness r_k). All karyotype strings
 #'   in `lscape$k` must be unique and represent karyotypes with the same number of chromosome types.
 #' @param p numeric. Probability of single chromosome missegregation per division (0 <= p <= 1).
-#'
+#' @param Nmax Optional limit to the number of missegregations allowable.
 #' @return A named numeric vector of steady-state frequencies, ordered according to
 #'   `lscape$k`. Returns `NULL` if calculation fails (e.g., invalid inputs,
 #'   eigen decomposition issues).
@@ -551,7 +538,7 @@ predict_evo <- function(lscape, p, times, x0, prediction_type = "ODE",
 #' #  message("Run devtools::load_all() in your package project first, or install the package.")
 #' # }
 #' }
-find_steady_state <- function(lscape, p) {
+find_steady_state <- function(lscape, p, Nmax=Inf) {
   
   # --- Input Validation ---
   if (!is.data.frame(lscape) || !all(c("k", "mean") %in% names(lscape))) {
@@ -579,7 +566,7 @@ find_steady_state <- function(lscape, p) {
   names(r_values) <- k_strings 
   N_k_states <- length(k_strings) 
   
-  W <- tryCatch(build_W_rcpp(k_strings, p), error = function(e) {
+  W <- tryCatch(build_W_rcpp(k_strings, p, Nmax), error = function(e) {
     # Pass error message from build_W_rcpp which might come from C++
     stop(sprintf("Failed to build W matrix in find_steady_state: %s", e$message), call. = FALSE);
   })
@@ -598,16 +585,7 @@ find_steady_state <- function(lscape, p) {
     stop("Internal error: Dimension names of W matrix do not match input lscape$k. This indicates an issue in C++ W matrix construction or R-side k_string handling.", call. = FALSE)
   }
   
-  diag_r_values <- ifelse(r_values < 0, 0, r_values) # Use 0 for negative fitness in M
-  diag_r_matrix <- Matrix::Diagonal(n = N_k_states, x = diag_r_values)
-  
-  M_matrix <- tryCatch(Matrix::t(W) %*% diag_r_matrix, error = function(e) { 
-    stop(sprintf("Failed to compute M matrix (t(W) %%*%% diag(r)): %s", e$message), call. = FALSE);
-  })
-  
-  if (any(!is.finite(M_matrix@x))) { # Check elements of sparse matrix
-    stop("Internal error: M matrix contains non-finite values. Check fitness values (r_values) and W matrix components.", call. = FALSE)
-  }
+  M_matrix <- W*r_values
   
   eig_result <- NULL
   try_LR_on_LM_fail <- TRUE # Control if we try LR after LM

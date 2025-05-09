@@ -2,6 +2,8 @@
 // Generator token: 10BE3573-1514-4C36-9D1C-5A225CD40393
 
 #include <Rcpp.h>
+#include <string>
+#include <set>
 
 using namespace Rcpp;
 
@@ -29,34 +31,217 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// rcpp_prepare_W_structure
-Rcpp::List rcpp_prepare_W_structure(Rcpp::CharacterVector k_strings);
-RcppExport SEXP _alfakR_rcpp_prepare_W_structure(SEXP k_stringsSEXP) {
+// pij
+double pij(int i, int j, double beta);
+static SEXP _alfakR_pij_try(SEXP iSEXP, SEXP jSEXP, SEXP betaSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type k_strings(k_stringsSEXP);
-    rcpp_result_gen = Rcpp::wrap(rcpp_prepare_W_structure(k_strings));
+    Rcpp::traits::input_parameter< int >::type i(iSEXP);
+    Rcpp::traits::input_parameter< int >::type j(jSEXP);
+    Rcpp::traits::input_parameter< double >::type beta(betaSEXP);
+    rcpp_result_gen = Rcpp::wrap(pij(i, j, beta));
     return rcpp_result_gen;
-END_RCPP
+END_RCPP_RETURN_ERROR
 }
-// rcpp_update_W_values
-Rcpp::NumericVector rcpp_update_W_values(Rcpp::List structure, double p);
-RcppExport SEXP _alfakR_rcpp_update_W_values(SEXP structureSEXP, SEXP pSEXP) {
+RcppExport SEXP _alfakR_pij(SEXP iSEXP, SEXP jSEXP, SEXP betaSEXP) {
+    SEXP rcpp_result_gen;
+    {
+        Rcpp::RNGScope rcpp_rngScope_gen;
+        rcpp_result_gen = PROTECT(_alfakR_pij_try(iSEXP, jSEXP, betaSEXP));
+    }
+    Rboolean rcpp_isInterrupt_gen = Rf_inherits(rcpp_result_gen, "interrupted-error");
+    if (rcpp_isInterrupt_gen) {
+        UNPROTECT(1);
+        Rf_onintr();
+    }
+    bool rcpp_isLongjump_gen = Rcpp::internal::isLongjumpSentinel(rcpp_result_gen);
+    if (rcpp_isLongjump_gen) {
+        Rcpp::internal::resumeJump(rcpp_result_gen);
+    }
+    Rboolean rcpp_isError_gen = Rf_inherits(rcpp_result_gen, "try-error");
+    if (rcpp_isError_gen) {
+        SEXP rcpp_msgSEXP_gen = Rf_asChar(rcpp_result_gen);
+        UNPROTECT(1);
+        Rf_error("%s", CHAR(rcpp_msgSEXP_gen));
+    }
+    UNPROTECT(1);
+    return rcpp_result_gen;
+}
+// s2v
+IntegerVector s2v(SEXP s);
+static SEXP _alfakR_s2v_try(SEXP sSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< Rcpp::List >::type structure(structureSEXP);
-    Rcpp::traits::input_parameter< double >::type p(pSEXP);
-    rcpp_result_gen = Rcpp::wrap(rcpp_update_W_values(structure, p));
+    Rcpp::traits::input_parameter< SEXP >::type s(sSEXP);
+    rcpp_result_gen = Rcpp::wrap(s2v(s));
     return rcpp_result_gen;
-END_RCPP
+END_RCPP_RETURN_ERROR
+}
+RcppExport SEXP _alfakR_s2v(SEXP sSEXP) {
+    SEXP rcpp_result_gen;
+    {
+        Rcpp::RNGScope rcpp_rngScope_gen;
+        rcpp_result_gen = PROTECT(_alfakR_s2v_try(sSEXP));
+    }
+    Rboolean rcpp_isInterrupt_gen = Rf_inherits(rcpp_result_gen, "interrupted-error");
+    if (rcpp_isInterrupt_gen) {
+        UNPROTECT(1);
+        Rf_onintr();
+    }
+    bool rcpp_isLongjump_gen = Rcpp::internal::isLongjumpSentinel(rcpp_result_gen);
+    if (rcpp_isLongjump_gen) {
+        Rcpp::internal::resumeJump(rcpp_result_gen);
+    }
+    Rboolean rcpp_isError_gen = Rf_inherits(rcpp_result_gen, "try-error");
+    if (rcpp_isError_gen) {
+        SEXP rcpp_msgSEXP_gen = Rf_asChar(rcpp_result_gen);
+        UNPROTECT(1);
+        Rf_error("%s", CHAR(rcpp_msgSEXP_gen));
+    }
+    UNPROTECT(1);
+    return rcpp_result_gen;
+}
+// get_A_inputs
+List get_A_inputs(CharacterVector k_str, double beta, Nullable<double> Nmax_);
+static SEXP _alfakR_get_A_inputs_try(SEXP k_strSEXP, SEXP betaSEXP, SEXP Nmax_SEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< CharacterVector >::type k_str(k_strSEXP);
+    Rcpp::traits::input_parameter< double >::type beta(betaSEXP);
+    Rcpp::traits::input_parameter< Nullable<double> >::type Nmax_(Nmax_SEXP);
+    rcpp_result_gen = Rcpp::wrap(get_A_inputs(k_str, beta, Nmax_));
+    return rcpp_result_gen;
+END_RCPP_RETURN_ERROR
+}
+RcppExport SEXP _alfakR_get_A_inputs(SEXP k_strSEXP, SEXP betaSEXP, SEXP Nmax_SEXP) {
+    SEXP rcpp_result_gen;
+    {
+        Rcpp::RNGScope rcpp_rngScope_gen;
+        rcpp_result_gen = PROTECT(_alfakR_get_A_inputs_try(k_strSEXP, betaSEXP, Nmax_SEXP));
+    }
+    Rboolean rcpp_isInterrupt_gen = Rf_inherits(rcpp_result_gen, "interrupted-error");
+    if (rcpp_isInterrupt_gen) {
+        UNPROTECT(1);
+        Rf_onintr();
+    }
+    bool rcpp_isLongjump_gen = Rcpp::internal::isLongjumpSentinel(rcpp_result_gen);
+    if (rcpp_isLongjump_gen) {
+        Rcpp::internal::resumeJump(rcpp_result_gen);
+    }
+    Rboolean rcpp_isError_gen = Rf_inherits(rcpp_result_gen, "try-error");
+    if (rcpp_isError_gen) {
+        SEXP rcpp_msgSEXP_gen = Rf_asChar(rcpp_result_gen);
+        UNPROTECT(1);
+        Rf_error("%s", CHAR(rcpp_msgSEXP_gen));
+    }
+    UNPROTECT(1);
+    return rcpp_result_gen;
+}
+// chrmod_cpp
+List chrmod_cpp(double time, NumericVector state, List parms);
+static SEXP _alfakR_chrmod_cpp_try(SEXP timeSEXP, SEXP stateSEXP, SEXP parmsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< double >::type time(timeSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type state(stateSEXP);
+    Rcpp::traits::input_parameter< List >::type parms(parmsSEXP);
+    rcpp_result_gen = Rcpp::wrap(chrmod_cpp(time, state, parms));
+    return rcpp_result_gen;
+END_RCPP_RETURN_ERROR
+}
+RcppExport SEXP _alfakR_chrmod_cpp(SEXP timeSEXP, SEXP stateSEXP, SEXP parmsSEXP) {
+    SEXP rcpp_result_gen;
+    {
+        Rcpp::RNGScope rcpp_rngScope_gen;
+        rcpp_result_gen = PROTECT(_alfakR_chrmod_cpp_try(timeSEXP, stateSEXP, parmsSEXP));
+    }
+    Rboolean rcpp_isInterrupt_gen = Rf_inherits(rcpp_result_gen, "interrupted-error");
+    if (rcpp_isInterrupt_gen) {
+        UNPROTECT(1);
+        Rf_onintr();
+    }
+    bool rcpp_isLongjump_gen = Rcpp::internal::isLongjumpSentinel(rcpp_result_gen);
+    if (rcpp_isLongjump_gen) {
+        Rcpp::internal::resumeJump(rcpp_result_gen);
+    }
+    Rboolean rcpp_isError_gen = Rf_inherits(rcpp_result_gen, "try-error");
+    if (rcpp_isError_gen) {
+        SEXP rcpp_msgSEXP_gen = Rf_asChar(rcpp_result_gen);
+        UNPROTECT(1);
+        Rf_error("%s", CHAR(rcpp_msgSEXP_gen));
+    }
+    UNPROTECT(1);
+    return rcpp_result_gen;
+}
+// chrmod_rel_cpp
+List chrmod_rel_cpp(double time, NumericVector x, List parms);
+static SEXP _alfakR_chrmod_rel_cpp_try(SEXP timeSEXP, SEXP xSEXP, SEXP parmsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< double >::type time(timeSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type x(xSEXP);
+    Rcpp::traits::input_parameter< List >::type parms(parmsSEXP);
+    rcpp_result_gen = Rcpp::wrap(chrmod_rel_cpp(time, x, parms));
+    return rcpp_result_gen;
+END_RCPP_RETURN_ERROR
+}
+RcppExport SEXP _alfakR_chrmod_rel_cpp(SEXP timeSEXP, SEXP xSEXP, SEXP parmsSEXP) {
+    SEXP rcpp_result_gen;
+    {
+        Rcpp::RNGScope rcpp_rngScope_gen;
+        rcpp_result_gen = PROTECT(_alfakR_chrmod_rel_cpp_try(timeSEXP, xSEXP, parmsSEXP));
+    }
+    Rboolean rcpp_isInterrupt_gen = Rf_inherits(rcpp_result_gen, "interrupted-error");
+    if (rcpp_isInterrupt_gen) {
+        UNPROTECT(1);
+        Rf_onintr();
+    }
+    bool rcpp_isLongjump_gen = Rcpp::internal::isLongjumpSentinel(rcpp_result_gen);
+    if (rcpp_isLongjump_gen) {
+        Rcpp::internal::resumeJump(rcpp_result_gen);
+    }
+    Rboolean rcpp_isError_gen = Rf_inherits(rcpp_result_gen, "try-error");
+    if (rcpp_isError_gen) {
+        SEXP rcpp_msgSEXP_gen = Rf_asChar(rcpp_result_gen);
+        UNPROTECT(1);
+        Rf_error("%s", CHAR(rcpp_msgSEXP_gen));
+    }
+    UNPROTECT(1);
+    return rcpp_result_gen;
+}
+
+// validate (ensure exported C++ functions exist before calling them)
+static int _alfakR_RcppExport_validate(const char* sig) { 
+    static std::set<std::string> signatures;
+    if (signatures.empty()) {
+        signatures.insert("double(*pij)(int,int,double)");
+        signatures.insert("IntegerVector(*s2v)(SEXP)");
+        signatures.insert("List(*get_A_inputs)(CharacterVector,double,Nullable<double>)");
+        signatures.insert("List(*chrmod_cpp)(double,NumericVector,List)");
+        signatures.insert("List(*chrmod_rel_cpp)(double,NumericVector,List)");
+    }
+    return signatures.find(sig) != signatures.end();
+}
+
+// registerCCallable (register entry points for exported C++ functions)
+RcppExport SEXP _alfakR_RcppExport_registerCCallable() { 
+    R_RegisterCCallable("alfakR", "_alfakR_pij", (DL_FUNC)_alfakR_pij_try);
+    R_RegisterCCallable("alfakR", "_alfakR_s2v", (DL_FUNC)_alfakR_s2v_try);
+    R_RegisterCCallable("alfakR", "_alfakR_get_A_inputs", (DL_FUNC)_alfakR_get_A_inputs_try);
+    R_RegisterCCallable("alfakR", "_alfakR_chrmod_cpp", (DL_FUNC)_alfakR_chrmod_cpp_try);
+    R_RegisterCCallable("alfakR", "_alfakR_chrmod_rel_cpp", (DL_FUNC)_alfakR_chrmod_rel_cpp_try);
+    R_RegisterCCallable("alfakR", "_alfakR_RcppExport_validate", (DL_FUNC)_alfakR_RcppExport_validate);
+    return R_NilValue;
 }
 
 static const R_CallMethodDef CallEntries[] = {
     {"_alfakR_run_karyotype_abm", (DL_FUNC) &_alfakR_run_karyotype_abm, 9},
-    {"_alfakR_rcpp_prepare_W_structure", (DL_FUNC) &_alfakR_rcpp_prepare_W_structure, 1},
-    {"_alfakR_rcpp_update_W_values", (DL_FUNC) &_alfakR_rcpp_update_W_values, 2},
+    {"_alfakR_pij", (DL_FUNC) &_alfakR_pij, 3},
+    {"_alfakR_s2v", (DL_FUNC) &_alfakR_s2v, 1},
+    {"_alfakR_get_A_inputs", (DL_FUNC) &_alfakR_get_A_inputs, 3},
+    {"_alfakR_chrmod_cpp", (DL_FUNC) &_alfakR_chrmod_cpp, 3},
+    {"_alfakR_chrmod_rel_cpp", (DL_FUNC) &_alfakR_chrmod_rel_cpp, 3},
+    {"_alfakR_RcppExport_registerCCallable", (DL_FUNC) &_alfakR_RcppExport_registerCCallable, 0},
     {NULL, NULL, 0}
 };
 

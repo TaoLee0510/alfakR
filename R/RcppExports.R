@@ -5,11 +5,34 @@ run_karyotype_abm <- function(initial_population_r, fitness_map_r, p_missegregat
     .Call(`_alfakR_run_karyotype_abm`, initial_population_r, fitness_map_r, p_missegregation, dt, n_steps, max_population_size, culling_survival_fraction, record_interval, seed)
 }
 
-rcpp_prepare_W_structure <- function(k_strings) {
-    .Call(`_alfakR_rcpp_prepare_W_structure`, k_strings)
+#' Compute the probability pij that a parent with i chromosomes produces
+#' a daughter with j chromosomes under mis-segregation rate beta.
+#' @param i Integer number of chromosomes in the parent cell.
+#' @param j Integer number of chromosomes in the daughter cell.
+#' @param beta Double mis-segregation probability per chromosome copy.
+#' @return Double transition probability pij.
+#' @export
+pij <- function(i, j, beta) {
+    .Call(`_alfakR_pij`, i, j, beta)
 }
 
-rcpp_update_W_values <- function(structure, p) {
-    .Call(`_alfakR_rcpp_update_W_values`, structure, p)
+s2v <- function(s) {
+    .Call(`_alfakR_s2v`, s)
 }
 
+get_A_inputs <- function(k_str, beta, Nmax_ = NULL) {
+    .Call(`_alfakR_get_A_inputs`, k_str, beta, Nmax_)
+}
+
+chrmod_cpp <- function(time, state, parms) {
+    .Call(`_alfakR_chrmod_cpp`, time, state, parms)
+}
+
+chrmod_rel_cpp <- function(time, x, parms) {
+    .Call(`_alfakR_chrmod_rel_cpp`, time, x, parms)
+}
+
+# Register entry points for exported C++ functions
+methods::setLoadAction(function(ns) {
+    .Call(`_alfakR_RcppExport_registerCCallable`)
+})
