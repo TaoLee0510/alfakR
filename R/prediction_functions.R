@@ -717,20 +717,23 @@ run_abm_simulation_grf <- function(centroids, lambda, p, times, x0,
   
   ## -- run C++ ---------------------------------------------------------------
   steps <- ceiling(max(times) / abm_delta_t)
-  cpp_res <- run_karyotype_abm(
-    initial_population_r      = init_list,
-    fitness_map_r = setNames(list(), character(0)),
-    p_missegregation          = p,
-    dt                        = abm_delta_t,
-    n_steps                   = as.integer(steps),
-    max_population_size       = abm_max_pop,
-    culling_survival_fraction = abm_culling_survival,
-    record_interval           = as.integer(abm_record_interval),
-    seed                      = as.integer(abm_seed),
-    grf_centroids             = centroids,
-    grf_lambda                = lambda
-  )
+  elapsed <- system.time({
+    cpp_res <- run_karyotype_abm(
+      initial_population_r      = init_list,
+      fitness_map_r             = setNames(list(), character(0)),
+      p_missegregation          = p,
+      dt                        = abm_delta_t,
+      n_steps                   = as.integer(steps),
+      max_population_size       = abm_max_pop,
+      culling_survival_fraction = abm_culling_survival,
+      record_interval           = as.integer(abm_record_interval),
+      seed                      = as.integer(abm_seed),
+      grf_centroids             = centroids,
+      grf_lambda                = lambda
+    )
+  })
   
+  cat(sprintf("Simulation completed in %.2f seconds.\n", elapsed["elapsed"]))
   ## -- convert to wide data‑frame (unchanged) --------------------------------
   if(!length(cpp_res)) {
     warning("C++ returned no results.")

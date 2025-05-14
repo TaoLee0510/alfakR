@@ -179,8 +179,8 @@ std::pair<std::vector<int>, std::vector<int>> generate_misseg_daughters(
   bool d1_valid = true;
   bool d2_valid = true;
   for(size_t i = 0; i < parent_cn.size(); ++i) { // Loop up to parent_cn.size()
-    if(daughter1_cn[i] < 0) d1_valid = false; // Counts cannot be negative
-    if(daughter2_cn[i] < 0) d2_valid = false; // Changed from <=0 to <0, assuming 0 is viable if some other chrom present
+    if(daughter1_cn[i] <= 0) d1_valid = false; // Counts cannot be negative
+    if(daughter2_cn[i] <= 0) d2_valid = false; // Changed from <=0 to <0, assuming 0 is viable if some other chrom present
   }
   
   std::pair<std::vector<int>, std::vector<int>> result;
@@ -450,18 +450,19 @@ Rcpp::List run_karyotype_abm(
       }
     }
     
-    if (record_on_cull) {
-      Rcpp::NumericVector counts_cull;
-      Rcpp::CharacterVector names_cull;
-      for (const auto& pair_rec : population) {
-        counts_cull.push_back(static_cast<double>(pair_rec.second));
-        names_cull.push_back(karyotype_to_string_abm(pair_rec.first));
-      }
-      if (counts_cull.length() > 0) counts_cull.names() = names_cull;
-      results_over_time.push_back(counts_cull, std::to_string(step));
-    }
-    
     if (max_population_size > 0 && current_total_pop > max_population_size) {
+      
+      if (record_on_cull) {
+        Rcpp::NumericVector counts_cull;
+        Rcpp::CharacterVector names_cull;
+        for (const auto& pair_rec : population) {
+          counts_cull.push_back(static_cast<double>(pair_rec.second));
+          names_cull.push_back(karyotype_to_string_abm(pair_rec.first));
+        }
+        if (counts_cull.length() > 0) counts_cull.names() = names_cull;
+        results_over_time.push_back(counts_cull, std::to_string(step));
+      }
+      
       double sampling_fraction = culling_survival_fraction; 
       // Rcpp::Rcout << "Step " << step << ": Population " << current_total_pop // Optional verbose logging
       //             << " exceeded cap " << max_population_size
