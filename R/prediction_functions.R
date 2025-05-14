@@ -235,18 +235,24 @@ run_abm_simulation <- function(lscape, p, times, x0, abm_pop_size, abm_delta_t,
   if (num_steps <= 0) stop("Number of ABM steps is non-positive (max_time / abm_delta_t). Check 'times' and 'abm_delta_t'.", call. = FALSE)
   
   message(sprintf("Starting ABM simulation for %d steps (up to time %.2f)...", num_steps, max_time))
-  sim_results_list_cpp <- tryCatch( 
-    run_karyotype_abm( # This is the RcppExported function
+  sim_results_list_cpp <- tryCatch(
+    run_karyotype_abm(
       initial_population_r = initial_pop_list,
       fitness_map_r        = fitness_map_list,
       p_missegregation     = p,
       dt                   = abm_delta_t,
-      n_steps              = as.integer(num_steps), # Ensure integer
-      max_population_size  = abm_max_pop, # R numeric (double) is fine for C++ long long if value fits
+      n_steps              = as.integer(num_steps),
+      max_population_size  = abm_max_pop,
       culling_survival_fraction = abm_culling_survival,
       record_interval      = as.integer(abm_record_interval),
-      seed                 = as.integer(abm_seed)
-    ), error = function(e) stop("Error during run_karyotype_abm (C++ call) execution: ", e$message, call. = FALSE)
+      seed                 = as.integer(abm_seed),
+      grf_centroids        = matrix(numeric(0), nrow = 0, ncol = 0), # CORRECT R equivalent
+      grf_lambda           = NA_real_                                # R equivalent
+    ), error = function(e) {
+      # It's useful to see the full error structure from Rcpp if possible
+      print(e) # print the full error object
+      stop("Error during run_karyotype_abm (C++ call) execution: ", e$message, call. = FALSE)
+    }
   )
   message("ABM simulation finished.")
   
@@ -628,6 +634,131 @@ find_steady_state <- function(lscape, p, Nmax=Inf) {
   
   return(ss_vector)
 }
+
+# -------------------------------------------------------------
+# Public wrapper: ABM simulation under a GRF fitness landscape
+# -------------------------------------------------------------
+
+#' Simulate karyotype dynamics in a Gaussian‑Random‑Field (GRF) fitness landscape
+#'
+#' This function runs the C++ agent‑based model (`run_karyotype_abm`) in
+#' **GRF mode**: fitness values are generated on‑the‑fly from a set of
+#' centroid points and a wavelength λ, instead of using a lookup table.
+#'
+#' @param centroids Numeric matrix with one centroid per **row**  
+#'   (dimensions *n_centroids × K*), where *K* is the number of
+#'   chromosome types.
+#' @param lambda Positive scalar. The GRF wavelength λ; smaller values give
+#'   a more rugged landscape.
+#' @param p Missegregation probability (0 ≤ \code{p} ≤ 1).
+#' @param times Numeric vector of time points to sample.
+#' @param x0 **Named** numeric vector of initial karyotype frequencies
+#'   (must sum to 1).  The names must be karyotype strings of length *K*
+#'   matching the dimension of \code{centroids}.
+#' @param abm_pop_size Initial total population size.
+#' @param abm_delta_t Duration of one ABM step.
+#' @param abm_max_pop Carrying capacity. Use \code{<= 0} for unlimited.
+#' @param abm_culling_survival Fraction of cells retained when the population
+#'   exceeds \code{abm_max_pop}.
+#' @param abm_record_interval Record population state every N steps.
+#' @param abm_seed RNG seed.  Use \code{-1} for a random seed.
+#'
+#' @return A **wide data‑frame**: first column \code{time}, remaining columns
+#'   one per karyotype, giving relative frequencies at each sampled time.
+#'
+#' @examples
+#' # Two‑chromosome example with 4 centroids
+#' cents <- matrix(c(2,2,
+#'                   3,1,
+#'                   1,3,
+#'                   4,4), ncol = 2, byrow = TRUE)
+#' init  <- c("2.2" = 1)        # start at (2,2)
+#' times <- seq(0, 5, by = 1)
+#'
+#' sim <- run_abm_simulation_grf(
+#'   centroids = cents, lambda = 2,
+#'   p = 0.02, times = times, x0 = init,
+#'   abm_pop_size = 5e3, abm_delta_t = 0.05,
+#'   abm_record_interval = 20, abm_seed = 42
+#' )
+#' head(sim)
+#'
+#' @export
+run_abm_simulation_grf <- function(centroids, lambda, p, times, x0,
+                                   abm_pop_size        = 1e4,
+                                   abm_delta_t         = 0.1,
+                                   abm_max_pop         = 1e7,
+                                   abm_culling_survival = 0.1,
+                                   abm_record_interval  = 10,
+                                   abm_seed             = -1) {
+  
+  ## -- validation (same as internal draft, trimmed for brevity) -------------
+  if(!is.matrix(centroids) || !is.numeric(centroids) || nrow(centroids) == 0)
+    stop("'centroids' must be a non‑empty numeric matrix.", call. = FALSE)
+  if(!is.numeric(lambda) || length(lambda) != 1 || lambda <= 0)
+    stop("'lambda' must be a single positive numeric value.", call. = FALSE)
+  K <- ncol(centroids)
+  
+  parse_len <- function(s) length(strsplit(s, "\\.")[[1]])
+  bad <- names(x0)[vapply(names(x0), parse_len, 0L) != K]
+  if(length(bad))
+    stop("Karyotype names ", paste(bad, collapse = ", "),
+         " do not have ", K, " chromosome counts.", call. = FALSE)
+  if(abs(sum(x0) - 1) > 1e-6)
+    stop("'x0' must sum to 1.", call. = FALSE)
+  
+  ## -- initial population ----------------------------------------------------
+  init_counts <- round(x0 * abm_pop_size)
+  init_counts[init_counts < 0] <- 0
+  init_list   <- as.list(init_counts)[init_counts > 0]  
+  if(!length(init_list)) stop("Initial population is zero.", call. = FALSE)
+  
+  ## -- run C++ ---------------------------------------------------------------
+  steps <- ceiling(max(times) / abm_delta_t)
+  cpp_res <- run_karyotype_abm(
+    initial_population_r      = init_list,
+    fitness_map_r = setNames(list(), character(0)),
+    p_missegregation          = p,
+    dt                        = abm_delta_t,
+    n_steps                   = as.integer(steps),
+    max_population_size       = abm_max_pop,
+    culling_survival_fraction = abm_culling_survival,
+    record_interval           = as.integer(abm_record_interval),
+    seed                      = as.integer(abm_seed),
+    grf_centroids             = centroids,
+    grf_lambda                = lambda
+  )
+  
+  ## -- convert to wide data‑frame (unchanged) --------------------------------
+  if(!length(cpp_res)) {
+    warning("C++ returned no results.")
+    out <- data.frame(time = numeric(0)); for(nm in names(x0)) out[[nm]] <- numeric(0)
+    return(out)
+  }
+  long <- lapply(names(cpp_res), function(s) {
+    t <- as.numeric(s) * abm_delta_t
+    cnt <- cpp_res[[s]]
+    if(length(cnt) && sum(cnt) > 0) {
+      freq <- cnt / sum(cnt)
+      data.frame(time = t, Karyotype = names(freq), Frequency = as.numeric(freq))
+    } else data.frame(time = t, Karyotype = character(0), Frequency = numeric(0))
+  })
+  long <- do.call(rbind, long)
+  
+  if(nrow(long)) {
+    wide <- tidyr::pivot_wider(long, names_from = .data$Karyotype,
+                               values_from = .data$Frequency, values_fill = 0)
+    miss <- setdiff(names(x0), names(wide))
+    for(m in miss) wide[[m]] <- 0
+    karyo_cols <- setdiff(names(wide), "time")
+    wide[, c("time", karyo_cols), drop = FALSE]
+  } else {
+    data.frame(time = unique(times),
+               t(matrix(0, nrow = length(times), ncol = length(x0),
+                        dimnames = list(NULL, names(x0)))))
+  }
+}
+
 
 # ======================================================================
 # End of prediction_functions.R

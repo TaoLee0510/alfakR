@@ -78,6 +78,28 @@ std::string karyotype_to_string_abm(const std::vector<int>& cn) { // Renamed to 
   return ss.str();
 }
 
+// ---- GRF fitness -----------------------------------------------------------
+double grf_fitness(const std::vector<int>& cn,
+                   const std::vector<std::vector<double>>& centroids,
+                   double lambda)
+{
+  if(lambda <= 0.0) return 0.0;                     // safety guard
+  double acc = 0.0;
+  for(const auto& r : centroids){
+    double d2 = 0.0;
+    for(size_t k = 0; k < cn.size(); ++k){
+      double diff = static_cast<double>(cn[k]) - r[k];
+      d2 += diff * diff;
+    }
+    acc += std::sin(std::sqrt(d2) / lambda);
+  }
+  
+  double fitness_scalar = 1/(3.14159*sqrt(centroids.size()));
+  
+  return acc*fitness_scalar;                                       // can be <0, leave as is
+}
+
+
 // Get fitness from LUT, return default if not found
 double get_fitness_abm( // Renamed
     const std::vector<int>& cn,
@@ -170,16 +192,19 @@ std::pair<std::vector<int>, std::vector<int>> generate_misseg_daughters(
 
 // [[Rcpp::export]]
 Rcpp::List run_karyotype_abm(
-    Rcpp::List initial_population_r,    
-    Rcpp::List fitness_map_r,           
-    double p_missegregation,
-    double dt,
-    int n_steps,
-    long long max_population_size, // R's numeric (double) will convert if in range
-    double culling_survival_fraction = 0.1,
-    int record_interval = 1,
-    int seed = -1
-) {
+    Rcpp::List  initial_population_r,
+    Rcpp::List  fitness_map_r,                 
+    double      p_missegregation,
+    double      dt,
+    int         n_steps,
+    long long   max_population_size,
+    double      culling_survival_fraction = 0.1,
+    int         record_interval             = 1,
+    int         seed                        = -1,
+    Rcpp::NumericMatrix grf_centroids       = Rcpp::NumericMatrix(0,0),
+    double      grf_lambda                  = NA_REAL
+)
+{
   PopulationMap population;
   FitnessMap fitness_map; 
   std::mt19937 rng_engine;
@@ -189,8 +214,32 @@ Rcpp::List run_karyotype_abm(
   } else {
     rng_engine.seed(static_cast<unsigned int>(seed));
   }
-  
   int n_chr_types_sim = -1; // To be determined from first valid karyotype
+  
+  // ---- Decide fitness mode ---------------------------------------------------
+  const bool use_grf = (grf_centroids.nrow() > 0) && !Rcpp::NumericVector::is_na(grf_lambda);
+  
+  std::vector<std::vector<double>> centroids_std;
+  if(use_grf){
+    centroids_std.reserve(grf_centroids.nrow());
+    for(int i = 0; i < grf_centroids.nrow(); ++i){
+      Rcpp::NumericVector r_row = grf_centroids.row(i);           
+      centroids_std.emplace_back(r_row.begin(), r_row.end());     
+    }
+  }
+  
+  // ---------------------------------------------------------------------------
+  // Dimension‑sanity: derive or verify n_chr_types_sim in GRF mode
+  if(use_grf){
+    const int K = static_cast<int>(grf_centroids.ncol());
+    if(n_chr_types_sim == -1){
+      n_chr_types_sim = K;                         // no dimension yet → take GRF’s K
+    }else if(n_chr_types_sim != K){
+      Rcpp::stop("Dimension mismatch: initial data use %d chromosome types, "
+                   "but GRF centroids have %d columns.", n_chr_types_sim, K);
+    }
+  }
+  
   
   Rcpp::CharacterVector initial_k_names = initial_population_r.names();
   for(int i = 0; i < initial_k_names.size(); ++i) {
@@ -260,15 +309,15 @@ Rcpp::List run_karyotype_abm(
     PopulationMap cleaned_initial_population; // To store valid initial types
     
     for(const auto& pair : population) {
-      if (fitness_map.count(pair.first)) { 
+      if (use_grf || fitness_map.count(pair.first)) { 
         if (pair.second > 0) { 
           counts_r_init.push_back(static_cast<double>(pair.second));
           names_r_init.push_back(karyotype_to_string_abm(pair.first));
           initial_total += pair.second;
           cleaned_initial_population[pair.first] = pair.second; // Keep this one
         }
-      } else {
-        Rcpp::warning("Initial population contains karyotype '%s' not in fitness map. It will be ignored.", 
+      } else if(!use_grf) {     // only warn in LUT mode
+        Rcpp::warning("Initial population contains karyotype '%s' not in fitness map. It will be ignored.",
                       karyotype_to_string_abm(pair.first).c_str());
       }
     }
@@ -310,8 +359,10 @@ Rcpp::List run_karyotype_abm(
       if(parent_it == population.end() || parent_it->second <=0) continue;
       long long parent_count = parent_it->second;
       
-      double fitness = get_fitness_abm(parent_cn, fitness_map); // Using default_fitness_value = 0.0 from get_fitness_abm
-      // because all population members should be in fitness_map
+      double fitness = use_grf
+      ? grf_fitness(parent_cn, centroids_std, grf_lambda)
+        : get_fitness_abm(parent_cn, fitness_map);
+      
       
       if (fitness <= 0 && parent_count > 0) { // Only process if fitness > 0 for divisions
         net_changes_this_step[parent_cn] -= parent_count; // Cells die or don't divide
@@ -366,24 +417,24 @@ Rcpp::List run_karyotype_abm(
         std::pair<std::vector<int>, std::vector<int>> daughters =
           generate_misseg_daughters(k_errors_this_division, parent_cn, n_chrom_total_parent, rng_engine);
         
-        if (!daughters.first.empty() && fitness_map.count(daughters.first)) {
+        if (!daughters.first.empty() && (use_grf || fitness_map.count(daughters.first))) {
           net_changes_this_step[daughters.first]++;
         }
-        if (!daughters.second.empty() && fitness_map.count(daughters.second)) {
+        if (!daughters.second.empty() && (use_grf || fitness_map.count(daughters.second))) {
           net_changes_this_step[daughters.second]++;
         }
       }
     } 
     
     for(const auto& pair_change : net_changes_this_step) { // Renamed pair
-      if (fitness_map.count(pair_change.first)) { // Ensure type is known (might be redundant)
+      if (use_grf || fitness_map.count(pair_change.first)) {
         population[pair_change.first] += pair_change.second;
       }
     }
     
     long long current_total_pop = 0; // Renamed from next_total_pop
     for (auto it = population.begin(); it != population.end(); ) {
-      if (it->second <= 0 || !fitness_map.count(it->first)) {
+      if (it->second <= 0 || (!use_grf && !fitness_map.count(it->first))) {
         it = population.erase(it);
       } else {
         current_total_pop += it->second;
