@@ -660,9 +660,10 @@ find_steady_state <- function(lscape, p, Nmax=Inf) {
 #' @param abm_max_pop Carrying capacity. Use \code{<= 0} for unlimited.
 #' @param abm_culling_survival Fraction of cells retained when the population
 #'   exceeds \code{abm_max_pop}.
-#' @param abm_record_interval Record population state every N steps.
+#' @param abm_record_interval Record population state every N steps. If a negative value 
+#' is provided, then population is recorded every passage.
 #' @param abm_seed RNG seed.  Use \code{-1} for a random seed.
-#'
+#' @param normalize_freq Should ABM counts be normalized to frequencies?
 #' @return A **wide data‑frame**: first column \code{time}, remaining columns
 #'   one per karyotype, giving relative frequencies at each sampled time.
 #'
@@ -690,7 +691,8 @@ run_abm_simulation_grf <- function(centroids, lambda, p, times, x0,
                                    abm_max_pop         = 1e7,
                                    abm_culling_survival = 0.1,
                                    abm_record_interval  = 10,
-                                   abm_seed             = -1) {
+                                   abm_seed             = -1,
+                                   normalize_freq=T) {
   
   ## -- validation (same as internal draft, trimmed for brevity) -------------
   if(!is.matrix(centroids) || !is.numeric(centroids) || nrow(centroids) == 0)
@@ -739,7 +741,8 @@ run_abm_simulation_grf <- function(centroids, lambda, p, times, x0,
     t <- as.numeric(s) * abm_delta_t
     cnt <- cpp_res[[s]]
     if(length(cnt) && sum(cnt) > 0) {
-      freq <- cnt / sum(cnt)
+      freq <- cnt 
+      if(normalize_freq) freq <- cnt / sum(cnt)
       data.frame(time = t, Karyotype = names(freq), Frequency = as.numeric(freq))
     } else data.frame(time = t, Karyotype = character(0), Frequency = numeric(0))
   })

@@ -216,6 +216,13 @@ Rcpp::List run_karyotype_abm(
   }
   int n_chr_types_sim = -1; // To be determined from first valid karyotype
   
+  // ---------------------------------------------------------------------------
+  // recording logic
+  const bool record_on_interval = (record_interval >= 1);   // specified timesteps
+  const bool record_on_cull     = (record_interval <  0);   // only at culling
+  const int  interval_every     = record_on_interval ? record_interval : 1;
+  
+  
   // ---- Decide fitness mode ---------------------------------------------------
   const bool use_grf = (grf_centroids.nrow() > 0) && !Rcpp::NumericVector::is_na(grf_lambda);
   
@@ -287,7 +294,7 @@ Rcpp::List run_karyotype_abm(
     }
   }
   
-  
+  // record initial population:
   Rcpp::CharacterVector fitness_k_names = fitness_map_r.names();
   for(int i = 0; i < fitness_k_names.size(); ++i) {
     std::string k_str = Rcpp::as<std::string>(fitness_k_names[i]);
@@ -301,8 +308,9 @@ Rcpp::List run_karyotype_abm(
     } 
   }
   
+
   Rcpp::List results_over_time;
-  if (record_interval >= 1 && n_chr_types_sim > 0) { // Check n_chr_types_sim before karyotype_to_string_abm
+  if ((record_on_interval || record_on_cull) && n_chr_types_sim > 0) {
     Rcpp::NumericVector counts_r_init;
     Rcpp::CharacterVector names_r_init;
     long long initial_total = 0;
@@ -442,6 +450,17 @@ Rcpp::List run_karyotype_abm(
       }
     }
     
+    if (record_on_cull) {
+      Rcpp::NumericVector counts_cull;
+      Rcpp::CharacterVector names_cull;
+      for (const auto& pair_rec : population) {
+        counts_cull.push_back(static_cast<double>(pair_rec.second));
+        names_cull.push_back(karyotype_to_string_abm(pair_rec.first));
+      }
+      if (counts_cull.length() > 0) counts_cull.names() = names_cull;
+      results_over_time.push_back(counts_cull, std::to_string(step));
+    }
+    
     if (max_population_size > 0 && current_total_pop > max_population_size) {
       double sampling_fraction = culling_survival_fraction; 
       // Rcpp::Rcout << "Step " << step << ": Population " << current_total_pop // Optional verbose logging
@@ -470,7 +489,7 @@ Rcpp::List run_karyotype_abm(
     // const int report_freq = std::max(1, n_steps / 10); // Reporting logic can be kept if desired
     // if (step % report_freq == 0 || step == n_steps) { ... }
     
-    if (step % record_interval == 0 || step == n_steps) {
+    if (record_on_interval && (step % interval_every == 0 || step == n_steps)) {
       Rcpp::NumericVector counts_r_step; // Renamed
       Rcpp::CharacterVector names_r_step; // Renamed
       if (n_chr_types_sim > 0) { // Only proceed if n_chr_types_sim is valid

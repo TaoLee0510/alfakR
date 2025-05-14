@@ -15,7 +15,8 @@ run_abm_simulation_grf(
   abm_max_pop = 1e+07,
   abm_culling_survival = 0.1,
   abm_record_interval = 10,
-  abm_seed = -1
+  abm_seed = -1,
+  normalize_freq = T
 )
 }
 \arguments{
@@ -43,9 +44,12 @@ matching the dimension of \code{centroids}.}
 \item{abm_culling_survival}{Fraction of cells retained when the population
 exceeds \code{abm_max_pop}.}
 
-\item{abm_record_interval}{Record population state every N steps.}
+\item{abm_record_interval}{Record population state every N steps. If a negative value
+is provided, then population is recorded every passage.}
 
 \item{abm_seed}{RNG seed.  Use \code{-1} for a random seed.}
+
+\item{normalize_freq}{Should ABM counts be normalized to frequencies?}
 }
 \value{
 A \strong{wide data‑frame}: first column \code{time}, remaining columns
