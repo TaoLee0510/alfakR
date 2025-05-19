@@ -739,5 +739,10 @@ xval <- function(fq_boot) {
     warning("Not enough valid observations after cross-validation to compute R2R.")
     return(NA_real_)
   }
-  R2R(tmp[, 1], tmp[, 2])
+  r2r_val <- R2R(tmp[, 1], tmp[, 2])
+return(list(
+    tmp  = tmp,
+   R2R  = r2r_val
+  ))
+  #R2R(tmp[, 1], tmp[, 2])
 }
