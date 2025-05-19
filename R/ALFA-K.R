@@ -107,7 +107,7 @@ alfak <- function(yi, outdir, passage_times, minobs = 20,
   landscape_data <- fitKrig(fq_boot, nboot) # nboot is passed for Kriging iterations
   saveRDS(landscape_data$summary_stats, file = file.path(outdir, "landscape.Rds"))
   saveRDS(landscape_data$posterior_samples, file = file.path(outdir, "landscape_posterior_samples.Rds"))
-  
+  saveRDS(landscape_data, file = file.path(outdir, "landscape_data.Rds"))
   Rxv <- xval(fq_boot)
   saveRDS(Rxv, file = file.path(outdir, "xval.Rds"))
   
@@ -602,7 +602,8 @@ fitKrig <- function(fq_boot, nboot) {
   nn_ids <- ktest_str %in% valid_nn_str
   
   # Use lapply directly, as cl is removed
-  boot_predictions_list <- lapply(1:nboot, function(b) {
+  boot_results <- lapply(1:nboot, function(b) {
+  #boot_predictions_list <- lapply(1:nboot, function(b) {
     # Original sampling strategy to avoid spatially correlated errors
     boot_f_indices <- cbind(sample(1:nrow(fboot), ncol(fboot), replace = TRUE), 1:ncol(fboot))
     boot_f <- fboot[boot_f_indices, drop=FALSE] # Use drop=FALSE just in case
@@ -618,11 +619,13 @@ fitKrig <- function(fq_boot, nboot) {
     fit_boot <- fields::Krig(ktrain, boot_f,
                              cov.function = "stationary.cov",
                              cov.args = list(Covariance = "Matern", smoothness = 1.5))
-    stats::predict(fit_boot, ktest)
+    #stats::predict(fit_boot, ktest)
+    preds <- stats::predict(fit_boot, ktest)
+    list(fit_boot = fit_boot, preds = preds)
   })
   
-  boot_predictions <- do.call(cbind, boot_predictions_list)
-  
+  boot_predictions <- do.call(cbind, lapply(boot_results, `[[`, "preds"))
+  fit_boot_list   <- lapply(boot_results, `[[`, "fit_boot")
   if(is.null(boot_predictions) || ncol(boot_predictions) == 0) { # Check if boot_predictions is empty
     pred_means <- rep(NA_real_, length(ktest_str))
     pred_medians <- rep(NA_real_, length(ktest_str))
@@ -636,7 +639,12 @@ fitKrig <- function(fq_boot, nboot) {
   summary_df <- data.frame(k = ktest_str, mean = pred_means, median = pred_medians, sd = pred_sd,
                            fq = fq_ids, nn = nn_ids)
   
-  list(summary_stats = summary_df, posterior_samples = boot_predictions)
+  #list(summary_stats = summary_df, posterior_samples = boot_predictions)
+  list(
+  summary_stats     = summary_df,
+  posterior_samples = boot_predictions,
+  fit_boot_list     = fit_boot_list
+  )
 }
 
 #' Cross-validation for Kriging model (Internal function)
