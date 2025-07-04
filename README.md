@@ -122,7 +122,7 @@ ggplot(res,aes(time,freq,group=interaction(method,rep),color=method))+
 #> generated.
 ```
 
-![](quickstart_files/figure-gfm/plot_predict_evo-1.png)<!-- -->
+![](vignettes/plot_predict_evo-1.png)<!-- -->
 
 ### Interpretation of `predict_evo` Output
 
