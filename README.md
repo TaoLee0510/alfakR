@@ -324,14 +324,165 @@ if(file.exists(boot_res_rds_path2)){
 With `dt` calibrated, the absolute fitness estimates from `alfak` should
 now be closer to the original fitness values defined in `landscape_df`.
 
+## Demonstrating `correct_efflux`
+
+When missegregation rates are high, the population growth rate can be
+dampened by the constant “efflux” of cells into unfit or lethal
+aneuploid states. `alfak` includes an optional `correct_efflux`
+parameter to account for this phenomenon when estimating fitness.
+
+### Setup and Data Generation
+
+We define a landscape with a high missegregation rate (`beta = 0.02`)
+and simulate population dynamics.
+
+``` r
+# Define a simple fitness landscape with 2 chromosome types
+# "2.2" is the wild type, "2.3" and "2.4" are neighbors.
+ground_truth_landscape <- data.frame(
+  k = c("2.2", "2.3", "2.4"),
+  mean = c(0.10, 0.11, 0.13) # Fitness values
+)
+
+# Simulation settings
+beta_val <- 0.02           # High missegregation rate to make the efflux effect visible
+n0_val <- 1e5              # Start of passage population
+nb_val <- 1e7              # End of passage population
+mean_growth_rate <- 0.10   # Approx growth rate of WT
+
+# Calculate realistic passage time (dt)
+dt_calc <- log(nb_val / n0_val) / mean_growth_rate
+
+# Time points (simulate 15 passages)
+n_passages <- 15
+sim_times <- seq(0, n_passages * dt_calc, by = dt_calc)
+
+# Initial condition: 100% Wild Type (2.2)
+init_freq <- c(1, 0, 0)
+names(init_freq) <- ground_truth_landscape$k
+
+# Run the simulation using predict_evo
+ode_res <- predict_evo(
+  lscape = ground_truth_landscape,
+  p = beta_val,
+  times = sim_times,
+  x0 = init_freq,
+  prediction_type = "ODE"
+)
+#> Setting up ODE simulation...
+#> Building sparse W matrix via Rcpp...
+#> ODE simulation finished.
+#> Simulation process complete.
+
+# Convert frequencies to counts (mimicking sequencing depth of ~200 cells)
+# We skip the first time point (t=0) as alfak typically expects data after selection
+sample_depth <- 200
+ode_probs <- ode_res[-1, -1] # Remove time column and t=0 row
+counts_matrix <- apply(ode_probs, 1, function(probs) {
+  rmultinom(1, size = sample_depth, prob = probs)
+})
+
+# Format for alfak (rows = karyotypes, cols = passage numbers)
+rownames(counts_matrix) <- colnames(ode_res)[-1]
+colnames(counts_matrix) <- 1:n_passages
+
+# Create the input object 'yi'
+yi_data <- list(
+  x = counts_matrix,
+  dt = dt_calc
+)
+```
+
+### Running `alfak` with and without Correction
+
+We now compare the fitness recovery when `correct_efflux` is enabled
+versus disabled.
+
+``` r
+# Create temporary directories for output
+dir_false <- tempfile("alfak_test_false_")
+dir_true  <- tempfile("alfak_test_true_")
+
+# A) Run without correction (Default behavior)
+cat("Running alfak with correct_efflux = FALSE...\n")
+#> Running alfak with correct_efflux = FALSE...
+invisible(utils::capture.output(
+  res_false <- alfak(
+    yi = yi_data,
+    outdir = dir_false,
+    passage_times = as.numeric(colnames(yi_data$x)), # Passage numbers
+    minobs = 5,      # Low threshold for this small toy data
+    nboot = 20,      # Low bootstrap count for speed
+    n0 = n0_val,
+    nb = nb_val,
+    pm = beta_val,
+    correct_efflux = FALSE
+  )
+))
+
+# B) Run with correction
+cat("Running alfak with correct_efflux = TRUE...\n")
+#> Running alfak with correct_efflux = TRUE...
+invisible(utils::capture.output(
+  res_true <- alfak(
+    yi = yi_data,
+    outdir = dir_true,
+    passage_times = as.numeric(colnames(yi_data$x)),
+    minobs = 5,
+    nboot = 20,
+    n0 = n0_val,
+    nb = nb_val,
+    pm = beta_val,
+    correct_efflux = TRUE
+  )
+))
+```
+
+### Comparison of Results
+
+We compare the median inferred fitness values against the ground truth.
+
+``` r
+# Load the bootstrap results
+boot_false <- readRDS(file.path(dir_false, "bootstrap_res.Rds"))
+boot_true  <- readRDS(file.path(dir_true, "bootstrap_res.Rds"))
+
+# Extract median fitness estimates
+est_false <- apply(boot_false$final_fitness, 2, median)
+est_true  <- apply(boot_true$final_fitness, 2, median)
+
+# Combine into a comparison table
+comparison <- data.frame(
+  Karyotype = names(est_false),
+  Truth = ground_truth_landscape$mean[match(names(est_false), ground_truth_landscape$k)],
+  Est_False = est_false,
+  Est_True = est_true
+)
+
+comparison$Diff_False <- abs(comparison$Est_False - comparison$Truth)
+comparison$Diff_True  <- abs(comparison$Est_True - comparison$Truth)
+
+print("Comparison of Fitness Estimates:")
+#> [1] "Comparison of Fitness Estimates:"
+print(comparison)
+#>     Karyotype Truth  Est_False   Est_True  Diff_False   Diff_True
+#> 2.2       2.2  0.10 0.09810245 0.09533935 0.001897550 0.004660655
+#> 2.3       2.3  0.11 0.10276403 0.10550367 0.007235975 0.004496330
+#> 2.4       2.4  0.13 0.10425764 0.11225510 0.025742363 0.017744898
+
+# Cleanup
+unlink(dir_false, recursive = TRUE)
+unlink(dir_true, recursive = TRUE)
+```
+
 ## Conclusion
 
 This vignette has demonstrated the use of `predict_evo` for simulating
 karyotype evolution and validated its ODE component against a custom
 model. It also provided an example of how to use the `alfak` function to
 infer fitness landscapes from simulated count data, highlighting the
-importance of calibrating passage times (`dt`) for accurate absolute
-fitness estimation.
+importance of calibrating passage times (`dt`) and correcting for efflux
+(`correct_efflux`) for accurate absolute fitness estimation.
 
     #> R version 4.4.1 (2024-06-14 ucrt)
     #> Platform: x86_64-w64-mingw32/x64
