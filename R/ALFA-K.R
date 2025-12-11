@@ -88,7 +88,8 @@ alfak <- function(yi, outdir, passage_times, minobs = 20,
                   nboot = 45,
                   n0 = 1e5,
                   nb = 1e7,
-                  pm = 0.00005) {
+                  pm = 0.00005,
+                  correct_efflux=FALSE) {
   
   # Note: library calls removed, dependencies handled by @importFrom or DESCRIPTION
   
@@ -101,7 +102,7 @@ alfak <- function(yi, outdir, passage_times, minobs = 20,
   
   fq_boot <- solve_fitness_bootstrap(yi, minobs = minobs, nboot = nboot,
                                      n0 = n0, nb = nb, pm = pm,
-                                     passage_times = passage_times)
+                                     passage_times = passage_times,correct_efflux=correct_efflux)
   saveRDS(fq_boot, file = file.path(outdir, "bootstrap_res.Rds"))
   
   landscape_data <- fitKrig(fq_boot, nboot) # nboot is passed for Kriging iterations
@@ -349,7 +350,7 @@ find_birth_times <- function(opt_res, time_range, minF) {
 #' @keywords internal
 #' @noRd
 solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, pm = 0.00005,
-                                    n0, nb, passage_times = NULL) {
+                                    n0, nb, passage_times = NULL,correct_efflux=FALSE) {
   fq <- rownames(data$x)[rowSums(data$x) > minobs]
   nn_info_list <- gen_nn_info(fq, pm) # Renamed 'nn' to 'nn_info_list' for clarity
   if (length(nn_info_list) > 0 && !is.null(nn_info_list[[1]]$ni)) { # Check if naming is needed
@@ -361,6 +362,9 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
   }
   
   fq_vec <- do.call(rbind, lapply(fq, s2v))
+  
+  P <- (1-pm)^rowSums(fq_vec)
+  
   # fq_nn <- which(as.matrix(stats::dist(fq_vec)) == 1) # fq_nn was not used
   timepoints <- as.numeric(colnames(data$x)) * data$dt
   num_species <- length(fq)
@@ -402,7 +406,26 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
     g0_val <- log(current_nb / current_n0) / diff(current_timepoints)[1] # Renamed g0
     if (!is.null(current_passage_times))
       g0_val <- log(current_nb / current_n0) / diff(current_passage_times * current_data$dt)[1]
-    opt_res$f <- opt_res$f + g0_val - sum(opt_res$x0 * opt_res$f)
+    
+    if (correct_efflux) {
+      viability <- 2 * P - 1
+      
+      # Term 1: sum(x0 * f_rel / viability)
+      sum_weighted_frel <- sum((opt_res$x0 * opt_res$f) / viability)
+      
+      # Term 2: sum(x0 / viability)
+      sum_weights <- sum(opt_res$x0 / viability)
+      
+      # Solve for constant k
+      k_const <- (sum_weighted_frel - g0_val) / sum_weights
+      
+      # Calculate absolute intrinsic division rates: (f_rel - k) / viability
+      opt_res$f <- (opt_res$f - k_const) / viability
+      
+    } else {
+      # Original scaling: shifts mean to match g0
+      opt_res$f <- opt_res$f + g0_val - sum(opt_res$x0 * opt_res$f)
+    }
     
     birth_times_est <- find_birth_times(opt_res, time_range = c(-1000, max(current_timepoints)), minF = 1 / current_n0) # Renamed
     peak_times <- current_timepoints[apply(x, 1, which.max)]
