@@ -663,12 +663,12 @@ fitKrig <- function(fq_boot, nboot) {
                            fq = fq_ids, nn = nn_ids)
   
   #list(summary_stats = summary_df, posterior_samples = boot_predictions)
-  list(
+  return(list(
   summary_stats     = summary_df,
   posterior_samples = boot_predictions,
   boot_results     = boot_predictions_list,
   fit_boot_list = fit_boot_list
-  )
+  ))
 }
 
 #' Cross-validation for Kriging model (Internal function)
@@ -767,11 +767,12 @@ xval <- function(fq_boot) {
   tmp <- do.call(rbind, tmp_list)
   tmp <- tmp[stats::complete.cases(tmp), , drop = FALSE] # Use stats::complete.cases
   
+  r2r_val <- NA_real_
   if(nrow(tmp) < 2) { # R2R needs at least 2 points
     warning("Not enough valid observations after cross-validation to compute R2R.")
-    return(NA_real_)
+  }else{
+    r2r_val <- R2R(tmp[, 1], tmp[, 2])
   }
-  r2r_val <- R2R(tmp[, 1], tmp[, 2])
   return(list(
     tmp  = tmp,
    R2R  = r2r_val
