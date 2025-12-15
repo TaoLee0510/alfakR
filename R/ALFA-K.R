@@ -108,7 +108,7 @@ alfak <- function(yi, outdir, passage_times, minobs = 20,
   landscape_data <- fitKrig(fq_boot, nboot) # nboot is passed for Kriging iterations
   saveRDS(landscape_data$summary_stats, file = file.path(outdir, "landscape.Rds"))
   saveRDS(landscape_data$posterior_samples, file = file.path(outdir, "landscape_posterior_samples.Rds"))
-  
+  saveRDS(landscape_data, file = file.path(outdir, "landscape_data.Rds"))
   Rxv <- xval(fq_boot)
   saveRDS(Rxv, file = file.path(outdir, "xval.Rds"))
   
@@ -641,7 +641,8 @@ fitKrig <- function(fq_boot, nboot) {
     fit_boot <- fields::Krig(ktrain, boot_f,
                              cov.function = "stationary.cov",
                              cov.args = list(Covariance = "Matern", smoothness = 1.5))
-    stats::predict(fit_boot, ktest)
+    preds <- stats::predict(fit_boot, ktest)
+    list(fit_boot = fit_boot, preds = preds)
   })
   
   boot_predictions <- do.call(cbind, boot_predictions_list)
@@ -659,7 +660,12 @@ fitKrig <- function(fq_boot, nboot) {
   summary_df <- data.frame(k = ktest_str, mean = pred_means, median = pred_medians, sd = pred_sd,
                            fq = fq_ids, nn = nn_ids)
   
-  list(summary_stats = summary_df, posterior_samples = boot_predictions)
+  #list(summary_stats = summary_df, posterior_samples = boot_predictions)
+  list(
+  summary_stats     = summary_df,
+  posterior_samples = boot_predictions,
+  boot_results     = boot_results
+  )
 }
 
 #' Cross-validation for Kriging model (Internal function)
@@ -762,5 +768,9 @@ xval <- function(fq_boot) {
     warning("Not enough valid observations after cross-validation to compute R2R.")
     return(NA_real_)
   }
-  R2R(tmp[, 1], tmp[, 2])
+  return(list(
+    tmp  = tmp,
+   R2R  = r2r_val
+  ))
+  #R2R(tmp[, 1], tmp[, 2])
 }
