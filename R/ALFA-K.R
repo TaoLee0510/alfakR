@@ -647,6 +647,7 @@ fitKrig <- function(fq_boot, nboot) {
   
   #boot_predictions <- do.call(cbind, boot_predictions_list)
   boot_predictions <- do.call(cbind, lapply(boot_predictions_list, `[[`, "preds"))
+  fit_boot_list   <- lapply(boot_predictions_list, `[[`, "fit_boot")
 
   if(is.null(boot_predictions) || ncol(boot_predictions) == 0) { # Check if boot_predictions is empty
     pred_means <- rep(NA_real_, length(ktest_str))
@@ -665,7 +666,8 @@ fitKrig <- function(fq_boot, nboot) {
   list(
   summary_stats     = summary_df,
   posterior_samples = boot_predictions,
-  boot_results     = boot_predictions_list
+  boot_results     = boot_predictions_list,
+  fit_boot_list = fit_boot_list
   )
 }
 
@@ -769,6 +771,7 @@ xval <- function(fq_boot) {
     warning("Not enough valid observations after cross-validation to compute R2R.")
     return(NA_real_)
   }
+  r2r_val <- R2R(tmp[, 1], tmp[, 2])
   return(list(
     tmp  = tmp,
    R2R  = r2r_val
