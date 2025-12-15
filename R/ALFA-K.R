@@ -665,7 +665,7 @@ fitKrig <- function(fq_boot, nboot) {
   list(
   summary_stats     = summary_df,
   posterior_samples = boot_predictions,
-  boot_results     = boot_results
+  boot_results     = boot_predictions_list
   )
 }
 
