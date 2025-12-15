@@ -645,8 +645,9 @@ fitKrig <- function(fq_boot, nboot) {
     list(fit_boot = fit_boot, preds = preds)
   })
   
-  boot_predictions <- do.call(cbind, boot_predictions_list)
-  
+  #boot_predictions <- do.call(cbind, boot_predictions_list)
+  boot_predictions <- do.call(cbind, lapply(boot_predictions_list, `[[`, "preds"))
+
   if(is.null(boot_predictions) || ncol(boot_predictions) == 0) { # Check if boot_predictions is empty
     pred_means <- rep(NA_real_, length(ktest_str))
     pred_medians <- rep(NA_real_, length(ktest_str))
