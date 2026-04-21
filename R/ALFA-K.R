@@ -45,9 +45,14 @@
 #'   model objects. Default is `FALSE`, so only the documented core outputs are
 #'   written.
 #' @param nn_prior Character; nearest-neighbour prior mode for latent children.
-#'   `"empirical"` uses the current empirical child-minus-parent prior estimated
-#'   from observed neighbours, while `"none"` disables that prior contribution.
-#'   Default is `"empirical"`.
+#'   `"empirical_censored"` fits an empirical-Bayes prior from all neighbour
+#'   children, including zero-count latent neighbours, to correct observation
+#'   bias. This mode errors if the prior hyperparameter fit fails and is the
+#'   default.
+#'   `"none"` disables the latent-neighbour prior contribution.
+#'   `"empirical"` opt-in uses the empirical child-minus-parent prior estimated
+#'   from observed neighbours.
+#'   Default is `"empirical_censored"`.
 #' @param nn_prior_sd Optional numeric scalar. If supplied, this overrides the
 #'   empirically estimated prior standard deviation for latent-neighbour fitting.
 #' @param nn_prior_sd_floor Numeric scalar giving the minimum standard deviation
@@ -124,7 +129,7 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
                   allow_noninteger_counts = FALSE,
                   correct_efflux=FALSE,
                   landscape_data_output = FALSE,
-                  nn_prior = c("empirical", "none"),
+                  nn_prior = c("empirical_censored", "none", "empirical"),
                   nn_prior_sd = NULL,
                   nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
                   krig_bootstrap_mode = c("marginal", "joint")) {
@@ -280,6 +285,7 @@ extract_xval_r2r <- function(xval_result) {
 ALFAK_FEXP_DELTA_TOL <- 1e-8
 ALFAK_EFFLUX_VIABILITY_TOL <- 1e-6
 ALFAK_NN_PRIOR_SD_FLOOR <- 1e-3
+ALFAK_NN_PRIOR_CENSORED_GRID_POINTS <- 81L
 ALFAK_COUNT_INTEGER_TOL <- sqrt(.Machine$double.eps)
 ALFAK_KRIG_NSTEP_CV <- 200L
 ALFAK_MAX_EXACT_INTEGER <- 2^53 - 1
@@ -416,7 +422,7 @@ sd_or_na <- function(x) {
 #' @keywords internal
 #' @noRd
 validate_nn_prior_mode <- function(nn_prior) {
-  match.arg(nn_prior, c("empirical", "none"))
+  match.arg(nn_prior, c("empirical_censored", "none", "empirical"))
 }
 
 #' Validate nearest-neighbour prior controls
@@ -701,6 +707,39 @@ run_optim_checked <- function(par, fn, ..., method = "BFGS", control = NULL, con
   opt
 }
 
+#' Run optim and fail loudly on non-convergence
+#' @keywords internal
+#' @noRd
+run_optim_strict_checked <- function(par, fn, ..., method = "BFGS", control = NULL,
+                                     lower = NULL, upper = NULL, context) {
+  optim_args <- c(
+    list(par = par, fn = fn, method = method, control = control),
+    list(...)
+  )
+  if (!is.null(lower)) {
+    optim_args$lower <- lower
+  }
+  if (!is.null(upper)) {
+    optim_args$upper <- upper
+  }
+  opt <- try(do.call(stats::optim, optim_args), silent = TRUE)
+  if (inherits(opt, "try-error")) {
+    stop(sprintf("%s failed: %s", context, as.character(opt)))
+  }
+  if (!all(is.finite(opt$par)) || !is.finite(opt$value)) {
+    stop(sprintf("%s returned non-finite parameters or objective values.", context))
+  }
+  if (!is.null(opt$convergence) && opt$convergence != 0) {
+    stop(sprintf(
+      "%s failed with convergence code %d%s",
+      context,
+      opt$convergence,
+      if (!is.null(opt$message) && nzchar(opt$message)) paste0(": ", opt$message) else "."
+    ))
+  }
+  opt
+}
+
 #' Run optimise and warn on invalid scalar optima
 #' @keywords internal
 #' @noRd
@@ -713,6 +752,20 @@ run_optimise_checked <- function(f, interval, ..., context) {
   if (!is.finite(opt$minimum) || !is.finite(opt$objective)) {
     warning(sprintf("%s returned a non-finite optimum.", context))
     return(NULL)
+  }
+  opt
+}
+
+#' Run optimise and fail loudly on invalid scalar optima
+#' @keywords internal
+#' @noRd
+run_optimise_strict_checked <- function(f, interval, ..., context) {
+  opt <- try(stats::optimise(f, interval = interval, ...), silent = TRUE)
+  if (inherits(opt, "try-error")) {
+    stop(sprintf("%s failed: %s", context, as.character(opt)))
+  }
+  if (!is.finite(opt$minimum) || !is.finite(opt$objective)) {
+    stop(sprintf("%s returned a non-finite optimum.", context))
   }
   opt
 }
@@ -748,6 +801,158 @@ weighted_parent_fitness <- function(nni_item, fpar) {
     return(stats::weighted.mean(parent_fitness, w = parent_weights))
   }
   mean(parent_fitness, na.rm = TRUE)
+}
+
+#' Estimate an observation-bias corrected latent-neighbour prior
+#' @keywords internal
+#' @noRd
+estimate_nn_prior_censored_eb <- function(nn_info_items, fpar, build_opt_fc, search_interval,
+                                          nn_prior_sd = NULL,
+                                          nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
+                                          context = "fit empirical_censored latent-neighbour prior") {
+  if (!length(nn_info_items)) {
+    stop(sprintf("%s failed: no nearest-neighbour children were available.", context))
+  }
+  if (length(search_interval) != 2 || any(!is.finite(search_interval)) || diff(search_interval) <= 0) {
+    stop(sprintf("%s failed: search_interval must contain two finite increasing bounds.", context))
+  }
+
+  child_names <- names(nn_info_items)
+  if (is.null(child_names) || !length(child_names)) {
+    child_names <- vapply(nn_info_items, function(x) x$ni, character(1))
+  }
+
+  parent_means <- vapply(nn_info_items, weighted_parent_fitness, numeric(1), fpar = fpar)
+  valid_children <- is.finite(parent_means)
+  if (!any(valid_children)) {
+    stop(sprintf("%s failed: no child had a finite weighted parent fitness mean.", context))
+  }
+
+  nn_info_items <- nn_info_items[valid_children]
+  child_names <- child_names[valid_children]
+  parent_means <- parent_means[valid_children]
+
+  grid_n <- max(41L, as.integer(ALFAK_NN_PRIOR_CENSORED_GRID_POINTS))
+  fc_grid <- seq(search_interval[1], search_interval[2], length.out = grid_n)
+  if (length(fc_grid) < 2 || !all(is.finite(fc_grid))) {
+    stop(sprintf("%s failed: could not construct a finite integration grid.", context))
+  }
+  grid_step <- fc_grid[2] - fc_grid[1]
+  if (!is.finite(grid_step) || grid_step <= 0) {
+    stop(sprintf("%s failed: integration grid spacing must be positive.", context))
+  }
+  log_weights <- rep(log(grid_step), length(fc_grid))
+  log_weights[c(1, length(fc_grid))] <- log(grid_step / 2)
+
+  loglik_mat <- matrix(NA_real_, nrow = length(nn_info_items), ncol = length(fc_grid),
+                       dimnames = list(child_names, NULL))
+  map_delta <- rep(NA_real_, length(nn_info_items))
+  for (i in seq_along(nn_info_items)) {
+    objective_fn <- build_opt_fc(nn_info_items[[i]], do_prior_param = FALSE)
+    objective_vals <- vapply(fc_grid, objective_fn, numeric(1))
+    loglik_vals <- -objective_vals
+    loglik_vals[!is.finite(loglik_vals)] <- -1e9
+    if (all(loglik_vals <= -1e9)) {
+      stop(sprintf(
+        "%s failed: child %s produced no finite likelihood values across the prior grid.",
+        context,
+        child_names[i]
+      ))
+    }
+    loglik_mat[i, ] <- loglik_vals
+    map_delta[i] <- fc_grid[which.max(loglik_vals)] - parent_means[i]
+  }
+
+  finite_map_delta <- map_delta[is.finite(map_delta)]
+  if (!length(finite_map_delta)) {
+    stop(sprintf("%s failed: could not derive finite initial delta estimates.", context))
+  }
+
+  mu_init <- stats::median(finite_map_delta, na.rm = TRUE)
+  sigma_init <- if (length(finite_map_delta) >= 2) {
+    stats::mad(finite_map_delta, center = mu_init, constant = 1, na.rm = TRUE)
+  } else {
+    NA_real_
+  }
+  if (!is.finite(sigma_init) || sigma_init <= 0) {
+    sigma_init <- stats::sd(finite_map_delta, na.rm = TRUE)
+  }
+  if (!is.finite(sigma_init) || sigma_init <= 0) {
+    sigma_init <- nn_prior_sd_floor
+  }
+  sigma_init <- max(sigma_init, nn_prior_sd_floor)
+
+  delta_lower <- min(fc_grid) - max(parent_means)
+  delta_upper <- max(fc_grid) - min(parent_means)
+  delta_span <- delta_upper - delta_lower
+  if (!is.finite(delta_span) || delta_span <= 0) {
+    delta_span <- max(abs(c(delta_lower, delta_upper)), na.rm = TRUE)
+  }
+  if (!is.finite(delta_span) || delta_span <= 0) {
+    delta_span <- 1
+  }
+  mu_lower <- delta_lower - delta_span
+  mu_upper <- delta_upper + delta_span
+
+  marginal_negloglik <- function(mu, sigma) {
+    if (!is.finite(mu) || !is.finite(sigma) || sigma <= 0) {
+      return(1e9)
+    }
+    total <- 0
+    for (i in seq_len(nrow(loglik_mat))) {
+      log_prior <- stats::dnorm(fc_grid - parent_means[i], mean = mu, sd = sigma, log = TRUE)
+      vals <- loglik_mat[i, ] + log_prior + log_weights
+      max_val <- max(vals)
+      if (!is.finite(max_val)) {
+        return(1e9)
+      }
+      total <- total - (max_val + log(sum(exp(vals - max_val))))
+    }
+    if (!is.finite(total)) {
+      return(1e9)
+    }
+    total
+  }
+
+  if (is.null(nn_prior_sd)) {
+    sigma_upper <- max(delta_span * 4, nn_prior_sd_floor * 10)
+    if (!is.finite(sigma_upper) || sigma_upper <= nn_prior_sd_floor) {
+      sigma_upper <- nn_prior_sd_floor * 10
+    }
+    opt <- run_optim_strict_checked(
+      par = c(mu_init, log(sigma_init)),
+      fn = function(par) marginal_negloglik(par[1], exp(par[2])),
+      method = "L-BFGS-B",
+      lower = c(mu_lower, log(nn_prior_sd_floor)),
+      upper = c(mu_upper, log(sigma_upper)),
+      control = list(maxit = 200, factr = 1e7),
+      context = context
+    )
+    prior_mean <- opt$par[1]
+    prior_sd <- exp(opt$par[2])
+  } else {
+    prior_sd <- nn_prior_sd
+    opt <- run_optim_strict_checked(
+      par = mu_init,
+      fn = function(par) marginal_negloglik(par[1], prior_sd),
+      method = "L-BFGS-B",
+      lower = mu_lower,
+      upper = mu_upper,
+      control = list(maxit = 200, factr = 1e7),
+      context = context
+    )
+    prior_mean <- opt$par[1]
+  }
+
+  if (!is.finite(prior_mean) || !is.finite(prior_sd) || prior_sd <= 0) {
+    stop(sprintf("%s failed: fitted prior hyperparameters were invalid.", context))
+  }
+
+  list(
+    prior_mean = prior_mean,
+    prior_sd = prior_sd,
+    n_children = length(nn_info_items)
+  )
 }
 
 #' Numerically stable exposure term for neighbour estimation
@@ -1078,7 +1283,7 @@ find_birth_times <- function(opt_res, time_range, minF) {
 #' @noRd
 solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, pm = 0.00005,
                                     n0, nb, passage_times = NULL, allow_noninteger_counts = FALSE, correct_efflux=FALSE,
-                                    nn_prior = c("empirical", "none"),
+                                    nn_prior = c("empirical_censored", "none", "empirical"),
                                     nn_prior_sd = NULL,
                                     nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR) {
   data$x <- coerce_count_matrix(data$x, allow_noninteger_counts = allow_noninteger_counts)
@@ -1267,6 +1472,7 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
     }
 
     use_empirical_prior <- nn_prior == "empirical"
+    use_empirical_censored_prior <- nn_prior == "empirical_censored"
 
     if (use_empirical_prior && any(!nn_present) && length(fc_prior_vals) > 0 && !all(is.na(fc_prior_vals))) {
       mean_fc_prior_val <- mean(fc_prior_vals, na.rm = TRUE) # Renamed mean_fc_prior
@@ -1289,6 +1495,40 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
                                        do_prior_param = TRUE)
           res <- run_optimise_checked(objective_fn, interval = search_interval,
                                       context = sprintf("optimise nearest-neighbour fitness with prior for latent child %s", child_name))
+          if (!is.null(res)) {
+            fc[child_name] <- res$minimum
+          }
+        }
+      }
+    } else if (use_empirical_censored_prior && any(!nn_present)) {
+      prior_fit <- estimate_nn_prior_censored_eb(
+        nn_info_items = current_nn_info,
+        fpar = fpar,
+        build_opt_fc = build_opt_fc,
+        search_interval = search_interval,
+        nn_prior_sd = nn_prior_sd,
+        nn_prior_sd_floor = nn_prior_sd_floor,
+        context = sprintf(
+          "fit empirical_censored latent-neighbour prior for bootstrap replicate %d",
+          b_iter_idx
+        )
+      )
+
+      sapply_names_not_present <- names(current_nn_info)[!nn_present]
+      if (length(sapply_names_not_present) > 0) {
+        for (child_name in sapply_names_not_present) {
+          objective_fn <- build_opt_fc(current_nn_info[[child_name]],
+                                       prior_mean_param = prior_fit$prior_mean,
+                                       prior_sd_param = prior_fit$prior_sd,
+                                       do_prior_param = TRUE)
+          res <- run_optimise_strict_checked(
+            objective_fn,
+            interval = search_interval,
+            context = sprintf(
+              "optimise nearest-neighbour fitness with empirical_censored prior for latent child %s",
+              child_name
+            )
+          )
           if (!is.null(res)) {
             fc[child_name] <- res$minimum
           }

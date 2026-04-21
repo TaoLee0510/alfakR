@@ -86,7 +86,8 @@ test_that("minobs includes karyotypes exactly at the threshold", {
     nboot = 1,
     n0 = 1e4,
     nb = 1e6,
-    pm = 1e-4
+    pm = 1e-4,
+    nn_prior = "none"
   )
 
   expect_setequal(colnames(res$final_fitness), c("2.2.2", "2.2.1"))
@@ -109,7 +110,8 @@ test_that("matrix-like count inputs are accepted and coerced at entry", {
     nboot = 1,
     n0 = 1e4,
     nb = 1e6,
-    pm = 1e-4
+    pm = 1e-4,
+    nn_prior = "none"
   )
   expect_setequal(colnames(res_df$final_fitness), c("2.2.2", "2.2.1"))
 
@@ -124,7 +126,8 @@ test_that("matrix-like count inputs are accepted and coerced at entry", {
     nboot = 1,
     n0 = 1e4,
     nb = 1e6,
-    pm = 1e-4
+    pm = 1e-4,
+    nn_prior = "none"
   )
   expect_setequal(colnames(res_sparse$final_fitness), c("2.2.2", "2.2.1"))
 })
@@ -745,7 +748,8 @@ test_that("birth-time fallback keeps neighbour estimation finite when roots are 
           nboot = 1,
           n0 = 1e4,
           nb = 1e6,
-          pm = 1e-4
+          pm = 1e-4,
+          nn_prior = "none"
         )
       },
       compute_dx_dt = function(x, timepoints) {
@@ -942,7 +946,7 @@ test_that("fitKrig stops when stable or bootstrap Krig fits fail", {
   )
 })
 
-test_that("nn_prior = 'none' disables latent-neighbour prior contribution", {
+test_that("default latent-neighbour prior uses empirical_censored and nn_prior = 'none' disables it", {
   yi <- list(
     x = make_counts(
       c(10, 11,
@@ -954,6 +958,74 @@ test_that("nn_prior = 'none' disables latent-neighbour prior contribution", {
   )
   seen <- new.env(parent = emptyenv())
 
+  testthat::with_mocked_bindings(
+    {
+      alfakR:::solve_fitness_bootstrap(
+        yi,
+        minobs = 20,
+        nboot = 1,
+        n0 = 1e4,
+        nb = 1e6,
+        pm = 1e-4
+      )
+    },
+    compute_dx_dt = function(x, timepoints) {
+      matrix(0, nrow = nrow(x), ncol = ncol(x) - 1)
+    },
+    optimize_initial_frequencies = function(x_obs, f, timepoints) {
+      1
+    },
+    joint_optimize = function(counts, timepoints, f_init, x0_init) {
+      list(f = 0, x0 = 1)
+    },
+    project_forward_log = function(x0, f, timepoints) {
+      matrix(1, nrow = 1, ncol = length(timepoints),
+             dimnames = list("2.2.2", NULL))
+    },
+    find_birth_times = function(opt_res, time_range, minF) {
+      0
+    },
+    run_solve_qp_checked = function(Dmat, dvec, Amat, bvec, meq, context) {
+      list(solution = 0)
+    },
+    gen_nn_info = function(fq, pm) {
+      nn <- list(
+        list(ni = "2.2.3", nj = "2.2.2", pij = 0.2),
+        list(ni = "2.2.1", nj = "2.2.2", pij = 0.2)
+      )
+      names(nn) <- c("2.2.3", "2.2.1")
+      nn
+    },
+    estimate_nn_prior_censored_eb = function(...) {
+      list(prior_mean = -0.25, prior_sd = 0.33, n_children = 2)
+    },
+    alfak_neighbor_objective_cpp = function(fc_param, parent_fitness, pij_values,
+                                            parent_birth_times, timepoints, parent_xfit,
+                                            child_obs, ntot, parent_fitness_mean,
+                                            prior_mean, prior_sd, do_prior, tol) {
+      if (isTRUE(do_prior)) {
+        seen$latent_do_prior <- TRUE
+        seen$prior_mean <- prior_mean
+        seen$prior_sd <- prior_sd
+      }
+      0
+    },
+    run_optimise_checked = function(f, interval, ..., context) {
+      f(mean(interval))
+      list(minimum = mean(interval), objective = 0)
+    },
+    run_optimise_strict_checked = function(f, interval, ..., context) {
+      f(mean(interval))
+      list(minimum = mean(interval), objective = 0)
+    },
+    .package = "alfakR"
+  )
+
+  expect_true(isTRUE(seen$latent_do_prior))
+  expect_equal(seen$prior_mean, -0.25, tolerance = 1e-12)
+  expect_equal(seen$prior_sd, 0.33, tolerance = 1e-12)
+
+  seen_none <- new.env(parent = emptyenv())
   testthat::with_mocked_bindings(
     {
       alfakR:::solve_fitness_bootstrap(
@@ -993,17 +1065,262 @@ test_that("nn_prior = 'none' disables latent-neighbour prior contribution", {
       names(nn) <- c("2.2.3", "2.2.1")
       nn
     },
-    run_optimise_checked = function(f, interval, ..., context) {
-      dots <- list(...)
-      if (grepl("latent child 2.2.1", context, fixed = TRUE)) {
-        seen$latent_do_prior <- isTRUE(dots$do_prior_param)
+    alfak_neighbor_objective_cpp = function(fc_param, parent_fitness, pij_values,
+                                            parent_birth_times, timepoints, parent_xfit,
+                                            child_obs, ntot, parent_fitness_mean,
+                                            prior_mean, prior_sd, do_prior, tol) {
+      if (isTRUE(do_prior)) {
+        seen_none$latent_do_prior <- TRUE
       }
+      0
+    },
+    run_optimise_checked = function(f, interval, ..., context) {
+      f(mean(interval))
       list(minimum = mean(interval), objective = 0)
     },
     .package = "alfakR"
   )
 
-  expect_false(isTRUE(seen$latent_do_prior))
+  expect_false(isTRUE(seen_none$latent_do_prior))
+})
+
+test_that("nn_prior = 'empirical' enables latent-neighbour prior contribution", {
+  yi <- list(
+    x = make_counts(
+      c(10, 11,
+        5, 4),
+      rownames_vec = c("2.2.2", "2.2.3"),
+      colnames_vec = c("0", "1")
+    ),
+    dt = 1
+  )
+  seen <- new.env(parent = emptyenv())
+
+  testthat::with_mocked_bindings(
+    {
+      alfakR:::solve_fitness_bootstrap(
+        yi,
+        minobs = 20,
+        nboot = 1,
+        n0 = 1e4,
+        nb = 1e6,
+        pm = 1e-4,
+        nn_prior = "empirical"
+      )
+    },
+    compute_dx_dt = function(x, timepoints) {
+      matrix(0, nrow = nrow(x), ncol = ncol(x) - 1)
+    },
+    optimize_initial_frequencies = function(x_obs, f, timepoints) {
+      1
+    },
+    joint_optimize = function(counts, timepoints, f_init, x0_init) {
+      list(f = 0, x0 = 1)
+    },
+    project_forward_log = function(x0, f, timepoints) {
+      matrix(1, nrow = 1, ncol = length(timepoints),
+             dimnames = list("2.2.2", NULL))
+    },
+    find_birth_times = function(opt_res, time_range, minF) {
+      0
+    },
+    run_solve_qp_checked = function(Dmat, dvec, Amat, bvec, meq, context) {
+      list(solution = 0)
+    },
+    gen_nn_info = function(fq, pm) {
+      nn <- list(
+        list(ni = "2.2.3", nj = "2.2.2", pij = 0.2),
+        list(ni = "2.2.1", nj = "2.2.2", pij = 0.2)
+      )
+      names(nn) <- c("2.2.3", "2.2.1")
+      nn
+    },
+    alfak_neighbor_objective_cpp = function(fc_param, parent_fitness, pij_values,
+                                            parent_birth_times, timepoints, parent_xfit,
+                                            child_obs, ntot, parent_fitness_mean,
+                                            prior_mean, prior_sd, do_prior, tol) {
+      if (isTRUE(do_prior)) {
+        seen$latent_do_prior <- TRUE
+      }
+      0
+    },
+    run_optimise_checked = function(f, interval, ..., context) {
+      f(mean(interval))
+      list(minimum = mean(interval), objective = 0)
+    },
+    .package = "alfakR"
+  )
+
+  expect_true(isTRUE(seen$latent_do_prior))
+})
+
+test_that("estimate_nn_prior_censored_eb uses all children when fitting the prior", {
+  nn_info <- list(
+    list(ni = "obs_child", nj = "parent", pij = 1),
+    list(ni = "latent_child", nj = "parent", pij = 1)
+  )
+  names(nn_info) <- c("obs_child", "latent_child")
+  fpar <- c(parent = 0)
+
+  prior_fit <- alfakR:::estimate_nn_prior_censored_eb(
+    nn_info_items = nn_info,
+    fpar = fpar,
+    build_opt_fc = function(nni_param, prior_mean_param = NaN, prior_sd_param = NaN, do_prior_param = FALSE) {
+      target <- if (identical(nni_param$ni, "obs_child")) 1 else -1
+      function(fc_param) (fc_param - target)^2
+    },
+    search_interval = c(-3, 3),
+    nn_prior_sd = 0.4
+  )
+
+  expect_equal(prior_fit$n_children, 2)
+  expect_equal(prior_fit$prior_sd, 0.4, tolerance = 1e-12)
+  expect_lt(abs(prior_fit$prior_mean), 0.25)
+})
+
+test_that("nn_prior = 'empirical_censored' enables latent-neighbour prior contribution", {
+  yi <- list(
+    x = make_counts(
+      c(10, 11,
+        5, 4),
+      rownames_vec = c("2.2.2", "2.2.3"),
+      colnames_vec = c("0", "1")
+    ),
+    dt = 1
+  )
+  seen <- new.env(parent = emptyenv())
+
+  testthat::with_mocked_bindings(
+    {
+      alfakR:::solve_fitness_bootstrap(
+        yi,
+        minobs = 20,
+        nboot = 1,
+        n0 = 1e4,
+        nb = 1e6,
+        pm = 1e-4,
+        nn_prior = "empirical_censored"
+      )
+    },
+    compute_dx_dt = function(x, timepoints) {
+      matrix(0, nrow = nrow(x), ncol = ncol(x) - 1)
+    },
+    optimize_initial_frequencies = function(x_obs, f, timepoints) {
+      1
+    },
+    joint_optimize = function(counts, timepoints, f_init, x0_init) {
+      list(f = 0, x0 = 1)
+    },
+    project_forward_log = function(x0, f, timepoints) {
+      matrix(1, nrow = 1, ncol = length(timepoints),
+             dimnames = list("2.2.2", NULL))
+    },
+    find_birth_times = function(opt_res, time_range, minF) {
+      0
+    },
+    run_solve_qp_checked = function(Dmat, dvec, Amat, bvec, meq, context) {
+      list(solution = 0)
+    },
+    gen_nn_info = function(fq, pm) {
+      nn <- list(
+        list(ni = "2.2.3", nj = "2.2.2", pij = 0.2),
+        list(ni = "2.2.1", nj = "2.2.2", pij = 0.2)
+      )
+      names(nn) <- c("2.2.3", "2.2.1")
+      nn
+    },
+    estimate_nn_prior_censored_eb = function(...) {
+      list(prior_mean = -0.25, prior_sd = 0.33, n_children = 2)
+    },
+    alfak_neighbor_objective_cpp = function(fc_param, parent_fitness, pij_values,
+                                            parent_birth_times, timepoints, parent_xfit,
+                                            child_obs, ntot, parent_fitness_mean,
+                                            prior_mean, prior_sd, do_prior, tol) {
+      if (isTRUE(do_prior)) {
+        seen$latent_do_prior <- TRUE
+        seen$prior_mean <- prior_mean
+        seen$prior_sd <- prior_sd
+      }
+      0
+    },
+    run_optimise_checked = function(f, interval, ..., context) {
+      f(mean(interval))
+      list(minimum = mean(interval), objective = 0)
+    },
+    run_optimise_strict_checked = function(f, interval, ..., context) {
+      f(mean(interval))
+      list(minimum = mean(interval), objective = 0)
+    },
+    .package = "alfakR"
+  )
+
+  expect_true(isTRUE(seen$latent_do_prior))
+  expect_equal(seen$prior_mean, -0.25, tolerance = 1e-12)
+  expect_equal(seen$prior_sd, 0.33, tolerance = 1e-12)
+})
+
+test_that("nn_prior = 'empirical_censored' surfaces prior-fit failures without fallback", {
+  yi <- list(
+    x = make_counts(
+      c(10, 11,
+        5, 4),
+      rownames_vec = c("2.2.2", "2.2.3"),
+      colnames_vec = c("0", "1")
+    ),
+    dt = 1
+  )
+
+  expect_error(
+    testthat::with_mocked_bindings(
+      {
+        alfakR:::solve_fitness_bootstrap(
+          yi,
+          minobs = 20,
+          nboot = 1,
+          n0 = 1e4,
+          nb = 1e6,
+          pm = 1e-4,
+          nn_prior = "empirical_censored"
+        )
+      },
+      compute_dx_dt = function(x, timepoints) matrix(0, nrow = nrow(x), ncol = ncol(x) - 1),
+      optimize_initial_frequencies = function(x_obs, f, timepoints) 1,
+      joint_optimize = function(counts, timepoints, f_init, x0_init) list(f = 0, x0 = 1),
+      project_forward_log = function(x0, f, timepoints) matrix(1, nrow = 1, ncol = length(timepoints), dimnames = list("2.2.2", NULL)),
+      find_birth_times = function(opt_res, time_range, minF) 0,
+      run_solve_qp_checked = function(Dmat, dvec, Amat, bvec, meq, context) list(solution = 0),
+      gen_nn_info = function(fq, pm) {
+        nn <- list(
+          list(ni = "2.2.3", nj = "2.2.2", pij = 0.2),
+          list(ni = "2.2.1", nj = "2.2.2", pij = 0.2)
+        )
+        names(nn) <- c("2.2.3", "2.2.1")
+        nn
+      },
+      estimate_nn_prior_censored_eb = function(...) {
+        stop("mock censored prior failure")
+      },
+      alfak_neighbor_objective_cpp = function(fc_param, parent_fitness, pij_values,
+                                              parent_birth_times, timepoints, parent_xfit,
+                                              child_obs, ntot, parent_fitness_mean,
+                                              prior_mean, prior_sd, do_prior, tol) {
+        if (isTRUE(do_prior)) {
+          stop("latent optimisation should not run after prior-fit failure")
+        }
+        0
+      },
+      run_optimise_checked = function(f, interval, ..., context) {
+        f(mean(interval))
+        list(minimum = mean(interval), objective = 0)
+      },
+      run_optimise_strict_checked = function(f, interval, ..., context) {
+        f(mean(interval))
+        list(minimum = mean(interval), objective = 0)
+      },
+      .package = "alfakR"
+    ),
+    "mock censored prior failure"
+  )
 })
 
 test_that("empirical prior SD uses floor and user-supplied nn_prior_sd is respected", {
@@ -1027,6 +1344,7 @@ test_that("empirical prior SD uses floor and user-supplied nn_prior_sd is respec
         n0 = 1e4,
         nb = 1e6,
         pm = 1e-4,
+        nn_prior = "empirical",
         nn_prior_sd_floor = 0.123
       )
     },
@@ -1071,6 +1389,7 @@ test_that("empirical prior SD uses floor and user-supplied nn_prior_sd is respec
         n0 = 1e4,
         nb = 1e6,
         pm = 1e-4,
+        nn_prior = "empirical",
         nn_prior_sd = 0.456,
         nn_prior_sd_floor = 0.123
       )

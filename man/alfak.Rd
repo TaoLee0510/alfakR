@@ -16,7 +16,7 @@ alfak(
   allow_noninteger_counts = FALSE,
   correct_efflux = FALSE,
   landscape_data_output = FALSE,
-  nn_prior = c("empirical", "none"),
+  nn_prior = c("empirical_censored", "none", "empirical"),
   nn_prior_sd = NULL,
   nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
   krig_bootstrap_mode = c("marginal", "joint")
@@ -74,9 +74,14 @@ model objects. Default is \code{FALSE}, so only the documented core outputs are
 written.}
 
 \item{nn_prior}{Character; nearest-neighbour prior mode for latent children.
-\code{"empirical"} uses the current empirical child-minus-parent prior estimated
-from observed neighbours, while \code{"none"} disables that prior contribution.
-Default is \code{"empirical"}.}
+\code{"empirical_censored"} fits an empirical-Bayes prior from all neighbour
+children, including zero-count latent neighbours, to correct observation
+bias. This mode errors if the prior hyperparameter fit fails and is the
+default.
+\code{"none"} disables the latent-neighbour prior contribution.
+\code{"empirical"} opt-in uses the empirical child-minus-parent prior estimated
+from observed neighbours.
+Default is \code{"empirical_censored"}.}
 
 \item{nn_prior_sd}{Optional numeric scalar. If supplied, this overrides the
 empirically estimated prior standard deviation for latent-neighbour fitting.}
