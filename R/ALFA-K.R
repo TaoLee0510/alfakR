@@ -770,6 +770,39 @@ run_optimise_strict_checked <- function(f, interval, ..., context) {
   opt
 }
 
+#' Run nlminb and fail loudly on invalid optimizer state
+#' @keywords internal
+#' @noRd
+run_nlminb_strict_checked <- function(start, objective, ..., lower = NULL, upper = NULL,
+                                      control = list(), context) {
+  opt <- try(
+    stats::nlminb(
+      start = start,
+      objective = objective,
+      ...,
+      lower = lower,
+      upper = upper,
+      control = control
+    ),
+    silent = TRUE
+  )
+  if (inherits(opt, "try-error")) {
+    stop(sprintf("%s failed: %s", context, as.character(opt)))
+  }
+  if (!all(is.finite(opt$par)) || !is.finite(opt$objective)) {
+    stop(sprintf("%s returned non-finite parameters or objective values.", context))
+  }
+  if (!is.null(opt$convergence) && opt$convergence != 0) {
+    stop(sprintf(
+      "%s failed with convergence code %d%s",
+      context,
+      opt$convergence,
+      if (!is.null(opt$message) && nzchar(opt$message)) paste0(": ", opt$message) else "."
+    ))
+  }
+  opt
+}
+
 #' Run solve.QP and fail loudly on invalid optimizer state
 #' @keywords internal
 #' @noRd
@@ -847,21 +880,45 @@ estimate_nn_prior_censored_eb <- function(nn_info_items, fpar, build_opt_fc, sea
   loglik_mat <- matrix(NA_real_, nrow = length(nn_info_items), ncol = length(fc_grid),
                        dimnames = list(child_names, NULL))
   map_delta <- rep(NA_real_, length(nn_info_items))
+  informative_children <- rep(FALSE, length(nn_info_items))
   for (i in seq_along(nn_info_items)) {
     objective_fn <- build_opt_fc(nn_info_items[[i]], do_prior_param = FALSE)
-    objective_vals <- vapply(fc_grid, objective_fn, numeric(1))
+    objective_vals <- vapply(fc_grid, function(fc_val) {
+      val <- try(objective_fn(fc_val), silent = TRUE)
+      if (inherits(val, "try-error")) {
+        return(NA_real_)
+      }
+      val
+    }, numeric(1))
     loglik_vals <- -objective_vals
-    loglik_vals[!is.finite(loglik_vals)] <- -1e9
-    if (all(loglik_vals <= -1e9)) {
-      stop(sprintf(
-        "%s failed: child %s produced no finite likelihood values across the prior grid.",
-        context,
-        child_names[i]
-      ))
+    finite_mask <- is.finite(loglik_vals)
+    if (!any(finite_mask)) {
+      next
     }
-    loglik_mat[i, ] <- loglik_vals
-    map_delta[i] <- fc_grid[which.max(loglik_vals)] - parent_means[i]
+    row_max <- max(loglik_vals[finite_mask])
+    centered_vals <- rep(-Inf, length(fc_grid))
+    centered_vals[finite_mask] <- loglik_vals[finite_mask] - row_max
+    row_spread <- diff(range(centered_vals[finite_mask]))
+    if (!is.finite(row_spread) || row_spread <= sqrt(.Machine$double.eps)) {
+      next
+    }
+    informative_children[i] <- TRUE
+    loglik_mat[i, ] <- centered_vals
+    map_delta[i] <- fc_grid[finite_mask][which.max(loglik_vals[finite_mask])] - parent_means[i]
   }
+
+  if (!any(informative_children)) {
+    stop(sprintf(
+      "%s failed: no neighbour children produced an informative finite likelihood surface across the prior grid.",
+      context
+    ))
+  }
+
+  nn_info_items <- nn_info_items[informative_children]
+  child_names <- child_names[informative_children]
+  parent_means <- parent_means[informative_children]
+  loglik_mat <- loglik_mat[informative_children, , drop = FALSE]
+  map_delta <- map_delta[informative_children]
 
   finite_map_delta <- map_delta[is.finite(map_delta)]
   if (!length(finite_map_delta)) {
@@ -919,29 +976,24 @@ estimate_nn_prior_censored_eb <- function(nn_info_items, fpar, build_opt_fc, sea
     if (!is.finite(sigma_upper) || sigma_upper <= nn_prior_sd_floor) {
       sigma_upper <- nn_prior_sd_floor * 10
     }
-    opt <- run_optim_strict_checked(
-      par = c(mu_init, log(sigma_init)),
-      fn = function(par) marginal_negloglik(par[1], exp(par[2])),
-      method = "L-BFGS-B",
+    opt <- run_nlminb_strict_checked(
+      start = c(mu_init, log(sigma_init)),
+      objective = function(par) marginal_negloglik(par[1], exp(par[2])),
       lower = c(mu_lower, log(nn_prior_sd_floor)),
       upper = c(mu_upper, log(sigma_upper)),
-      control = list(maxit = 200, factr = 1e7),
+      control = list(iter.max = 200, eval.max = 400),
       context = context
     )
     prior_mean <- opt$par[1]
     prior_sd <- exp(opt$par[2])
   } else {
     prior_sd <- nn_prior_sd
-    opt <- run_optim_strict_checked(
-      par = mu_init,
-      fn = function(par) marginal_negloglik(par[1], prior_sd),
-      method = "L-BFGS-B",
-      lower = mu_lower,
-      upper = mu_upper,
-      control = list(maxit = 200, factr = 1e7),
+    opt <- run_optimise_strict_checked(
+      function(mu) marginal_negloglik(mu, prior_sd),
+      interval = c(mu_lower, mu_upper),
       context = context
     )
-    prior_mean <- opt$par[1]
+    prior_mean <- opt$minimum
   }
 
   if (!is.finite(prior_mean) || !is.finite(prior_sd) || prior_sd <= 0) {

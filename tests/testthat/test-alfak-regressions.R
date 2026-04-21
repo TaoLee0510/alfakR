@@ -1178,6 +1178,54 @@ test_that("estimate_nn_prior_censored_eb uses all children when fitting the prio
   expect_lt(abs(prior_fit$prior_mean), 0.25)
 })
 
+test_that("estimate_nn_prior_censored_eb skips non-informative children", {
+  nn_info <- list(
+    list(ni = "informative_child", nj = "parent", pij = 1),
+    list(ni = "flat_child", nj = "parent", pij = 1)
+  )
+  names(nn_info) <- c("informative_child", "flat_child")
+  fpar <- c(parent = 0)
+
+  prior_fit <- alfakR:::estimate_nn_prior_censored_eb(
+    nn_info_items = nn_info,
+    fpar = fpar,
+    build_opt_fc = function(nni_param, prior_mean_param = NaN, prior_sd_param = NaN, do_prior_param = FALSE) {
+      if (identical(nni_param$ni, "informative_child")) {
+        return(function(fc_param) (fc_param - 0.5)^2)
+      }
+      function(fc_param) 10
+    },
+    search_interval = c(-3, 3),
+    nn_prior_sd = 0.4
+  )
+
+  expect_equal(prior_fit$n_children, 1)
+  expect_true(is.finite(prior_fit$prior_mean))
+  expect_equal(prior_fit$prior_sd, 0.4, tolerance = 1e-12)
+})
+
+test_that("estimate_nn_prior_censored_eb errors when no child is informative", {
+  nn_info <- list(
+    list(ni = "flat_child_a", nj = "parent", pij = 1),
+    list(ni = "flat_child_b", nj = "parent", pij = 1)
+  )
+  names(nn_info) <- c("flat_child_a", "flat_child_b")
+  fpar <- c(parent = 0)
+
+  expect_error(
+    alfakR:::estimate_nn_prior_censored_eb(
+      nn_info_items = nn_info,
+      fpar = fpar,
+      build_opt_fc = function(nni_param, prior_mean_param = NaN, prior_sd_param = NaN, do_prior_param = FALSE) {
+        function(fc_param) 10
+      },
+      search_interval = c(-3, 3),
+      nn_prior_sd = 0.4
+    ),
+    "no neighbour children produced an informative finite likelihood surface"
+  )
+})
+
 test_that("nn_prior = 'empirical_censored' enables latent-neighbour prior contribution", {
   yi <- list(
     x = make_counts(
@@ -1485,7 +1533,8 @@ test_that("nearest-neighbour exposure uses projected frequent-parent frequencies
         nboot = 1,
         n0 = 1e4,
         nb = 1e6,
-        pm = 1e-4
+        pm = 1e-4,
+        nn_prior = "none"
       )
     },
     bootstrap_counts = function(x) x,
