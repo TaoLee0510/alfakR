@@ -58,6 +58,9 @@
 #' @param nn_prior_sd_floor Numeric scalar giving the minimum standard deviation
 #'   used when the empirical prior variance is zero or too small. Default is
 #'   `1e-3`.
+#' @param nn_prior_grid_n Integer; number of equally spaced grid points used for
+#'   the fixed-grid numerical integration in `nn_prior = "empirical_censored"`.
+#'   Default is `81`.
 #' @param krig_bootstrap_mode Character; `"marginal"` (default) samples
 #'   bootstrap fitness values independently by column, matching the original
 #'   ALFA-K Kriging bootstrap and cross-validation behavior. `"joint"` samples
@@ -132,6 +135,7 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
                   nn_prior = c("empirical_censored", "none", "empirical"),
                   nn_prior_sd = NULL,
                   nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
+                  nn_prior_grid_n = ALFAK_NN_PRIOR_CENSORED_GRID_POINTS,
                   krig_bootstrap_mode = c("marginal", "joint")) {
 
   # Note: library calls removed, dependencies handled by @importFrom or DESCRIPTION
@@ -146,7 +150,11 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
   validate_scalar_logical(landscape_data_output, "landscape_data_output")
   nn_prior <- validate_nn_prior_mode(nn_prior)
   krig_bootstrap_mode <- validate_krig_bootstrap_mode(krig_bootstrap_mode)
-  validate_nn_prior_controls(nn_prior_sd = nn_prior_sd, nn_prior_sd_floor = nn_prior_sd_floor)
+  validate_nn_prior_controls(
+    nn_prior_sd = nn_prior_sd,
+    nn_prior_sd_floor = nn_prior_sd_floor,
+    nn_prior_grid_n = nn_prior_grid_n
+  )
   yi$x <- coerce_count_matrix(yi$x, allow_noninteger_counts = allow_noninteger_counts)
   validate_positive_depth(yi$x)
 
@@ -161,7 +169,8 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
                                      passage_times = passage_times,correct_efflux=correct_efflux,
                                      nn_prior = nn_prior,
                                      nn_prior_sd = nn_prior_sd,
-                                     nn_prior_sd_floor = nn_prior_sd_floor)
+                                     nn_prior_sd_floor = nn_prior_sd_floor,
+                                     nn_prior_grid_n = nn_prior_grid_n)
   saveRDS(fq_boot, file = file.path(outdir, "bootstrap_res.Rds"))
 
   landscape_data <- fitKrig(fq_boot, nboot, krig_bootstrap_mode = krig_bootstrap_mode)
@@ -428,11 +437,17 @@ validate_nn_prior_mode <- function(nn_prior) {
 #' Validate nearest-neighbour prior controls
 #' @keywords internal
 #' @noRd
-validate_nn_prior_controls <- function(nn_prior_sd = NULL, nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR) {
+validate_nn_prior_controls <- function(nn_prior_sd = NULL,
+                                       nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
+                                       nn_prior_grid_n = ALFAK_NN_PRIOR_CENSORED_GRID_POINTS) {
   if (!is.null(nn_prior_sd)) {
     validate_positive_finite(nn_prior_sd, "nn_prior_sd")
   }
   validate_positive_finite(nn_prior_sd_floor, "nn_prior_sd_floor")
+  validate_positive_integer(nn_prior_grid_n, "nn_prior_grid_n")
+  if (nn_prior_grid_n < 3) {
+    stop("`nn_prior_grid_n` must be at least 3.", call. = FALSE)
+  }
   invisible(NULL)
 }
 
@@ -842,6 +857,7 @@ weighted_parent_fitness <- function(nni_item, fpar) {
 estimate_nn_prior_censored_eb <- function(nn_info_items, fpar, build_opt_fc, search_interval,
                                           nn_prior_sd = NULL,
                                           nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
+                                          nn_prior_grid_n = ALFAK_NN_PRIOR_CENSORED_GRID_POINTS,
                                           context = "fit empirical_censored latent-neighbour prior") {
   if (!length(nn_info_items)) {
     stop(sprintf("%s failed: no nearest-neighbour children were available.", context))
@@ -865,7 +881,11 @@ estimate_nn_prior_censored_eb <- function(nn_info_items, fpar, build_opt_fc, sea
   child_names <- child_names[valid_children]
   parent_means <- parent_means[valid_children]
 
-  grid_n <- max(41L, as.integer(ALFAK_NN_PRIOR_CENSORED_GRID_POINTS))
+  validate_positive_integer(nn_prior_grid_n, "nn_prior_grid_n")
+  if (nn_prior_grid_n < 3) {
+    stop(sprintf("%s failed: `nn_prior_grid_n` must be at least 3.", context))
+  }
+  grid_n <- as.integer(nn_prior_grid_n)
   fc_grid <- seq(search_interval[1], search_interval[2], length.out = grid_n)
   if (length(fc_grid) < 2 || !all(is.finite(fc_grid))) {
     stop(sprintf("%s failed: could not construct a finite integration grid.", context))
@@ -1337,7 +1357,8 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
                                     n0, nb, passage_times = NULL, allow_noninteger_counts = FALSE, correct_efflux=FALSE,
                                     nn_prior = c("empirical_censored", "none", "empirical"),
                                     nn_prior_sd = NULL,
-                                    nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR) {
+                                    nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
+                                    nn_prior_grid_n = ALFAK_NN_PRIOR_CENSORED_GRID_POINTS) {
   data$x <- coerce_count_matrix(data$x, allow_noninteger_counts = allow_noninteger_counts)
   validate_positive_depth(data$x)
   validate_positive_integer(nboot, "nboot")
@@ -1347,7 +1368,11 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
   validate_scalar_logical(allow_noninteger_counts, "allow_noninteger_counts")
   validate_scalar_logical(correct_efflux, "correct_efflux")
   nn_prior <- validate_nn_prior_mode(nn_prior)
-  validate_nn_prior_controls(nn_prior_sd = nn_prior_sd, nn_prior_sd_floor = nn_prior_sd_floor)
+  validate_nn_prior_controls(
+    nn_prior_sd = nn_prior_sd,
+    nn_prior_sd_floor = nn_prior_sd_floor,
+    nn_prior_grid_n = nn_prior_grid_n
+  )
   fq <- get_frequent_karyotypes(data$x, minobs)
   nn_info_list <- gen_nn_info(fq, pm) # Renamed 'nn' to 'nn_info_list' for clarity
   if (length(nn_info_list) > 0 && !is.null(nn_info_list[[1]]$ni)) { # Check if naming is needed
@@ -1560,6 +1585,7 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
         search_interval = search_interval,
         nn_prior_sd = nn_prior_sd,
         nn_prior_sd_floor = nn_prior_sd_floor,
+        nn_prior_grid_n = nn_prior_grid_n,
         context = sprintf(
           "fit empirical_censored latent-neighbour prior for bootstrap replicate %d",
           b_iter_idx

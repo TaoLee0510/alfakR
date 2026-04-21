@@ -395,6 +395,9 @@ test_that("solve_fitness_bootstrap validates bootstrap controls and pm before ne
       expect_error(alfakR:::solve_fitness_bootstrap(yi, minobs = 1, nboot = 1, n0 = 1e4, nb = 1e6, pm = 1e-4, correct_efflux = NA), "`correct_efflux`")
       expect_error(alfakR:::solve_fitness_bootstrap(yi, minobs = 1, nboot = 1, n0 = 1e4, nb = 1e6, pm = 1e-4, correct_efflux = "TRUE"), "`correct_efflux`")
       expect_error(alfakR:::solve_fitness_bootstrap(yi, minobs = 1, nboot = 1, n0 = 1e4, nb = 1e6, pm = 1e-4, correct_efflux = 1), "`correct_efflux`")
+      expect_error(alfakR:::solve_fitness_bootstrap(yi, minobs = 1, nboot = 1, n0 = 1e4, nb = 1e6, pm = 1e-4, nn_prior_grid_n = 0), "`nn_prior_grid_n`")
+      expect_error(alfakR:::solve_fitness_bootstrap(yi, minobs = 1, nboot = 1, n0 = 1e4, nb = 1e6, pm = 1e-4, nn_prior_grid_n = 2), "`nn_prior_grid_n` must be at least 3")
+      expect_error(alfakR:::solve_fitness_bootstrap(yi, minobs = 1, nboot = 1, n0 = 1e4, nb = 1e6, pm = 1e-4, nn_prior_grid_n = 4.5), "`nn_prior_grid_n`")
     },
     gen_nn_info = function(...) {
       seen$gen_nn_called <- TRUE
@@ -451,6 +454,7 @@ test_that("correct_efflux warns once when viability is positive but tiny", {
       nb = 1e6,
       pm = pm,
       correct_efflux = TRUE,
+      nn_prior = "none",
       passage_times = c(0, 2.5)
     ),
     "0 < viability <"
@@ -1305,6 +1309,82 @@ test_that("nn_prior = 'empirical_censored' enables latent-neighbour prior contri
   expect_true(isTRUE(seen$latent_do_prior))
   expect_equal(seen$prior_mean, -0.25, tolerance = 1e-12)
   expect_equal(seen$prior_sd, 0.33, tolerance = 1e-12)
+})
+
+test_that("nn_prior_grid_n is forwarded to empirical_censored prior fitting", {
+  yi <- list(
+    x = make_counts(
+      c(10, 11,
+        5, 4),
+      rownames_vec = c("2.2.2", "2.2.3"),
+      colnames_vec = c("0", "1")
+    ),
+    dt = 1
+  )
+  seen <- new.env(parent = emptyenv())
+
+  testthat::with_mocked_bindings(
+    {
+      alfakR:::solve_fitness_bootstrap(
+        yi,
+        minobs = 20,
+        nboot = 1,
+        n0 = 1e4,
+        nb = 1e6,
+        pm = 1e-4,
+        nn_prior = "empirical_censored",
+        nn_prior_grid_n = 57L
+      )
+    },
+    compute_dx_dt = function(x, timepoints) {
+      matrix(0, nrow = nrow(x), ncol = ncol(x) - 1)
+    },
+    optimize_initial_frequencies = function(x_obs, f, timepoints) {
+      1
+    },
+    joint_optimize = function(counts, timepoints, f_init, x0_init) {
+      list(f = 0, x0 = 1)
+    },
+    project_forward_log = function(x0, f, timepoints) {
+      matrix(1, nrow = 1, ncol = length(timepoints),
+             dimnames = list("2.2.2", NULL))
+    },
+    find_birth_times = function(opt_res, time_range, minF) {
+      0
+    },
+    run_solve_qp_checked = function(Dmat, dvec, Amat, bvec, meq, context) {
+      list(solution = 0)
+    },
+    gen_nn_info = function(fq, pm) {
+      nn <- list(
+        list(ni = "2.2.3", nj = "2.2.2", pij = 0.2),
+        list(ni = "2.2.1", nj = "2.2.2", pij = 0.2)
+      )
+      names(nn) <- c("2.2.3", "2.2.1")
+      nn
+    },
+    estimate_nn_prior_censored_eb = function(..., nn_prior_grid_n) {
+      seen$nn_prior_grid_n <- nn_prior_grid_n
+      list(prior_mean = -0.25, prior_sd = 0.33, n_children = 2)
+    },
+    alfak_neighbor_objective_cpp = function(fc_param, parent_fitness, pij_values,
+                                            parent_birth_times, timepoints, parent_xfit,
+                                            child_obs, ntot, parent_fitness_mean,
+                                            prior_mean, prior_sd, do_prior, tol) {
+      0
+    },
+    run_optimise_checked = function(f, interval, ..., context) {
+      f(mean(interval))
+      list(minimum = mean(interval), objective = 0)
+    },
+    run_optimise_strict_checked = function(f, interval, ..., context) {
+      f(mean(interval))
+      list(minimum = mean(interval), objective = 0)
+    },
+    .package = "alfakR"
+  )
+
+  expect_equal(seen$nn_prior_grid_n, 57L, tolerance = 0)
 })
 
 test_that("nn_prior = 'empirical_censored' surfaces prior-fit failures without fallback", {

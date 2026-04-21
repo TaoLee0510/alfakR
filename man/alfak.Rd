@@ -19,6 +19,7 @@ alfak(
   nn_prior = c("empirical_censored", "none", "empirical"),
   nn_prior_sd = NULL,
   nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
+  nn_prior_grid_n = ALFAK_NN_PRIOR_CENSORED_GRID_POINTS,
   krig_bootstrap_mode = c("marginal", "joint")
 )
 }
@@ -89,6 +90,10 @@ empirically estimated prior standard deviation for latent-neighbour fitting.}
 \item{nn_prior_sd_floor}{Numeric scalar giving the minimum standard deviation
 used when the empirical prior variance is zero or too small. Default is
 \code{1e-3}.}
+
+\item{nn_prior_grid_n}{Integer; number of equally spaced grid points used for
+the fixed-grid numerical integration in \code{nn_prior = "empirical_censored"}.
+Default is \code{81}.}
 
 \item{krig_bootstrap_mode}{Character; \code{"marginal"} (default) samples
 bootstrap fitness values independently by column, matching the original

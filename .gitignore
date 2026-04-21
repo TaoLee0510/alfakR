@@ -27,3 +27,4 @@ commits.log
 commits.pdf
 commits.tex
 .DS_Store
+/benchmark
