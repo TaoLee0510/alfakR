@@ -1,0 +1,15 @@
+manifest_version: 1
+bundle_root_id: t9192
+request_email: ''
+options:
+  include_base_bundle: yes
+  package_format: zip
+  layout: by_node
+nodes:
+  - passaging_id: t9192
+    perspectives:
+      - TranscriptomePerspective
+  - passaging_id: t9907
+    perspectives:
+      - TranscriptomePerspective
+  

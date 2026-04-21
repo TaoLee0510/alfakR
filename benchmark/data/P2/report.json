@@ -1,0 +1,8 @@
+{
+  "root_id" : "t9192",
+  "created_at" : "2026-04-10T18:20:10.448218628Z",
+  "included_imaging_assets" : [ ],
+  "included_perspective_assets" : [ "t9192/TranscriptomePerspective", "t9907/TranscriptomePerspective" ],
+  "skipped_assets" : [ ],
+  "warnings" : [ ]
+}

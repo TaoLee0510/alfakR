@@ -1,0 +1,125 @@
+manifest_version: 1
+options:
+  include_base_bundle: yes
+  package_format: zip
+  layout: by_node
+
+bundle_root_id: P11
+nodes:
+  - passaging_id: SF2979
+    perspectives:
+      - TranscriptomePerspective
+  - passaging_id: SF2777
+    perspectives:
+      - TranscriptomePerspective
+
+
+bundle_root_id: P10
+nodes:
+  - passaging_id: SF2628
+    perspectives:
+      - TranscriptomePerspective
+  - passaging_id: SF2501
+    perspectives:
+      - TranscriptomePerspective
+
+bundle_root_id: P6
+nodes:
+  - passaging_id: SF11488
+    perspectives:
+      - TranscriptomePerspective
+  - passaging_id: SF11082
+    perspectives:
+      - TranscriptomePerspective
+
+
+bundle_root_id: P15
+nodes:
+  - passaging_id: SF4449
+    perspectives:
+      - TranscriptomePerspective
+  - passaging_id: SF3996
+    perspectives:
+      - TranscriptomePerspective
+
+
+bundle_root_id: P19
+nodes:
+  - passaging_id: SF6118
+    perspectives:
+      - TranscriptomePerspective
+  - passaging_id: SF4849
+    perspectives:
+      - TranscriptomePerspective
+
+
+bundle_root_id: P23
+nodes:
+  - passaging_id: SF7388
+    perspectives:
+      - TranscriptomePerspective
+  - passaging_id: SF7307
+    perspectives:
+      - TranscriptomePerspective
+
+
+bundle_root_id: P26
+nodes:
+  - passaging_id: SF9962
+    perspectives:
+      - TranscriptomePerspective
+  - passaging_id: SF9358
+    perspectives:
+      - TranscriptomePerspective
+
+
+bundle_root_id: P27
+nodes:
+  - passaging_id: SF9798
+    perspectives:
+      - TranscriptomePerspective
+  - passaging_id: SF9494
+    perspectives:
+      - TranscriptomePerspective
+  
+
+
+bundle_root_id: P30
+nodes:
+  - passaging_id: SF4324
+    perspectives:
+      - TranscriptomePerspective
+  - passaging_id: SF4209
+    perspectives:
+      - TranscriptomePerspective
+
+
+bundle_root_id: P7
+nodes:
+  - passaging_id: SF12460
+    perspectives:
+      - TranscriptomePerspective
+  - passaging_id: SF11344
+    perspectives:
+      - TranscriptomePerspective
+
+
+bundle_root_id: t9192
+nodes:
+  - passaging_id: t9192
+    perspectives:
+      - TranscriptomePerspective
+  - passaging_id: t9907
+    perspectives:
+      - TranscriptomePerspective
+
+
+bundle_root_id: P8
+nodes:
+  - passaging_id: SF1343
+    perspectives:
+      - TranscriptomePerspective
+  - passaging_id: SF1199
+    perspectives:
+      - TranscriptomePerspective
+  

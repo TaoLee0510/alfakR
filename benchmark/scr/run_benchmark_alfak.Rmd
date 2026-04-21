@@ -1,0 +1,1740 @@
+---
+title: "ALFA-K Benchmark"
+subtitle: "Two-round benchmark for nn_prior_grid_n and nn_prior"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+params:
+  patient_subset: !r character(0)
+  minobs_values: [5, 10, 20]
+  pm_values: [5e-05]
+  n_cores: 8
+  nboot: 45
+  n0: 100000
+  nb: 10000000
+  benchmark_seed: 31415926
+  correct_efflux: true
+  grid_values: [41, 81, 161]
+  round2_priors: ["none", "empirical"]
+  include_posterior_comparison: true
+  top_shift_n: 15
+  force_refit_round1: false
+  force_refit_round2: false
+  rebuild_inputs: false
+  run_round1: true
+  run_round2: true
+  render_figures: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = TRUE,
+  warning = TRUE,
+  fig.width = 10,
+  fig.height = 6,
+  dpi = 150
+)
+```
+
+## Overview
+
+This notebook benchmarks the current local `alfakR` code under `benchmark/data`
+using a two-round task design.
+
+- Round 1 fixes `nn_prior = "empirical_censored"` and sweeps
+  `nn_prior_grid_n = 41, 81, 161`.
+- Round 1 then compares the resulting landscapes for each
+  `patient x minobs x pm`, summarizes the global tradeoff, and picks one
+  benchmark-wide `nn_prior_grid_n`.
+- Round 2 reuses the selected `empirical_censored` fit from Round 1, and only
+  runs the missing `nn_prior = "none"` and `nn_prior = "empirical"` tasks.
+- Round 2 then compares the three prior modes using the same pairwise
+  comparison framework.
+
+The ALFA-K input construction intentionally follows the Figure S5 reanalysis
+pipeline in `cloneidR/analysis/FigureS5/FigureS_UseCase_GBM.Rmd`: metadata are
+read from `meta_data.xlsx`, `ID_alt` is preferred over `ID`, transcriptome
+profiles are converted into karyotype strings, and the primary-to-recurrent
+interval is encoded as `Primary = 1`, `Recurrent = abs(Age_recurrent -
+Age_primary) * 360` days.
+
+```{r paths-and-libraries}
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(ggplot2)
+  library(knitr)
+  library(parallel)
+  library(pkgload)
+  library(purrr)
+  library(readxl)
+  library(tibble)
+  library(tidyr)
+})
+
+resolve_repo_dir <- function() {
+  candidates <- unique(c(
+    tryCatch(dirname(knitr::current_input(dir = TRUE)), error = function(e) NA_character_),
+    getwd()
+  ))
+
+  for (cand in candidates) {
+    if (is.na(cand) || !nzchar(cand)) {
+      next
+    }
+    cand_norm <- normalizePath(cand, winslash = "/", mustWork = FALSE)
+    if (file.exists(file.path(cand_norm, "DESCRIPTION")) &&
+        dir.exists(file.path(cand_norm, "benchmark"))) {
+      return(cand_norm)
+    }
+    parent2 <- normalizePath(file.path(cand_norm, "..", ".."), winslash = "/", mustWork = FALSE)
+    if (file.exists(file.path(parent2, "DESCRIPTION")) &&
+        dir.exists(file.path(parent2, "benchmark"))) {
+      return(parent2)
+    }
+  }
+
+  stop("Could not locate the alfakR repository root from the current knitting context.")
+}
+
+repo_dir <- resolve_repo_dir()
+benchmark_dir <- file.path(repo_dir, "benchmark")
+data_dir <- file.path(benchmark_dir, "data")
+meta_path <- file.path(data_dir, "meta_data.xlsx")
+results_dir <- file.path(benchmark_dir, "results")
+input_dir <- file.path(results_dir, "inputs")
+grid_fit_dir <- file.path(results_dir, "fits", "grid_round")
+prior_fit_dir <- file.path(results_dir, "fits", "prior_round")
+tables_dir <- file.path(results_dir, "tables")
+figures_dir <- file.path(results_dir, "figures")
+cache_dir <- file.path(results_dir, "cache")
+
+dir.create(results_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(input_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(grid_fit_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(prior_fit_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(tables_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(figures_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
+
+pkgload::load_all(repo_dir, quiet = TRUE)
+
+patient_subset_use <- unique(trimws(as.character(unlist(params$patient_subset))))
+patient_subset_use <- patient_subset_use[nzchar(patient_subset_use)]
+if (!length(patient_subset_use)) {
+  patient_subset_use <- NULL
+}
+
+minobs_values_use <- sort(unique(as.integer(unlist(params$minobs_values))))
+minobs_values_use <- minobs_values_use[is.finite(minobs_values_use) & minobs_values_use > 0L]
+if (!length(minobs_values_use)) {
+  stop("No valid minobs values supplied.")
+}
+
+pm_values_use <- sort(unique(as.numeric(unlist(params$pm_values))))
+pm_values_use <- pm_values_use[is.finite(pm_values_use) & pm_values_use > 0]
+if (!length(pm_values_use)) {
+  stop("No valid pm values supplied.")
+}
+
+grid_values_use <- sort(unique(as.integer(unlist(params$grid_values))))
+grid_values_use <- grid_values_use[is.finite(grid_values_use) & grid_values_use >= 3L]
+if (!length(grid_values_use)) {
+  stop("No valid nn_prior_grid_n values supplied.")
+}
+
+round2_priors_use <- unique(as.character(unlist(params$round2_priors)))
+round2_priors_use <- round2_priors_use[nzchar(round2_priors_use)]
+if (!all(round2_priors_use %in% c("none", "empirical"))) {
+  stop("Round 2 priors must be chosen from: none, empirical")
+}
+
+n_cores_use <- suppressWarnings(as.integer(params$n_cores))
+if (!is.finite(n_cores_use) || n_cores_use < 1L) {
+  detected_cores <- suppressWarnings(parallel::detectCores(logical = FALSE))
+  if (!is.finite(detected_cores) || detected_cores < 1L) {
+    detected_cores <- 1L
+  }
+  n_cores_use <- max(1L, detected_cores - 1L)
+}
+
+nboot_use <- as.integer(params$nboot)
+n0_use <- as.numeric(params$n0)
+nb_use <- as.numeric(params$nb)
+benchmark_seed_use <- suppressWarnings(as.integer(params$benchmark_seed))
+if (!is.finite(benchmark_seed_use)) {
+  stop("benchmark_seed must be a finite integer.")
+}
+correct_efflux_use <- isTRUE(params$correct_efflux)
+force_refit_round1 <- isTRUE(params$force_refit_round1)
+force_refit_round2 <- isTRUE(params$force_refit_round2)
+rebuild_inputs_use <- isTRUE(params$rebuild_inputs)
+run_round1_use <- isTRUE(params$run_round1)
+run_round2_use <- isTRUE(params$run_round2)
+include_posterior_use <- isTRUE(params$include_posterior_comparison)
+render_figures_use <- isTRUE(params$render_figures)
+top_shift_n_use <- max(1L, as.integer(params$top_shift_n))
+
+reference_grid_n <- max(grid_values_use)
+diploid_state <- paste(rep(2, 22), collapse = ".")
+stage_levels <- c("Primary", "Recurrent")
+
+set.seed(benchmark_seed_use)
+options(mc.cores = n_cores_use)
+```
+
+## Helper Functions
+
+```{r helpers}
+sort_pid_levels <- function(x) {
+  x <- unique(as.character(x))
+  ord_num <- suppressWarnings(as.integer(sub("^P", "", x)))
+  x[order(ifelse(is.na(ord_num), Inf, ord_num), x)]
+}
+
+pm_to_label <- function(pm) {
+  format(pm, scientific = FALSE, trim = TRUE)
+}
+
+write_tsv_base <- function(x, path) {
+  utils::write.table(
+    x,
+    file = path,
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE,
+    col.names = TRUE
+  )
+  invisible(path)
+}
+
+save_table_bundle <- function(x, stem) {
+  saveRDS(x, paste0(stem, ".rds"))
+  if (is.data.frame(x)) {
+    write_tsv_base(x, paste0(stem, ".tsv"))
+  }
+  invisible(stem)
+}
+
+load_saved_table <- function(stem) {
+  rds_path <- paste0(stem, ".rds")
+  if (file.exists(rds_path)) {
+    return(readRDS(rds_path))
+  }
+  NULL
+}
+
+render_tbl <- function(x, caption = NULL, digits = 4) {
+  fmt <- if (knitr::is_latex_output()) "latex" else "pipe"
+  knitr::kable(
+    x,
+    format = fmt,
+    digits = digits,
+    caption = caption,
+    booktabs = knitr::is_latex_output(),
+    longtable = knitr::is_latex_output()
+  )
+}
+
+empty_note_tbl <- function(note) {
+  tibble(note = note)
+}
+
+alfak_log <- function(...) {
+  msg <- paste0(...)
+  timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+  message("[", timestamp, "] ", msg)
+  flush.console()
+}
+
+normalize_01 <- function(x) {
+  rng <- range(x, na.rm = TRUE)
+  if (!all(is.finite(rng)) || diff(rng) == 0) {
+    return(rep(0, length(x)))
+  }
+  (x - rng[1]) / diff(rng)
+}
+
+available_pid_dirs <- function(base_dir) {
+  dd <- list.dirs(base_dir, recursive = FALSE, full.names = TRUE)
+  dd <- dd[file.info(dd)$isdir %in% TRUE]
+  dd <- dd[grepl("^P[0-9]+$", basename(dd))]
+  sort_pid_levels(basename(dd))
+}
+
+read_transcriptome_perspective <- function(rds_path) {
+  obj <- readRDS(rds_path)
+  stopifnot(is.list(obj), "profile" %in% names(obj))
+  profile <- as.matrix(obj$profile)
+  storage.mode(profile) <- "numeric"
+  list(
+    passaging_id = obj$passaging_id,
+    perspective_type = obj$perspective_type,
+    profile = round(profile)
+  )
+}
+
+compute_delta_time_days <- function(df_pid) {
+  df_pid <- df_pid %>%
+    mutate(Stage = factor(Stage, levels = stage_levels)) %>%
+    arrange(Stage, effective_id)
+
+  age_primary <- suppressWarnings(as.numeric(df_pid$Age[df_pid$Stage == "Primary"][1]))
+  age_recurrent <- suppressWarnings(as.numeric(df_pid$Age[df_pid$Stage == "Recurrent"][1]))
+
+  recurrent_days <- if (is.finite(age_primary) && is.finite(age_recurrent)) {
+    as.integer(round(abs(age_recurrent - age_primary) * 360))
+  } else {
+    NA_integer_
+  }
+  if (!is.finite(recurrent_days) || recurrent_days <= 1L) {
+    recurrent_days <- 180L
+  }
+
+  df_pid %>%
+    mutate(
+      Delta_Time = ifelse(as.character(Stage) == "Primary", 1L, recurrent_days)
+    )
+}
+
+build_patient_manifest <- function(meta_tbl, base_dir, patient_subset = NULL) {
+  pid_dirs <- available_pid_dirs(base_dir)
+  manifest <- meta_tbl %>%
+    mutate(
+      effective_id = ifelse(!is.na(ID_alt) & nzchar(ID_alt), ID_alt, ID),
+      pid = as.character(pid),
+      Stage = as.character(Stage),
+      Age = suppressWarnings(as.numeric(Age))
+    ) %>%
+    filter(pid %in% pid_dirs)
+
+  if (!is.null(patient_subset)) {
+    manifest <- manifest %>% filter(pid %in% patient_subset)
+  }
+
+  manifest %>%
+    group_by(pid) %>%
+    group_modify(function(.x, .y) compute_delta_time_days(.x)) %>%
+    ungroup() %>%
+    mutate(
+      rds_path = file.path(base_dir, pid, "perspectives", effective_id, "TranscriptomePerspective.rds"),
+      exists = file.exists(rds_path)
+    ) %>%
+    arrange(factor(pid, levels = sort_pid_levels(pid)), factor(Stage, levels = stage_levels))
+}
+
+profile_to_karyotype_strings <- function(profile_mat) {
+  if (nrow(profile_mat) != 22) {
+    warning("Expected 22 chromosome rows; got ", nrow(profile_mat))
+  }
+  x <- t(round(as.matrix(profile_mat)))
+  apply(x, 1, paste, collapse = ".")
+}
+
+build_count_matrix_from_profiles <- function(patient_manifest) {
+  stopifnot(length(unique(patient_manifest$pid)) == 1L)
+  rows_ok <- patient_manifest[patient_manifest$exists, , drop = FALSE]
+  rows_ok <- rows_ok[order(match(rows_ok$Stage, stage_levels)), , drop = FALSE]
+  if (nrow(rows_ok) < 2) {
+    stop("Need at least two available samples for patient ", unique(patient_manifest$pid))
+  }
+
+  long_df <- do.call(rbind, lapply(seq_len(nrow(rows_ok)), function(i) {
+    rr <- rows_ok[i, , drop = FALSE]
+    obj <- read_transcriptome_perspective(rr$rds_path)
+    if (!is.null(obj$passaging_id) &&
+        !identical(as.character(obj$passaging_id), as.character(rr$effective_id))) {
+      warning("passaging_id mismatch for ", rr$pid, " / ", rr$effective_id)
+    }
+    tibble(
+      karyotype = profile_to_karyotype_strings(obj$profile),
+      Delta_Time = rr$Delta_Time,
+      Stage = rr$Stage,
+      effective_id = rr$effective_id
+    )
+  }))
+
+  delta_levels <- sort(unique(rows_ok$Delta_Time))
+  count_mat <- as.data.frame.matrix(table(
+    long_df$karyotype,
+    factor(long_df$Delta_Time, levels = delta_levels)
+  ))
+  colnames(count_mat) <- as.character(delta_levels)
+  count_mat <- count_mat[order(rowSums(count_mat), decreasing = TRUE), , drop = FALSE]
+
+  list(
+    count_matrix = count_mat,
+    long_df = long_df
+  )
+}
+
+save_alfak_input <- function(count_matrix, out_path) {
+  yi <- list(
+    x = count_matrix,
+    pop.fitness = NULL,
+    dt = 1
+  )
+  saveRDS(yi, out_path)
+  invisible(out_path)
+}
+
+build_benchmark_inputs <- function(meta_tbl, base_dir, input_dir, rebuild_inputs = FALSE, patient_subset = NULL) {
+  manifest_tbl <- build_patient_manifest(meta_tbl, base_dir, patient_subset = patient_subset)
+  save_table_bundle(manifest_tbl, file.path(tables_dir, "benchmark_patient_manifest"))
+
+  patient_ids <- sort_pid_levels(unique(manifest_tbl$pid))
+  if (!length(patient_ids)) {
+    stop("No benchmark patients discovered under ", base_dir)
+  }
+
+  rows <- lapply(patient_ids, function(pid) {
+    patient_manifest <- manifest_tbl %>% filter(pid == !!pid)
+    input_rds <- file.path(input_dir, paste0(pid, ".Rds"))
+    count_matrix_path <- file.path(input_dir, paste0(pid, "_count_matrix.tsv"))
+    long_df_path <- file.path(input_dir, paste0(pid, "_profile_long.tsv"))
+
+    if (rebuild_inputs || !file.exists(input_rds) || !file.exists(count_matrix_path) || !file.exists(long_df_path)) {
+      built <- build_count_matrix_from_profiles(patient_manifest)
+      count_export <- data.frame(
+        karyotype = rownames(built$count_matrix),
+        built$count_matrix,
+        check.names = FALSE
+      )
+      save_alfak_input(built$count_matrix, input_rds)
+      write_tsv_base(count_export, count_matrix_path)
+      write_tsv_base(built$long_df, long_df_path)
+    }
+
+    yi <- readRDS(input_rds)
+    yi$x <- as.data.frame(yi$x)
+
+    tibble(
+      patient_id = pid,
+      input_rds = input_rds,
+      count_matrix_path = count_matrix_path,
+      long_df_path = long_df_path,
+      n_timepoints = ncol(yi$x),
+      n_karyotypes = nrow(yi$x),
+      total_cells = sum(as.matrix(yi$x), na.rm = TRUE),
+      delta_time_labels = paste(colnames(yi$x), collapse = ","),
+      effective_ids = paste(patient_manifest$effective_id[patient_manifest$exists], collapse = ","),
+      stage_sequence = paste(as.character(patient_manifest$Stage[patient_manifest$exists]), collapse = " -> ")
+    )
+  })
+
+  bind_rows(rows) %>%
+    arrange(factor(patient_id, levels = sort_pid_levels(patient_id)))
+}
+
+extract_xval_metrics <- function(xv) {
+  metrics <- list(
+    xval_r2 = NA_real_,
+    xval_cor = NA_real_,
+    xval_rmse = NA_real_,
+    xval_mae = NA_real_,
+    n_xval = NA_integer_
+  )
+
+  if (is.null(xv)) {
+    return(metrics)
+  }
+
+  if (is.atomic(xv) && is.numeric(xv) && is.null(dim(xv)) && length(xv) >= 1L) {
+    metrics$xval_r2 <- suppressWarnings(as.numeric(xv[[1]]))
+    return(metrics)
+  }
+
+  if (!is.list(xv)) {
+    return(metrics)
+  }
+
+  if (!is.null(xv$R2R)) {
+    metrics$xval_r2 <- suppressWarnings(as.numeric(xv$R2R))
+  }
+
+  if (is.null(xv$tmp)) {
+    return(metrics)
+  }
+
+  tmp_df <- as.data.frame(xv$tmp)
+  if (ncol(tmp_df) < 2) {
+    return(metrics)
+  }
+
+  colnames(tmp_df)[1:2] <- c("f_est", "f_xv")
+  tmp_df <- tmp_df[, c("f_est", "f_xv"), drop = FALSE]
+  tmp_df$f_est <- suppressWarnings(as.numeric(tmp_df$f_est))
+  tmp_df$f_xv <- suppressWarnings(as.numeric(tmp_df$f_xv))
+  tmp_df <- tmp_df[is.finite(tmp_df$f_est) & is.finite(tmp_df$f_xv), , drop = FALSE]
+
+  metrics$n_xval <- nrow(tmp_df)
+  if (!nrow(tmp_df)) {
+    return(metrics)
+  }
+
+  diff_vec <- tmp_df$f_est - tmp_df$f_xv
+  metrics$xval_rmse <- sqrt(mean(diff_vec^2))
+  metrics$xval_mae <- mean(abs(diff_vec))
+  if (nrow(tmp_df) >= 2) {
+    metrics$xval_cor <- suppressWarnings(stats::cor(tmp_df$f_est, tmp_df$f_xv, use = "complete.obs"))
+  }
+  metrics
+}
+
+run_alfak_fit <- function(patient_id,
+                          input_rds,
+                          outdir,
+                          minobs,
+                          pm,
+                          nboot,
+                          n0,
+                          nb,
+                          benchmark_seed,
+                          correct_efflux = TRUE,
+                          nn_prior = "none",
+                          nn_prior_grid_n = 81L,
+                          force_refit = FALSE) {
+  landscape_path <- file.path(outdir, "landscape.Rds")
+  bootstrap_path <- file.path(outdir, "bootstrap_res.Rds")
+  posterior_path <- file.path(outdir, "landscape_posterior_samples.Rds")
+  xval_path <- file.path(outdir, "xval.Rds")
+  summary_path <- file.path(outdir, "fit_task_result.rds")
+  warning_log_path <- file.path(outdir, "fit_warnings.log")
+  pm_label <- pm_to_label(pm)
+  task_tag <- paste0(
+    patient_id,
+    " | minobs=", minobs,
+    " | pm=", pm_label,
+    " | nn_prior=", nn_prior,
+    " | grid=", nn_prior_grid_n
+  )
+
+  if (!force_refit && file.exists(summary_path)) {
+    cached <- readRDS(summary_path)
+    cached$benchmark_seed <- benchmark_seed
+    cached$cached <- TRUE
+    return(as_tibble(cached))
+  }
+
+  if (!force_refit && file.exists(landscape_path) && file.exists(xval_path)) {
+    xv <- tryCatch(readRDS(xval_path), error = function(e) NULL)
+    cached <- c(
+      list(
+        patient_id = patient_id,
+        outdir = outdir,
+        pm = pm,
+        pm_label = pm_label,
+        minobs = minobs,
+        benchmark_seed = benchmark_seed,
+        nn_prior = nn_prior,
+        nn_prior_grid_n = nn_prior_grid_n,
+        status = "ok",
+        cached = TRUE,
+        error_message = NA_character_,
+        elapsed_sec = NA_real_,
+        warning_count = if (file.exists(warning_log_path)) length(readLines(warning_log_path, warn = FALSE)) else 0L,
+        lambda_endpoint_warning_count = if (file.exists(warning_log_path)) {
+          sum(grepl("^Grid searches over lambda", readLines(warning_log_path, warn = FALSE)))
+        } else {
+          0L
+        },
+        warning_messages = if (file.exists(warning_log_path)) paste(readLines(warning_log_path, warn = FALSE), collapse = " || ") else NA_character_,
+        landscape_path = landscape_path,
+        bootstrap_path = if (file.exists(bootstrap_path)) bootstrap_path else NA_character_,
+        posterior_path = if (file.exists(posterior_path)) posterior_path else NA_character_,
+        xval_path = xval_path
+      ),
+      extract_xval_metrics(xv)
+    )
+    saveRDS(cached, summary_path)
+    return(as_tibble(cached))
+  }
+
+  alfak_log("ALFA-K start: ", task_tag)
+  dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+
+  yi <- readRDS(input_rds)
+  yi$x <- as.data.frame(yi$x)
+  if (diploid_state %in% rownames(yi$x)) {
+    yi$x <- yi$x[rownames(yi$x) != diploid_state, , drop = FALSE]
+  }
+  if (!nrow(yi$x)) {
+    stop("All rows were filtered out for input: ", input_rds)
+  }
+  if (max(rowSums(yi$x), na.rm = TRUE) < minobs) {
+    stop("No frequent karyotypes reach minobs=", minobs, " for input: ", input_rds)
+  }
+
+  warning_messages <- character()
+  started_at <- Sys.time()
+
+  fit_row <- tryCatch({
+    set.seed(benchmark_seed)
+    withCallingHandlers({
+      alfakR::alfak(
+        yi = yi,
+        outdir = outdir,
+        passage_times = NULL,
+        minobs = minobs,
+        nboot = nboot,
+        n0 = n0,
+        nb = nb,
+        pm = pm,
+        correct_efflux = correct_efflux,
+        nn_prior = nn_prior,
+        nn_prior_grid_n = nn_prior_grid_n
+      )
+    }, warning = function(w) {
+      warning_messages <<- c(warning_messages, conditionMessage(w))
+      invokeRestart("muffleWarning")
+    })
+
+    xv <- readRDS(xval_path)
+    elapsed_sec <- as.numeric(difftime(Sys.time(), started_at, units = "secs"))
+    warning_messages <- unique(warning_messages)
+    if (length(warning_messages)) {
+      writeLines(warning_messages, warning_log_path)
+    }
+
+    c(
+      list(
+        patient_id = patient_id,
+        outdir = outdir,
+        pm = pm,
+        pm_label = pm_label,
+        minobs = minobs,
+        benchmark_seed = benchmark_seed,
+        nn_prior = nn_prior,
+        nn_prior_grid_n = nn_prior_grid_n,
+        status = "ok",
+        cached = FALSE,
+        error_message = NA_character_,
+        elapsed_sec = elapsed_sec,
+        warning_count = length(warning_messages),
+        lambda_endpoint_warning_count = sum(grepl("^Grid searches over lambda", warning_messages)),
+        warning_messages = if (length(warning_messages)) paste(warning_messages, collapse = " || ") else NA_character_,
+        landscape_path = landscape_path,
+        bootstrap_path = if (file.exists(bootstrap_path)) bootstrap_path else NA_character_,
+        posterior_path = if (file.exists(posterior_path)) posterior_path else NA_character_,
+        xval_path = xval_path
+      ),
+      extract_xval_metrics(xv)
+    )
+  }, error = function(e) {
+    elapsed_sec <- as.numeric(difftime(Sys.time(), started_at, units = "secs"))
+    warning_messages <- unique(warning_messages)
+    if (length(warning_messages)) {
+      writeLines(warning_messages, warning_log_path)
+    }
+
+    alfak_log("ALFA-K error: ", task_tag, " | ", conditionMessage(e))
+    list(
+      patient_id = patient_id,
+      outdir = outdir,
+      pm = pm,
+      pm_label = pm_label,
+      minobs = minobs,
+      benchmark_seed = benchmark_seed,
+      nn_prior = nn_prior,
+      nn_prior_grid_n = nn_prior_grid_n,
+      status = "error",
+      cached = FALSE,
+      error_message = conditionMessage(e),
+      elapsed_sec = elapsed_sec,
+      warning_count = length(warning_messages),
+      lambda_endpoint_warning_count = sum(grepl("^Grid searches over lambda", warning_messages)),
+      warning_messages = if (length(warning_messages)) paste(warning_messages, collapse = " || ") else NA_character_,
+      xval_r2 = NA_real_,
+      xval_cor = NA_real_,
+      xval_rmse = NA_real_,
+      xval_mae = NA_real_,
+      n_xval = NA_integer_,
+      landscape_path = if (file.exists(landscape_path)) landscape_path else NA_character_,
+      bootstrap_path = if (file.exists(bootstrap_path)) bootstrap_path else NA_character_,
+      posterior_path = if (file.exists(posterior_path)) posterior_path else NA_character_,
+      xval_path = if (file.exists(xval_path)) xval_path else NA_character_
+    )
+  })
+
+  saveRDS(fit_row, summary_path)
+  if (identical(fit_row$status, "ok")) {
+    alfak_log("ALFA-K done: ", task_tag, " | xval_r2=", signif(fit_row$xval_r2, 4))
+  }
+  as_tibble(fit_row)
+}
+
+task_outdir_grid <- function(root_dir, patient_id, minobs, pm, grid_n) {
+  file.path(
+    root_dir,
+    "nn_prior_empirical_censored",
+    paste0("grid_", grid_n),
+    paste0("pm_", pm_to_label(pm)),
+    paste0("MINOBS_", minobs),
+    patient_id
+  )
+}
+
+task_outdir_prior <- function(root_dir, patient_id, minobs, pm, nn_prior, grid_n) {
+  file.path(
+    root_dir,
+    paste0("nn_prior_", nn_prior),
+    paste0("grid_", grid_n),
+    paste0("pm_", pm_to_label(pm)),
+    paste0("MINOBS_", minobs),
+    patient_id
+  )
+}
+
+build_grid_tasks <- function(input_index_tbl,
+                             fit_root,
+                             minobs_values,
+                             pm_values,
+                             grid_values,
+                             nboot,
+                             n0,
+                             nb,
+                             benchmark_seed,
+                             correct_efflux,
+                             force_refit) {
+  tidyr::crossing(
+    input_index_tbl %>% select(patient_id, input_rds),
+    minobs = minobs_values,
+    pm = pm_values,
+    nn_prior_grid_n = grid_values
+  ) %>%
+    mutate(
+      nn_prior = "empirical_censored",
+      outdir = purrr::pmap_chr(
+        list(patient_id, minobs, pm, nn_prior_grid_n),
+        ~ task_outdir_grid(fit_root, ..1, ..2, ..3, ..4)
+      ),
+      nboot = nboot,
+      n0 = n0,
+      nb = nb,
+      benchmark_seed = benchmark_seed,
+      correct_efflux = correct_efflux,
+      force_refit = force_refit,
+      round_label = "grid_round"
+    ) %>%
+    arrange(factor(patient_id, levels = sort_pid_levels(patient_id)), minobs, pm, nn_prior_grid_n)
+}
+
+build_prior_tasks <- function(input_index_tbl,
+                              fit_root,
+                              minobs_values,
+                              pm_values,
+                              best_grid_n,
+                              priors,
+                              nboot,
+                              n0,
+                              nb,
+                              benchmark_seed,
+                              correct_efflux,
+                              force_refit) {
+  tidyr::crossing(
+    input_index_tbl %>% select(patient_id, input_rds),
+    minobs = minobs_values,
+    pm = pm_values,
+    nn_prior = priors
+  ) %>%
+    mutate(
+      nn_prior_grid_n = best_grid_n,
+      outdir = purrr::pmap_chr(
+        list(patient_id, minobs, pm, nn_prior),
+        ~ task_outdir_prior(fit_root, ..1, ..2, ..3, ..4, best_grid_n)
+      ),
+      nboot = nboot,
+      n0 = n0,
+      nb = nb,
+      benchmark_seed = benchmark_seed,
+      correct_efflux = correct_efflux,
+      force_refit = force_refit,
+      round_label = "prior_round"
+    ) %>%
+    arrange(factor(patient_id, levels = sort_pid_levels(patient_id)), minobs, pm, nn_prior)
+}
+
+run_task_table_parallel <- function(task_tbl) {
+  if (!nrow(task_tbl)) {
+    return(tibble())
+  }
+
+  if (.Platform$OS.type == "unix" && n_cores_use > 1L) {
+    res <- parallel::mclapply(
+      seq_len(nrow(task_tbl)),
+      function(i) {
+        rr <- task_tbl[i, , drop = FALSE]
+        run_alfak_fit(
+          patient_id = rr$patient_id,
+          input_rds = rr$input_rds,
+          outdir = rr$outdir,
+          minobs = rr$minobs,
+          pm = rr$pm,
+          nboot = rr$nboot,
+          n0 = rr$n0,
+          nb = rr$nb,
+          benchmark_seed = rr$benchmark_seed,
+          correct_efflux = rr$correct_efflux,
+          nn_prior = rr$nn_prior,
+          nn_prior_grid_n = rr$nn_prior_grid_n,
+          force_refit = rr$force_refit
+        )
+      },
+      mc.cores = n_cores_use,
+      mc.preschedule = FALSE,
+      mc.set.seed = FALSE
+    )
+  } else {
+    res <- lapply(seq_len(nrow(task_tbl)), function(i) {
+      rr <- task_tbl[i, , drop = FALSE]
+      run_alfak_fit(
+        patient_id = rr$patient_id,
+        input_rds = rr$input_rds,
+        outdir = rr$outdir,
+        minobs = rr$minobs,
+        pm = rr$pm,
+        nboot = rr$nboot,
+        n0 = rr$n0,
+        nb = rr$nb,
+        benchmark_seed = rr$benchmark_seed,
+        correct_efflux = rr$correct_efflux,
+        nn_prior = rr$nn_prior,
+        nn_prior_grid_n = rr$nn_prior_grid_n,
+        force_refit = rr$force_refit
+      )
+    })
+  }
+
+  bind_rows(res)
+}
+
+summarize_fit_results <- function(fit_results_tbl, group_cols) {
+  if (!nrow(fit_results_tbl)) {
+    return(tibble())
+  }
+
+  fit_results_tbl %>%
+    group_by(across(all_of(group_cols))) %>%
+    summarise(
+      n_tasks = n(),
+      n_ok = sum(status == "ok", na.rm = TRUE),
+      n_error = sum(status == "error", na.rm = TRUE),
+      success_rate = n_ok / n_tasks,
+      mean_xval_r2 = mean(xval_r2, na.rm = TRUE),
+      median_xval_r2 = median(xval_r2, na.rm = TRUE),
+      mean_elapsed_sec = mean(elapsed_sec, na.rm = TRUE),
+      median_elapsed_sec = median(elapsed_sec, na.rm = TRUE),
+      total_lambda_endpoint_warnings = sum(lambda_endpoint_warning_count, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+safe_read_rds <- function(path) {
+  if (is.na(path) || !nzchar(path) || !file.exists(path)) {
+    return(NULL)
+  }
+  readRDS(path)
+}
+
+read_fit_bundle <- function(fit_dir) {
+  list(
+    bootstrap = safe_read_rds(file.path(fit_dir, "bootstrap_res.Rds")),
+    landscape = safe_read_rds(file.path(fit_dir, "landscape.Rds")),
+    posterior = safe_read_rds(file.path(fit_dir, "landscape_posterior_samples.Rds")),
+    xval = safe_read_rds(file.path(fit_dir, "xval.Rds"))
+  )
+}
+
+flatten_pair_values <- function(lhs, rhs) {
+  if (is.null(lhs) || is.null(rhs)) {
+    return(list(lhs = numeric(), rhs = numeric(), lhs_total = 0L, rhs_total = 0L, n_used = 0L))
+  }
+
+  if (!is.null(dim(lhs)) && !is.null(dim(rhs))) {
+    lhs_mat <- as.matrix(lhs)
+    rhs_mat <- as.matrix(rhs)
+
+    if (!is.null(colnames(lhs_mat)) && !is.null(colnames(rhs_mat))) {
+      common_cols <- intersect(colnames(lhs_mat), colnames(rhs_mat))
+      if (length(common_cols)) {
+        lhs_mat <- lhs_mat[, common_cols, drop = FALSE]
+        rhs_mat <- rhs_mat[, common_cols, drop = FALSE]
+      }
+    }
+
+    n_rows <- min(nrow(lhs_mat), nrow(rhs_mat))
+    if (n_rows < 1L) {
+      return(list(lhs = numeric(), rhs = numeric(), lhs_total = length(lhs_mat), rhs_total = length(rhs_mat), n_used = 0L))
+    }
+    lhs_vec <- as.numeric(lhs_mat[seq_len(n_rows), , drop = FALSE])
+    rhs_vec <- as.numeric(rhs_mat[seq_len(n_rows), , drop = FALSE])
+  } else {
+    lhs_vec <- as.numeric(lhs)
+    rhs_vec <- as.numeric(rhs)
+  }
+
+  n_used <- min(length(lhs_vec), length(rhs_vec))
+  if (n_used < 1L) {
+    return(list(lhs = numeric(), rhs = numeric(), lhs_total = length(lhs_vec), rhs_total = length(rhs_vec), n_used = 0L))
+  }
+
+  list(
+    lhs = lhs_vec[seq_len(n_used)],
+    rhs = rhs_vec[seq_len(n_used)],
+    lhs_total = length(lhs_vec),
+    rhs_total = length(rhs_vec),
+    n_used = n_used
+  )
+}
+
+compare_numeric_objects <- function(lhs, rhs, metric_name) {
+  aligned <- flatten_pair_values(lhs, rhs)
+  lhs_vec <- aligned$lhs
+  rhs_vec <- aligned$rhs
+  if (!length(lhs_vec) || !length(rhs_vec)) {
+    return(tibble(
+      metric = metric_name,
+      n = 0L,
+      lhs_mean = NA_real_,
+      rhs_mean = NA_real_,
+      mean_diff = NA_real_,
+      mean_abs_diff = NA_real_,
+      max_abs_diff = NA_real_,
+      correlation = NA_real_,
+      lhs_negative = NA_integer_,
+      rhs_negative = NA_integer_,
+      lhs_total = aligned$lhs_total,
+      rhs_total = aligned$rhs_total
+    ))
+  }
+
+  diff_vec <- rhs_vec - lhs_vec
+  tibble(
+    metric = metric_name,
+    n = aligned$n_used,
+    lhs_mean = mean(lhs_vec, na.rm = TRUE),
+    rhs_mean = mean(rhs_vec, na.rm = TRUE),
+    mean_diff = mean(diff_vec, na.rm = TRUE),
+    mean_abs_diff = mean(abs(diff_vec), na.rm = TRUE),
+    max_abs_diff = max(abs(diff_vec), na.rm = TRUE),
+    correlation = if (aligned$n_used >= 2L) {
+      suppressWarnings(stats::cor(lhs_vec, rhs_vec, use = "complete.obs"))
+    } else {
+      NA_real_
+    },
+    lhs_negative = sum(lhs_vec < 0, na.rm = TRUE),
+    rhs_negative = sum(rhs_vec < 0, na.rm = TRUE),
+    lhs_total = aligned$lhs_total,
+    rhs_total = aligned$rhs_total
+  )
+}
+
+summarize_sign_changes <- function(lhs, rhs, metric_name) {
+  aligned <- flatten_pair_values(lhs, rhs)
+  lhs_vec <- aligned$lhs
+  rhs_vec <- aligned$rhs
+  if (!length(lhs_vec) || !length(rhs_vec)) {
+    return(tibble(
+      metric = metric_name,
+      n = 0L,
+      lhs_negative = NA_integer_,
+      rhs_negative = NA_integer_,
+      neg_to_nonneg = NA_integer_,
+      nonneg_to_neg = NA_integer_,
+      across_zero = NA_integer_
+    ))
+  }
+
+  tibble(
+    metric = metric_name,
+    n = aligned$n_used,
+    lhs_negative = sum(lhs_vec < 0, na.rm = TRUE),
+    rhs_negative = sum(rhs_vec < 0, na.rm = TRUE),
+    neg_to_nonneg = sum(lhs_vec < 0 & rhs_vec >= 0, na.rm = TRUE),
+    nonneg_to_neg = sum(lhs_vec >= 0 & rhs_vec < 0, na.rm = TRUE),
+    across_zero = sum(lhs_vec * rhs_vec < 0, na.rm = TRUE)
+  )
+}
+
+merge_landscape_pair <- function(lhs_landscape, rhs_landscape) {
+  lhs_tbl <- lhs_landscape %>%
+    transmute(
+      k,
+      lhs_mean = mean,
+      lhs_median = median,
+      lhs_sd = sd,
+      lhs_fq = as.logical(fq),
+      lhs_nn = as.logical(nn)
+    )
+  rhs_tbl <- rhs_landscape %>%
+    transmute(
+      k,
+      rhs_mean = mean,
+      rhs_median = median,
+      rhs_sd = sd,
+      rhs_fq = as.logical(fq),
+      rhs_nn = as.logical(nn)
+    )
+
+  inner_join(lhs_tbl, rhs_tbl, by = "k") %>%
+    mutate(
+      state_group = case_when(
+        lhs_fq | rhs_fq ~ "fq",
+        lhs_nn | rhs_nn ~ "nn",
+        TRUE ~ "other"
+      )
+    )
+}
+
+summarize_landscape_groups <- function(merged_landscape, lhs_col, rhs_col, metric_name) {
+  if (!nrow(merged_landscape)) {
+    return(tibble())
+  }
+
+  diff_vec <- merged_landscape[[rhs_col]] - merged_landscape[[lhs_col]]
+  tmp <- merged_landscape %>%
+    mutate(
+      lhs_value = .data[[lhs_col]],
+      rhs_value = .data[[rhs_col]],
+      diff_value = diff_vec
+    ) %>%
+    group_by(state_group) %>%
+    summarise(
+      metric = metric_name,
+      n = n(),
+      lhs_mean = mean(lhs_value, na.rm = TRUE),
+      rhs_mean = mean(rhs_value, na.rm = TRUE),
+      mean_diff = mean(diff_value, na.rm = TRUE),
+      mean_abs_diff = mean(abs(diff_value), na.rm = TRUE),
+      max_abs_diff = max(abs(diff_value), na.rm = TRUE),
+      correlation = if (n() >= 2L) {
+        suppressWarnings(stats::cor(lhs_value, rhs_value, use = "complete.obs"))
+      } else {
+        NA_real_
+      },
+      .groups = "drop"
+    )
+
+  tmp %>% select(metric, state_group, everything())
+}
+
+top_landscape_shifts <- function(merged_landscape, top_n = 15L) {
+  if (!nrow(merged_landscape)) {
+    return(tibble())
+  }
+
+  merged_landscape %>%
+    transmute(
+      k,
+      state_group,
+      lhs_mean,
+      rhs_mean,
+      diff = rhs_mean - lhs_mean
+    ) %>%
+    arrange(desc(abs(diff))) %>%
+    slice_head(n = top_n)
+}
+
+compare_fit_pair <- function(lhs_dir,
+                             rhs_dir,
+                             patient_id,
+                             minobs,
+                             pm,
+                             lhs_label,
+                             rhs_label,
+                             lhs_setting,
+                             rhs_setting,
+                             comparison_set,
+                             top_n = 15L,
+                             include_posterior = TRUE) {
+  lhs_bundle <- read_fit_bundle(lhs_dir)
+  rhs_bundle <- read_fit_bundle(rhs_dir)
+
+  component_tbl <- bind_rows(
+    compare_numeric_objects(lhs_bundle$bootstrap$initial_fitness, rhs_bundle$bootstrap$initial_fitness, "bootstrap_initial_fitness"),
+    compare_numeric_objects(lhs_bundle$bootstrap$final_fitness, rhs_bundle$bootstrap$final_fitness, "bootstrap_final_fitness"),
+    compare_numeric_objects(lhs_bundle$bootstrap$initial_frequencies, rhs_bundle$bootstrap$initial_frequencies, "bootstrap_initial_frequencies"),
+    compare_numeric_objects(lhs_bundle$bootstrap$final_frequencies, rhs_bundle$bootstrap$final_frequencies, "bootstrap_final_frequencies"),
+    compare_numeric_objects(lhs_bundle$bootstrap$nn_fitness, rhs_bundle$bootstrap$nn_fitness, "bootstrap_nn_fitness"),
+    compare_numeric_objects(lhs_bundle$landscape$mean, rhs_bundle$landscape$mean, "landscape_mean"),
+    compare_numeric_objects(lhs_bundle$landscape$median, rhs_bundle$landscape$median, "landscape_median"),
+    compare_numeric_objects(lhs_bundle$landscape$sd, rhs_bundle$landscape$sd, "landscape_sd"),
+    if (include_posterior) {
+      compare_numeric_objects(lhs_bundle$posterior, rhs_bundle$posterior, "landscape_posterior_samples")
+    },
+    compare_numeric_objects(
+      extract_xval_metrics(lhs_bundle$xval)$xval_r2,
+      extract_xval_metrics(rhs_bundle$xval)$xval_r2,
+      "xval_r2"
+    )
+  ) %>%
+    mutate(
+      comparison_set = comparison_set,
+      patient_id = patient_id,
+      minobs = minobs,
+      pm = pm,
+      lhs_label = lhs_label,
+      rhs_label = rhs_label,
+      lhs_setting = lhs_setting,
+      rhs_setting = rhs_setting
+    ) %>%
+    relocate(comparison_set, patient_id, minobs, pm, lhs_label, rhs_label, lhs_setting, rhs_setting, metric)
+
+  sign_tbl <- bind_rows(
+    summarize_sign_changes(lhs_bundle$bootstrap$nn_fitness, rhs_bundle$bootstrap$nn_fitness, "bootstrap_nn_fitness"),
+    summarize_sign_changes(lhs_bundle$landscape$mean, rhs_bundle$landscape$mean, "landscape_mean"),
+    summarize_sign_changes(lhs_bundle$landscape$median, rhs_bundle$landscape$median, "landscape_median")
+  ) %>%
+    mutate(
+      comparison_set = comparison_set,
+      patient_id = patient_id,
+      minobs = minobs,
+      pm = pm,
+      lhs_label = lhs_label,
+      rhs_label = rhs_label,
+      lhs_setting = lhs_setting,
+      rhs_setting = rhs_setting
+    ) %>%
+    relocate(comparison_set, patient_id, minobs, pm, lhs_label, rhs_label, lhs_setting, rhs_setting, metric)
+
+  merged_landscape <- merge_landscape_pair(lhs_bundle$landscape, rhs_bundle$landscape)
+  landscape_group_tbl <- bind_rows(
+    summarize_landscape_groups(merged_landscape, "lhs_mean", "rhs_mean", "landscape_mean"),
+    summarize_landscape_groups(merged_landscape, "lhs_median", "rhs_median", "landscape_median"),
+    summarize_landscape_groups(merged_landscape, "lhs_sd", "rhs_sd", "landscape_sd")
+  ) %>%
+    mutate(
+      comparison_set = comparison_set,
+      patient_id = patient_id,
+      minobs = minobs,
+      pm = pm,
+      lhs_label = lhs_label,
+      rhs_label = rhs_label,
+      lhs_setting = lhs_setting,
+      rhs_setting = rhs_setting
+    ) %>%
+    relocate(comparison_set, patient_id, minobs, pm, lhs_label, rhs_label, lhs_setting, rhs_setting, metric, state_group)
+
+  top_shift_tbl <- top_landscape_shifts(merged_landscape, top_n = top_n) %>%
+    mutate(
+      comparison_set = comparison_set,
+      patient_id = patient_id,
+      minobs = minobs,
+      pm = pm,
+      lhs_label = lhs_label,
+      rhs_label = rhs_label,
+      lhs_setting = lhs_setting,
+      rhs_setting = rhs_setting
+    ) %>%
+    relocate(comparison_set, patient_id, minobs, pm, lhs_label, rhs_label, lhs_setting, rhs_setting)
+
+  list(
+    component = component_tbl,
+    sign = sign_tbl,
+    landscape_group = landscape_group_tbl,
+    top_shift = top_shift_tbl
+  )
+}
+
+build_pairwise_comparisons <- function(results_tbl,
+                                       pair_values,
+                                       setting_col,
+                                       comparison_set,
+                                       top_n = 15L,
+                                       include_posterior = TRUE) {
+  if (!nrow(results_tbl) || length(pair_values) < 2L) {
+    return(list(
+      component = tibble(),
+      sign = tibble(),
+      landscape_group = tibble(),
+      top_shift = tibble()
+    ))
+  }
+
+  pair_defs <- combn(pair_values, 2, simplify = FALSE)
+  all_component <- list()
+  all_sign <- list()
+  all_group <- list()
+  all_shift <- list()
+
+  for (pair in pair_defs) {
+    lhs_val <- pair[[1]]
+    rhs_val <- pair[[2]]
+
+    lhs_idx <- results_tbl %>%
+      filter(status == "ok", .data[[setting_col]] == lhs_val) %>%
+      transmute(
+        patient_id,
+        minobs,
+        pm,
+        lhs_setting = .data[[setting_col]],
+        lhs_label = if (setting_col == "nn_prior_grid_n") paste0("grid_", .data[[setting_col]]) else as.character(.data[[setting_col]]),
+        outdir_lhs = outdir
+      )
+
+    rhs_idx <- results_tbl %>%
+      filter(status == "ok", .data[[setting_col]] == rhs_val) %>%
+      transmute(
+        patient_id,
+        minobs,
+        pm,
+        rhs_setting = .data[[setting_col]],
+        rhs_label = if (setting_col == "nn_prior_grid_n") paste0("grid_", .data[[setting_col]]) else as.character(.data[[setting_col]]),
+        outdir_rhs = outdir
+      )
+
+    joined <- inner_join(lhs_idx, rhs_idx, by = c("patient_id", "minobs", "pm"))
+    if (!nrow(joined)) {
+      next
+    }
+
+    pair_res <- lapply(seq_len(nrow(joined)), function(i) {
+      rr <- joined[i, , drop = FALSE]
+      compare_fit_pair(
+        lhs_dir = rr$outdir_lhs,
+        rhs_dir = rr$outdir_rhs,
+        patient_id = rr$patient_id,
+        minobs = rr$minobs,
+        pm = rr$pm,
+        lhs_label = rr$lhs_label,
+        rhs_label = rr$rhs_label,
+        lhs_setting = rr$lhs_setting,
+        rhs_setting = rr$rhs_setting,
+        comparison_set = comparison_set,
+        top_n = top_n,
+        include_posterior = include_posterior
+      )
+    })
+
+    all_component <- c(all_component, lapply(pair_res, `[[`, "component"))
+    all_sign <- c(all_sign, lapply(pair_res, `[[`, "sign"))
+    all_group <- c(all_group, lapply(pair_res, `[[`, "landscape_group"))
+    all_shift <- c(all_shift, lapply(pair_res, `[[`, "top_shift"))
+  }
+
+  list(
+    component = bind_rows(all_component),
+    sign = bind_rows(all_sign),
+    landscape_group = bind_rows(all_group),
+    top_shift = bind_rows(all_shift)
+  )
+}
+
+compute_grid_recommendation <- function(grid_results_tbl,
+                                        grid_component_tbl,
+                                        reference_grid_n,
+                                        runtime_weight = 0.5) {
+  if (!nrow(grid_results_tbl)) {
+    return(tibble())
+  }
+
+  runtime_tbl <- grid_results_tbl %>%
+    filter(status == "ok") %>%
+    group_by(nn_prior_grid_n) %>%
+    summarise(
+      success_n = n(),
+      mean_xval_r2 = mean(xval_r2, na.rm = TRUE),
+      median_elapsed_sec = median(elapsed_sec, na.rm = TRUE),
+      total_lambda_endpoint_warnings = sum(lambda_endpoint_warning_count, na.rm = TRUE),
+      .groups = "drop"
+    )
+
+  ref_component_tbl <- grid_component_tbl %>%
+    filter(rhs_setting == reference_grid_n, metric %in% c("landscape_mean", "bootstrap_nn_fitness", "xval_r2")) %>%
+    group_by(lhs_setting, metric) %>%
+    summarise(
+      mean_abs_diff = mean(mean_abs_diff, na.rm = TRUE),
+      max_abs_diff = max(max_abs_diff, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(lhs_setting = as.integer(lhs_setting)) %>%
+    pivot_wider(
+      names_from = metric,
+      values_from = c(mean_abs_diff, max_abs_diff),
+      names_sep = "__"
+    ) %>%
+    rename(nn_prior_grid_n = lhs_setting)
+
+  recommendation_tbl <- tibble(nn_prior_grid_n = sort(unique(grid_results_tbl$nn_prior_grid_n))) %>%
+    left_join(runtime_tbl, by = "nn_prior_grid_n") %>%
+    left_join(ref_component_tbl, by = "nn_prior_grid_n")
+
+  needed_cols <- c(
+    "mean_abs_diff__landscape_mean",
+    "mean_abs_diff__bootstrap_nn_fitness",
+    "mean_abs_diff__xval_r2",
+    "max_abs_diff__landscape_mean",
+    "max_abs_diff__bootstrap_nn_fitness",
+    "max_abs_diff__xval_r2"
+  )
+  for (col in needed_cols) {
+    if (!col %in% names(recommendation_tbl)) {
+      recommendation_tbl[[col]] <- NA_real_
+    }
+  }
+
+  recommendation_tbl <- recommendation_tbl %>%
+    mutate(
+      mean_abs_diff__landscape_mean = ifelse(nn_prior_grid_n == reference_grid_n, 0, mean_abs_diff__landscape_mean),
+      mean_abs_diff__bootstrap_nn_fitness = ifelse(nn_prior_grid_n == reference_grid_n, 0, mean_abs_diff__bootstrap_nn_fitness),
+      mean_abs_diff__xval_r2 = ifelse(nn_prior_grid_n == reference_grid_n, 0, mean_abs_diff__xval_r2)
+    )
+
+  max_success_n <- max(recommendation_tbl$success_n, na.rm = TRUE)
+  eligible_tbl <- recommendation_tbl %>% filter(success_n == max_success_n)
+  if (!nrow(eligible_tbl)) {
+    return(recommendation_tbl)
+  }
+
+  scale_landscape <- max(eligible_tbl$mean_abs_diff__landscape_mean, na.rm = TRUE)
+  scale_nn <- max(eligible_tbl$mean_abs_diff__bootstrap_nn_fitness, na.rm = TRUE)
+  scale_xval <- max(eligible_tbl$mean_abs_diff__xval_r2, na.rm = TRUE)
+  min_runtime <- min(eligible_tbl$median_elapsed_sec, na.rm = TRUE)
+
+  if (!is.finite(scale_landscape) || scale_landscape <= 0) {
+    scale_landscape <- 1
+  }
+  if (!is.finite(scale_nn) || scale_nn <= 0) {
+    scale_nn <- 1
+  }
+  if (!is.finite(scale_xval) || scale_xval <= 0) {
+    scale_xval <- 1
+  }
+  if (!is.finite(min_runtime) || min_runtime <= 0) {
+    min_runtime <- 1
+  }
+
+  recommendation_tbl <- recommendation_tbl %>%
+    mutate(
+      landscape_relative = coalesce_value(mean_abs_diff__landscape_mean / scale_landscape, 0),
+      nn_relative = coalesce_value(mean_abs_diff__bootstrap_nn_fitness / scale_nn, 0),
+      xval_relative = coalesce_value(mean_abs_diff__xval_r2 / scale_xval, 0),
+      runtime_relative = coalesce_value(median_elapsed_sec / min_runtime, 1),
+      efficiency_score = landscape_relative + nn_relative + xval_relative + runtime_weight * runtime_relative
+    ) %>%
+    arrange(desc(success_n), efficiency_score, nn_prior_grid_n) %>%
+    mutate(is_recommended = row_number() == 1L)
+
+  recommendation_tbl
+}
+
+coalesce_value <- function(x, y) {
+  ifelse(is.na(x), y, x)
+}
+```
+
+## Build ALFA-K Inputs
+
+```{r build-inputs}
+meta_tbl <- readxl::read_xlsx(meta_path)
+input_index_tbl <- build_benchmark_inputs(
+  meta_tbl = meta_tbl,
+  base_dir = data_dir,
+  input_dir = input_dir,
+  rebuild_inputs = rebuild_inputs_use,
+  patient_subset = patient_subset_use
+)
+save_table_bundle(input_index_tbl, file.path(tables_dir, "benchmark_input_index"))
+
+input_index_tbl
+```
+
+```{r input-summary}
+render_tbl(
+  input_index_tbl %>%
+    select(patient_id, n_timepoints, n_karyotypes, total_cells, delta_time_labels, stage_sequence),
+  caption = "Benchmark input summary"
+)
+```
+
+## Round 1: `nn_prior_grid_n` Sweep
+
+```{r round1-tasks}
+grid_tasks_tbl <- build_grid_tasks(
+  input_index_tbl = input_index_tbl,
+  fit_root = grid_fit_dir,
+  minobs_values = minobs_values_use,
+  pm_values = pm_values_use,
+  grid_values = grid_values_use,
+  nboot = nboot_use,
+  n0 = n0_use,
+  nb = nb_use,
+  benchmark_seed = benchmark_seed_use,
+  correct_efflux = correct_efflux_use,
+  force_refit = force_refit_round1
+)
+save_table_bundle(grid_tasks_tbl, file.path(tables_dir, "grid_round_tasks"))
+
+grid_tasks_tbl %>%
+  count(nn_prior_grid_n, name = "n_tasks")
+```
+
+```{r round1-run}
+grid_results_path <- file.path(tables_dir, "grid_round_fit_results")
+
+if (run_round1_use) {
+  grid_results_tbl <- run_task_table_parallel(grid_tasks_tbl)
+  save_table_bundle(grid_results_tbl, grid_results_path)
+} else {
+  grid_results_tbl <- load_saved_table(grid_results_path)
+  if (is.null(grid_results_tbl)) {
+    grid_results_tbl <- tibble()
+  }
+}
+
+grid_results_tbl
+```
+
+```{r round1-summary}
+grid_fit_summary_tbl <- summarize_fit_results(grid_results_tbl, group_cols = c("nn_prior_grid_n"))
+save_table_bundle(grid_fit_summary_tbl, file.path(tables_dir, "grid_round_fit_summary"))
+
+if (nrow(grid_fit_summary_tbl)) {
+  render_tbl(grid_fit_summary_tbl, caption = "Round 1 fit summary by nn_prior_grid_n")
+} else {
+  render_tbl(empty_note_tbl("No Round 1 fit results are available yet."), caption = "Round 1 fit summary")
+}
+```
+
+## Round 1: Grid Comparisons and Recommendation
+
+```{r round1-compare}
+grid_pair_results <- build_pairwise_comparisons(
+  results_tbl = grid_results_tbl,
+  pair_values = grid_values_use,
+  setting_col = "nn_prior_grid_n",
+  comparison_set = "grid",
+  top_n = top_shift_n_use,
+  include_posterior = include_posterior_use
+)
+
+save_table_bundle(grid_pair_results$component, file.path(tables_dir, "grid_pair_component_summary"))
+save_table_bundle(grid_pair_results$sign, file.path(tables_dir, "grid_pair_sign_summary"))
+save_table_bundle(grid_pair_results$landscape_group, file.path(tables_dir, "grid_pair_landscape_group_summary"))
+save_table_bundle(grid_pair_results$top_shift, file.path(tables_dir, "grid_pair_top_landscape_shifts"))
+
+grid_pair_overview_tbl <- if (nrow(grid_pair_results$component)) {
+  grid_pair_results$component %>%
+    filter(metric %in% c("landscape_mean", "bootstrap_nn_fitness", "xval_r2")) %>%
+    group_by(lhs_label, rhs_label, metric) %>%
+    summarise(
+      n_pairs = n(),
+      mean_abs_diff = mean(mean_abs_diff, na.rm = TRUE),
+      max_abs_diff = max(max_abs_diff, na.rm = TRUE),
+      mean_correlation = mean(correlation, na.rm = TRUE),
+      .groups = "drop"
+    )
+} else {
+  tibble()
+}
+save_table_bundle(grid_pair_overview_tbl, file.path(tables_dir, "grid_pair_overview"))
+
+grid_recommendation_tbl <- compute_grid_recommendation(
+  grid_results_tbl = grid_results_tbl,
+  grid_component_tbl = grid_pair_results$component,
+  reference_grid_n = reference_grid_n
+)
+save_table_bundle(grid_recommendation_tbl, file.path(tables_dir, "grid_recommendation"))
+
+best_grid_n <- if (nrow(grid_recommendation_tbl)) {
+  grid_recommendation_tbl$nn_prior_grid_n[which(grid_recommendation_tbl$is_recommended)][1]
+} else {
+  NA_integer_
+}
+saveRDS(best_grid_n, file.path(cache_dir, "best_grid_n.rds"))
+
+list(
+  pair_overview = grid_pair_overview_tbl,
+  recommendation = grid_recommendation_tbl,
+  best_grid_n = best_grid_n
+)
+```
+
+```{r round1-compare-render}
+if (nrow(grid_pair_overview_tbl)) {
+  render_tbl(grid_pair_overview_tbl, caption = "Round 1 pairwise comparison overview")
+} else {
+  render_tbl(empty_note_tbl("No successful Round 1 pairwise comparisons are available yet."), caption = "Round 1 pairwise comparison overview")
+}
+```
+
+```{r round1-recommendation-render}
+if (nrow(grid_recommendation_tbl)) {
+  render_tbl(grid_recommendation_tbl, caption = "Global nn_prior_grid_n recommendation summary")
+} else {
+  render_tbl(empty_note_tbl("No grid recommendation could be computed because Round 1 results are unavailable."), caption = "Global nn_prior_grid_n recommendation summary")
+}
+```
+
+```{r round1-best-grid-text, results='asis'}
+if (is.finite(best_grid_n)) {
+  cat(
+    sprintf(
+      "**Recommended benchmark-wide `nn_prior_grid_n`: `%d`**\n\n",
+      best_grid_n
+    )
+  )
+} else {
+  cat("**Recommended benchmark-wide `nn_prior_grid_n`: unavailable**\n\n")
+}
+```
+
+```{r round1-top-shifts}
+grid_top_shift_preview_tbl <- if (nrow(grid_pair_results$top_shift)) {
+  grid_pair_results$top_shift %>%
+    group_by(lhs_label, rhs_label) %>%
+    slice_head(n = min(10L, top_shift_n_use)) %>%
+    ungroup()
+} else {
+  tibble()
+}
+
+if (nrow(grid_top_shift_preview_tbl)) {
+  render_tbl(grid_top_shift_preview_tbl, caption = "Top landscape shifts for Round 1 grid comparisons")
+} else {
+  render_tbl(empty_note_tbl("No top-shift table is available for Round 1."), caption = "Top landscape shifts for Round 1 grid comparisons")
+}
+```
+
+```{r round1-figures, eval=render_figures_use}
+if (nrow(grid_fit_summary_tbl)) {
+  p_grid_runtime <- ggplot(grid_results_tbl %>% filter(status == "ok"), aes(x = factor(nn_prior_grid_n), y = elapsed_sec)) +
+    geom_boxplot(outlier.shape = NA, fill = "#D9EAF7", color = "#2C4C7A") +
+    geom_jitter(width = 0.15, alpha = 0.5, size = 1.6, color = "#2C4C7A") +
+    labs(
+      title = "Round 1 runtime by nn_prior_grid_n",
+      x = "nn_prior_grid_n",
+      y = "Elapsed seconds"
+    ) +
+    theme_bw(base_size = 12)
+  print(p_grid_runtime)
+  ggsave(file.path(figures_dir, "round1_runtime_by_grid.png"), p_grid_runtime, width = 8, height = 5, dpi = 150)
+
+  p_grid_xval <- ggplot(grid_results_tbl %>% filter(status == "ok"), aes(x = factor(nn_prior_grid_n), y = xval_r2)) +
+    geom_boxplot(outlier.shape = NA, fill = "#F4E3B2", color = "#7A5C00") +
+    geom_jitter(width = 0.15, alpha = 0.5, size = 1.6, color = "#7A5C00") +
+    labs(
+      title = "Round 1 xval by nn_prior_grid_n",
+      x = "nn_prior_grid_n",
+      y = "xval_r2"
+    ) +
+    theme_bw(base_size = 12)
+  print(p_grid_xval)
+  ggsave(file.path(figures_dir, "round1_xval_by_grid.png"), p_grid_xval, width = 8, height = 5, dpi = 150)
+}
+```
+
+## Round 2: `nn_prior` Benchmark at the Selected Grid
+
+```{r round2-tasks}
+if (is.finite(best_grid_n)) {
+  prior_tasks_tbl <- build_prior_tasks(
+    input_index_tbl = input_index_tbl,
+    fit_root = prior_fit_dir,
+    minobs_values = minobs_values_use,
+    pm_values = pm_values_use,
+    best_grid_n = best_grid_n,
+    priors = round2_priors_use,
+    nboot = nboot_use,
+    n0 = n0_use,
+    nb = nb_use,
+    benchmark_seed = benchmark_seed_use,
+    correct_efflux = correct_efflux_use,
+    force_refit = force_refit_round2
+  )
+} else {
+  prior_tasks_tbl <- tibble()
+}
+
+save_table_bundle(prior_tasks_tbl, file.path(tables_dir, "prior_round_tasks"))
+prior_tasks_tbl
+```
+
+```{r round2-run}
+prior_results_path <- file.path(tables_dir, "prior_round_fit_results")
+
+if (run_round2_use && nrow(prior_tasks_tbl)) {
+  prior_results_new_tbl <- run_task_table_parallel(prior_tasks_tbl)
+  save_table_bundle(prior_results_new_tbl, prior_results_path)
+} else {
+  prior_results_new_tbl <- load_saved_table(prior_results_path)
+  if (is.null(prior_results_new_tbl)) {
+    prior_results_new_tbl <- tibble()
+  }
+}
+
+empirical_censored_reuse_tbl <- if (nrow(grid_results_tbl) && is.finite(best_grid_n)) {
+  grid_results_tbl %>%
+    filter(status == "ok", nn_prior == "empirical_censored", nn_prior_grid_n == best_grid_n) %>%
+    mutate(round_label = "prior_round_reused")
+} else {
+  tibble()
+}
+
+prior_results_all_tbl <- bind_rows(
+  empirical_censored_reuse_tbl,
+  prior_results_new_tbl
+)
+if (nrow(prior_results_all_tbl)) {
+  prior_results_all_tbl <- prior_results_all_tbl %>%
+    arrange(factor(patient_id, levels = sort_pid_levels(patient_id)), minobs, pm, nn_prior)
+}
+
+save_table_bundle(prior_results_all_tbl, file.path(tables_dir, "prior_round_all_results"))
+prior_results_all_tbl
+```
+
+```{r round2-summary}
+prior_fit_summary_tbl <- summarize_fit_results(prior_results_all_tbl, group_cols = c("nn_prior"))
+save_table_bundle(prior_fit_summary_tbl, file.path(tables_dir, "prior_round_fit_summary"))
+
+if (nrow(prior_fit_summary_tbl)) {
+  render_tbl(prior_fit_summary_tbl, caption = "Round 2 fit summary by nn_prior")
+} else {
+  render_tbl(empty_note_tbl("No Round 2 fit results are available yet."), caption = "Round 2 fit summary")
+}
+```
+
+## Round 2: Prior Comparisons
+
+```{r round2-compare}
+prior_pair_values_use <- c("empirical_censored", round2_priors_use)
+
+prior_pair_results <- build_pairwise_comparisons(
+  results_tbl = prior_results_all_tbl,
+  pair_values = prior_pair_values_use,
+  setting_col = "nn_prior",
+  comparison_set = "prior",
+  top_n = top_shift_n_use,
+  include_posterior = include_posterior_use
+)
+
+save_table_bundle(prior_pair_results$component, file.path(tables_dir, "prior_pair_component_summary"))
+save_table_bundle(prior_pair_results$sign, file.path(tables_dir, "prior_pair_sign_summary"))
+save_table_bundle(prior_pair_results$landscape_group, file.path(tables_dir, "prior_pair_landscape_group_summary"))
+save_table_bundle(prior_pair_results$top_shift, file.path(tables_dir, "prior_pair_top_landscape_shifts"))
+
+prior_pair_overview_tbl <- if (nrow(prior_pair_results$component)) {
+  prior_pair_results$component %>%
+    filter(metric %in% c("landscape_mean", "bootstrap_nn_fitness", "xval_r2")) %>%
+    group_by(lhs_label, rhs_label, metric) %>%
+    summarise(
+      n_pairs = n(),
+      mean_abs_diff = mean(mean_abs_diff, na.rm = TRUE),
+      max_abs_diff = max(max_abs_diff, na.rm = TRUE),
+      mean_correlation = mean(correlation, na.rm = TRUE),
+      .groups = "drop"
+    )
+} else {
+  tibble()
+}
+save_table_bundle(prior_pair_overview_tbl, file.path(tables_dir, "prior_pair_overview"))
+
+prior_pair_overview_tbl
+```
+
+```{r round2-overview-render}
+if (nrow(prior_pair_overview_tbl)) {
+  render_tbl(prior_pair_overview_tbl, caption = "Round 2 pairwise comparison overview")
+} else {
+  render_tbl(empty_note_tbl("No successful Round 2 pairwise comparisons are available yet."), caption = "Round 2 pairwise comparison overview")
+}
+```
+
+```{r round2-top-shifts}
+prior_top_shift_preview_tbl <- if (nrow(prior_pair_results$top_shift)) {
+  prior_pair_results$top_shift %>%
+    group_by(lhs_label, rhs_label) %>%
+    slice_head(n = min(10L, top_shift_n_use)) %>%
+    ungroup()
+} else {
+  tibble()
+}
+
+if (nrow(prior_top_shift_preview_tbl)) {
+  render_tbl(prior_top_shift_preview_tbl, caption = "Top landscape shifts for Round 2 prior comparisons")
+} else {
+  render_tbl(empty_note_tbl("No top-shift table is available for Round 2."), caption = "Top landscape shifts for Round 2 prior comparisons")
+}
+```
+
+```{r round2-figures, eval=render_figures_use}
+if (nrow(prior_fit_summary_tbl)) {
+  p_prior_runtime <- ggplot(prior_results_all_tbl %>% filter(status == "ok"), aes(x = nn_prior, y = elapsed_sec)) +
+    geom_boxplot(outlier.shape = NA, fill = "#E8D8E8", color = "#633A63") +
+    geom_jitter(width = 0.15, alpha = 0.5, size = 1.6, color = "#633A63") +
+    labs(
+      title = paste0("Round 2 runtime by nn_prior (grid = ", best_grid_n, ")"),
+      x = "nn_prior",
+      y = "Elapsed seconds"
+    ) +
+    theme_bw(base_size = 12)
+  print(p_prior_runtime)
+  ggsave(file.path(figures_dir, "round2_runtime_by_prior.png"), p_prior_runtime, width = 8, height = 5, dpi = 150)
+
+  p_prior_xval <- ggplot(prior_results_all_tbl %>% filter(status == "ok"), aes(x = nn_prior, y = xval_r2)) +
+    geom_boxplot(outlier.shape = NA, fill = "#D8EBCF", color = "#31572C") +
+    geom_jitter(width = 0.15, alpha = 0.5, size = 1.6, color = "#31572C") +
+    labs(
+      title = paste0("Round 2 xval by nn_prior (grid = ", best_grid_n, ")"),
+      x = "nn_prior",
+      y = "xval_r2"
+    ) +
+    theme_bw(base_size = 12)
+  print(p_prior_xval)
+  ggsave(file.path(figures_dir, "round2_xval_by_prior.png"), p_prior_xval, width = 8, height = 5, dpi = 150)
+}
+```
+
+## Artifact Index
+
+```{r artifact-index}
+artifact_index_tbl <- tibble(
+  artifact = c(
+    "benchmark_input_index",
+    "grid_round_tasks",
+    "grid_round_fit_results",
+    "grid_round_fit_summary",
+    "grid_pair_component_summary",
+    "grid_pair_landscape_group_summary",
+    "grid_pair_sign_summary",
+    "grid_pair_top_landscape_shifts",
+    "grid_recommendation",
+    "prior_round_tasks",
+    "prior_round_fit_results",
+    "prior_round_all_results",
+    "prior_round_fit_summary",
+    "prior_pair_component_summary",
+    "prior_pair_landscape_group_summary",
+    "prior_pair_sign_summary",
+    "prior_pair_top_landscape_shifts"
+  ),
+  path = file.path(
+    tables_dir,
+    c(
+      "benchmark_input_index.tsv",
+      "grid_round_tasks.tsv",
+      "grid_round_fit_results.tsv",
+      "grid_round_fit_summary.tsv",
+      "grid_pair_component_summary.tsv",
+      "grid_pair_landscape_group_summary.tsv",
+      "grid_pair_sign_summary.tsv",
+      "grid_pair_top_landscape_shifts.tsv",
+      "grid_recommendation.tsv",
+      "prior_round_tasks.tsv",
+      "prior_round_fit_results.tsv",
+      "prior_round_all_results.tsv",
+      "prior_round_fit_summary.tsv",
+      "prior_pair_component_summary.tsv",
+      "prior_pair_landscape_group_summary.tsv",
+      "prior_pair_sign_summary.tsv",
+      "prior_pair_top_landscape_shifts.tsv"
+    )
+  )
+)
+save_table_bundle(artifact_index_tbl, file.path(tables_dir, "artifact_index"))
+
+render_tbl(artifact_index_tbl, caption = "Benchmark artifact index")
+```

@@ -1,0 +1,8 @@
+{
+  "root_id" : "P11",
+  "created_at" : "2026-04-10T18:56:06.967792617Z",
+  "included_imaging_assets" : [ ],
+  "included_perspective_assets" : [ "SF2979/TranscriptomePerspective", "SF2777/TranscriptomePerspective" ],
+  "skipped_assets" : [ ],
+  "warnings" : [ ]
+}

@@ -1,0 +1,15 @@
+manifest_version: 1
+bundle_root_id: P15
+request_email: ''
+options:
+  include_base_bundle: yes
+  package_format: zip
+  layout: by_node
+nodes:
+  - passaging_id: SF4449
+    perspectives:
+      - TranscriptomePerspective
+  - passaging_id: SF3996
+    perspectives:
+      - TranscriptomePerspective
+  
