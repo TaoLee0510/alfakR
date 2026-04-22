@@ -17,6 +17,10 @@ alfak_neighbor_objective_cpp <- function(fc_param, parent_fitness, pij_values, p
     .Call(`_alfakR_alfak_neighbor_objective_cpp`, fc_param, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, child_obs, ntot, parent_fitness_mean, prior_mean, prior_sd, do_prior, tol)
 }
 
+alfak_joint_objective_cpp <- function(f_rel, x0, nn_fitness, counts_fq, timepoints, viability_vec, g0_val, correct_efflux, nn_parent_indices, nn_pij_values, birth_times, child_obs, ntot, use_prior, mu_delta, sigma_delta, weak_mu_sd, apply_sigma_regularization, log_sigma_raw, weak_log_sigma_sd, tol) {
+    .Call(`_alfakR_alfak_joint_objective_cpp`, f_rel, x0, nn_fitness, counts_fq, timepoints, viability_vec, g0_val, correct_efflux, nn_parent_indices, nn_pij_values, birth_times, child_obs, ntot, use_prior, mu_delta, sigma_delta, weak_mu_sd, apply_sigma_regularization, log_sigma_raw, weak_log_sigma_sd, tol)
+}
+
 alfak_qr_accum_cpp <- function(x_trim, dx_dt) {
     .Call(`_alfakR_alfak_qr_accum_cpp`, x_trim, dx_dt)
 }

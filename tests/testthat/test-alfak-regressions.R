@@ -52,6 +52,70 @@ reference_neighbor_objective <- function(fc_param, parent_fitness, pij_values,
   -sum(res)
 }
 
+reference_joint_bayes_objective <- function(f_rel, x0, nn_fitness,
+                                            counts_fq, timepoints, viability_vec,
+                                            g0_val, correct_efflux,
+                                            nn_parent_indices, nn_pij_values,
+                                            birth_times, child_obs, ntot,
+                                            use_prior, mu_delta, sigma_delta,
+                                            weak_mu_sd, apply_sigma_regularization,
+                                            log_sigma_raw, weak_log_sigma_sd, tol) {
+  total <- 0
+  if (length(f_rel) > 1) {
+    total <- total + reference_neg_log_lik(
+      c(f_rel[-length(f_rel)], alfakR:::free_softmax_logits(x0)),
+      counts_fq,
+      timepoints
+    )
+  }
+
+  if (isTRUE(correct_efflux)) {
+    sum_weighted_frel <- sum((x0 * f_rel) / viability_vec)
+    sum_weights <- sum(x0 / viability_vec)
+    k_const <- (sum_weighted_frel - g0_val) / sum_weights
+    f_abs <- (f_rel - k_const) / viability_vec
+  } else {
+    f_abs <- f_rel + g0_val - sum(x0 * f_rel)
+  }
+
+  xfit <- reference_project_forward_log(x0, f_abs, timepoints)
+  for (child_idx in seq_along(nn_parent_indices)) {
+    parent_idx <- nn_parent_indices[[child_idx]]
+    parent_fitness <- f_abs[parent_idx]
+    parent_weights <- nn_pij_values[[child_idx]]
+    parent_fitness_mean <- if (all(is.finite(parent_weights)) &&
+                               all(parent_weights >= 0) &&
+                               sum(parent_weights) > 0) {
+      stats::weighted.mean(parent_fitness, parent_weights)
+    } else {
+      mean(parent_fitness)
+    }
+    total <- total + reference_neighbor_objective(
+      fc_param = nn_fitness[child_idx],
+      parent_fitness = parent_fitness,
+      pij_values = parent_weights,
+      parent_birth_times = birth_times[parent_idx],
+      timepoints = timepoints,
+      parent_xfit = xfit[parent_idx, , drop = FALSE],
+      child_obs = child_obs[child_idx, ],
+      ntot = ntot,
+      parent_fitness_mean = parent_fitness_mean,
+      prior_mean = if (isTRUE(use_prior)) mu_delta else 0,
+      prior_sd = if (isTRUE(use_prior)) sigma_delta else 1,
+      do_prior = isTRUE(use_prior),
+      tol = tol
+    )
+  }
+
+  if (isTRUE(use_prior)) {
+    total <- total + 0.5 * (mu_delta / weak_mu_sd)^2
+  }
+  if (isTRUE(apply_sigma_regularization)) {
+    total <- total + 0.5 * (log_sigma_raw / weak_log_sigma_sd)^2
+  }
+  total
+}
+
 make_simple_yi <- function(x, dt = 1) {
   list(x = x, dt = dt)
 }
@@ -380,6 +444,247 @@ test_that("alfak validates optional arguments before running heavy work", {
   expect_true(isTRUE(seen$solve_called))
 })
 
+test_that("alfak validates fit_mode", {
+  yi <- make_simple_yi(
+    make_counts(
+      c(10, 12,
+        20, 18),
+      rownames_vec = c("2.2.2", "2.2.1"),
+      colnames_vec = c("0", "1")
+    )
+  )
+
+  expect_error(
+    alfakR::alfak(
+      yi = yi,
+      outdir = tempfile("alfak_bad_fit_mode_"),
+      minobs = 1,
+      nboot = 1,
+      n0 = 1e4,
+      nb = 1e6,
+      pm = 1e-4,
+      fit_mode = "not_a_mode"
+    ),
+    "`fit_mode`"
+  )
+})
+
+test_that("alfak routes fit_mode = 'bootstrap' to solve_fitness_bootstrap", {
+  yi <- make_simple_yi(
+    make_counts(
+      c(10, 12,
+        20, 18),
+      rownames_vec = c("2.2.2", "2.2.1"),
+      colnames_vec = c("0", "1")
+    )
+  )
+  seen <- new.env(parent = emptyenv())
+  fq_boot_stub <- list(
+    initial_fitness = matrix(0, nrow = 1, ncol = 1, dimnames = list(NULL, "2.2.2")),
+    final_fitness = matrix(0, nrow = 1, ncol = 1, dimnames = list(NULL, "2.2.2")),
+    initial_frequencies = matrix(1, nrow = 1, ncol = 1, dimnames = list(NULL, "2.2.2")),
+    final_frequencies = matrix(1, nrow = 1, ncol = 1, dimnames = list(NULL, "2.2.2")),
+    nn_fitness = matrix(numeric(0), nrow = 1, ncol = 0)
+  )
+  landscape_stub <- list(
+    summary_stats = data.frame(k = "2.2.2", mean = 0, median = 0, sd = 0, fq = TRUE, nn = FALSE),
+    posterior_samples = matrix(0, nrow = 1, ncol = 1),
+    krig_stable_mean = NULL,
+    krig_stable_median = NULL
+  )
+
+  testthat::with_mocked_bindings(
+    {
+      invisible(alfakR::alfak(
+        yi = yi,
+        outdir = tempfile("alfak_bootstrap_route_"),
+        minobs = 1,
+        nboot = 1,
+        n0 = 1e4,
+        nb = 1e6,
+        pm = 1e-4,
+        fit_mode = "bootstrap"
+      ))
+    },
+    solve_fitness_bootstrap = function(...) {
+      seen$bootstrap_called <- TRUE
+      fq_boot_stub
+    },
+    solve_fitness_joint_bayes = function(...) {
+      seen$joint_called <- TRUE
+      fq_boot_stub
+    },
+    fitKrig = function(...) landscape_stub,
+    xval = function(...) 0.1,
+    .package = "alfakR"
+  )
+
+  expect_true(isTRUE(seen$bootstrap_called))
+  expect_false(isTRUE(seen$joint_called))
+})
+
+test_that("alfak routes fit_mode = 'joint_bayes' to solve_fitness_joint_bayes", {
+  yi <- make_simple_yi(
+    make_counts(
+      c(10, 12,
+        20, 18),
+      rownames_vec = c("2.2.2", "2.2.1"),
+      colnames_vec = c("0", "1")
+    )
+  )
+  seen <- new.env(parent = emptyenv())
+  fq_boot_stub <- list(
+    initial_fitness = matrix(0, nrow = 1, ncol = 1, dimnames = list(NULL, "2.2.2")),
+    final_fitness = matrix(0, nrow = 1, ncol = 1, dimnames = list(NULL, "2.2.2")),
+    initial_frequencies = matrix(1, nrow = 1, ncol = 1, dimnames = list(NULL, "2.2.2")),
+    final_frequencies = matrix(1, nrow = 1, ncol = 1, dimnames = list(NULL, "2.2.2")),
+    nn_fitness = matrix(numeric(0), nrow = 1, ncol = 0)
+  )
+  landscape_stub <- list(
+    summary_stats = data.frame(k = "2.2.2", mean = 0, median = 0, sd = 0, fq = TRUE, nn = FALSE),
+    posterior_samples = matrix(0, nrow = 1, ncol = 1),
+    krig_stable_mean = NULL,
+    krig_stable_median = NULL
+  )
+
+  testthat::with_mocked_bindings(
+    {
+      invisible(alfakR::alfak(
+        yi = yi,
+        outdir = tempfile("alfak_joint_route_"),
+        minobs = 1,
+        nboot = 1,
+        n0 = 1e4,
+        nb = 1e6,
+        pm = 1e-4,
+        fit_mode = "joint_bayes"
+      ))
+    },
+    solve_fitness_bootstrap = function(...) {
+      seen$bootstrap_called <- TRUE
+      fq_boot_stub
+    },
+    solve_fitness_joint_bayes = function(...) {
+      seen$joint_called <- TRUE
+      fq_boot_stub
+    },
+    fitKrig = function(...) landscape_stub,
+    xval = function(...) 0.1,
+    .package = "alfakR"
+  )
+
+  expect_false(isTRUE(seen$bootstrap_called))
+  expect_true(isTRUE(seen$joint_called))
+})
+
+test_that("solve_fitness_joint_bayes returns the downstream contract on a toy dataset", {
+  yi <- make_simple_yi(
+    make_counts(
+      c(12, 11,
+        8, 9),
+      rownames_vec = c("2.2.2", "2.2.3"),
+      colnames_vec = c("0", "1")
+    )
+  )
+  seen <- new.env(parent = emptyenv())
+
+  res <- testthat::with_mocked_bindings(
+    {
+      alfakR:::solve_fitness_joint_bayes(
+        yi,
+        minobs = 1,
+        nboot = 2,
+        n0 = 1e4,
+        nb = 1e6,
+        pm = 1e-4,
+        nn_prior = "empirical_censored"
+      )
+    },
+    run_solve_qp_checked = function(...) {
+      list(solution = c(0.1, -0.1))
+    },
+    optimize_initial_frequencies = function(x_obs, f, timepoints) {
+      c(0.6, 0.4)
+    },
+    joint_optimize = function(counts, timepoints, f_init, x0_init) {
+      list(f = c(0.2, -0.2), x0 = c(0.55, 0.45))
+    },
+    find_birth_times = function(opt_res, time_range, minF) {
+      c(-1, 0)
+    },
+    gen_nn_info = function(fq, pm) {
+      nn <- list(
+        list(ni = "2.2.1", nj = c("2.2.2", "2.2.3"), pij = c(0.2, 0.1)),
+        list(ni = "2.2.4", nj = "2.2.3", pij = 0.3)
+      )
+      names(nn) <- c("2.2.1", "2.2.4")
+      nn
+    },
+    alfak_joint_objective_cpp = function(...) {
+      seen$joint_objective_called <- TRUE
+      0
+    },
+    run_nlminb_strict_checked = function(start, objective, ..., context) {
+      objective(start)
+      list(par = start, objective = 0)
+    },
+    joint_bayes_draw_laplace_samples = function(map_par, objective_fn, n_draws, context) {
+      matrix(rep(map_par, times = n_draws), nrow = n_draws, byrow = TRUE)
+    },
+    .package = "alfakR"
+  )
+
+  expect_named(
+    res,
+    c(
+      "initial_fitness",
+      "final_fitness",
+      "initial_frequencies",
+      "final_frequencies",
+      "nn_fitness",
+      "fit_mode",
+      "draw_type",
+      "map",
+      "prefit"
+    )
+  )
+  expect_identical(dim(res$initial_fitness), c(2L, 2L))
+  expect_identical(dim(res$final_fitness), c(2L, 2L))
+  expect_identical(dim(res$initial_frequencies), c(2L, 2L))
+  expect_identical(dim(res$final_frequencies), c(2L, 2L))
+  expect_identical(dim(res$nn_fitness), c(2L, 2L))
+  expect_equal(colnames(res$final_fitness), c("2.2.2", "2.2.3"))
+  expect_equal(colnames(res$final_frequencies), c("2.2.2", "2.2.3"))
+  expect_equal(colnames(res$nn_fitness), c("2.2.1", "2.2.4"))
+  expect_identical(res$fit_mode, "joint_bayes")
+  expect_identical(res$draw_type, "laplace")
+  expect_true(isTRUE(seen$joint_objective_called))
+})
+
+test_that("solve_fitness_joint_bayes rejects nn_prior = 'empirical' in Stage 1", {
+  yi <- make_simple_yi(
+    make_counts(
+      c(10, 12,
+        20, 18),
+      rownames_vec = c("2.2.2", "2.2.1"),
+      colnames_vec = c("0", "1")
+    )
+  )
+
+  expect_error(
+    alfakR:::solve_fitness_joint_bayes(
+      yi,
+      minobs = 1,
+      nboot = 1,
+      n0 = 1e4,
+      nb = 1e6,
+      pm = 1e-4,
+      nn_prior = "empirical"
+    ),
+    "not implemented"
+  )
+})
+
 test_that("solve_fitness_bootstrap validates bootstrap controls and pm before neighbour generation", {
   yi <- make_simple_yi(
     make_counts(
@@ -550,6 +855,69 @@ test_that("C++ numerical kernels match the previous R reference calculations", {
   qr_cpp <- alfakR:::alfak_qr_accum_cpp(x_trim, dx_dt)
   expect_equal(qr_cpp$Q_accum, qr_ref$Q_accum, tolerance = 1e-12)
   expect_equal(qr_cpp$r_accum, qr_ref$r_accum, tolerance = 1e-12)
+
+  f_rel_joint <- c(0.2, -0.2)
+  x0_joint <- c(0.55, 0.45)
+  nn_fitness_joint <- c(4.1, 4.4)
+  counts_joint <- matrix(c(12, 11,
+                           8, 9), nrow = 2, byrow = TRUE)
+  viability_joint <- c(1, 1)
+  g0_joint <- 4.6
+  nn_parent_indices <- list(c(1L, 2L), 2L)
+  nn_pij_values <- list(c(0.2, 0.1), 0.3)
+  birth_times_joint <- c(-1, 0)
+  child_obs_joint <- matrix(c(1, 0,
+                              0, 0), nrow = 2, byrow = TRUE)
+  ntot_joint <- c(20, 20)
+  expect_equal(
+    alfakR:::alfak_joint_objective_cpp(
+      f_rel = f_rel_joint,
+      x0 = x0_joint,
+      nn_fitness = nn_fitness_joint,
+      counts_fq = counts_joint,
+      timepoints = c(0, 1),
+      viability_vec = viability_joint,
+      g0_val = g0_joint,
+      correct_efflux = FALSE,
+      nn_parent_indices = nn_parent_indices,
+      nn_pij_values = nn_pij_values,
+      birth_times = birth_times_joint,
+      child_obs = child_obs_joint,
+      ntot = ntot_joint,
+      use_prior = TRUE,
+      mu_delta = -0.1,
+      sigma_delta = 0.3,
+      weak_mu_sd = 5,
+      apply_sigma_regularization = TRUE,
+      log_sigma_raw = -0.2,
+      weak_log_sigma_sd = 2,
+      tol = alfakR:::ALFAK_FEXP_DELTA_TOL
+    ),
+    reference_joint_bayes_objective(
+      f_rel = f_rel_joint,
+      x0 = x0_joint,
+      nn_fitness = nn_fitness_joint,
+      counts_fq = counts_joint,
+      timepoints = c(0, 1),
+      viability_vec = viability_joint,
+      g0_val = g0_joint,
+      correct_efflux = FALSE,
+      nn_parent_indices = nn_parent_indices,
+      nn_pij_values = nn_pij_values,
+      birth_times = birth_times_joint,
+      child_obs = child_obs_joint,
+      ntot = ntot_joint,
+      use_prior = TRUE,
+      mu_delta = -0.1,
+      sigma_delta = 0.3,
+      weak_mu_sd = 5,
+      apply_sigma_regularization = TRUE,
+      log_sigma_raw = -0.2,
+      weak_log_sigma_sd = 2,
+      tol = alfakR:::ALFAK_FEXP_DELTA_TOL
+    ),
+    tolerance = 1e-12
+  )
 })
 
 test_that("C++ numerical kernels validate dimensions and non-finite inputs", {
@@ -589,6 +957,33 @@ test_that("C++ numerical kernels validate dimensions and non-finite inputs", {
       tol = 1e-8
     ),
     "matching lengths/rows"
+  )
+
+  expect_error(
+    alfakR:::alfak_joint_objective_cpp(
+      f_rel = c(0.1, -0.1),
+      x0 = c(0.5, 0.5),
+      nn_fitness = 0.2,
+      counts_fq = matrix(c(10, 12, 20, 18), nrow = 2, byrow = TRUE),
+      timepoints = c(0, 1),
+      viability_vec = c(1, 1),
+      g0_val = 4,
+      correct_efflux = FALSE,
+      nn_parent_indices = list(c(1L, 3L)),
+      nn_pij_values = list(c(0.1, 0.2)),
+      birth_times = c(0, 1),
+      child_obs = matrix(c(0, 1), nrow = 1),
+      ntot = c(10, 10),
+      use_prior = FALSE,
+      mu_delta = 0,
+      sigma_delta = 1,
+      weak_mu_sd = 5,
+      apply_sigma_regularization = FALSE,
+      log_sigma_raw = 0,
+      weak_log_sigma_sd = 2,
+      tol = 1e-8
+    ),
+    "parent index"
   )
 })
 
@@ -1708,7 +2103,7 @@ test_that("landscape_data_output controls whether landscape_data.Rds is written"
   unlink(outdir_false, recursive = TRUE)
   unlink(outdir_true, recursive = TRUE)
 
-  testthat::with_mocked_bindings(
+testthat::with_mocked_bindings(
     {
       invisible(alfakR::alfak(
         yi = yi,
@@ -1739,6 +2134,66 @@ test_that("landscape_data_output controls whether landscape_data.Rds is written"
     solve_fitness_bootstrap = function(...) fq_boot_stub,
     fitKrig = function(...) landscape_stub,
     xval = function(...) xval_stub,
+    .package = "alfakR"
+  )
+})
+
+test_that("alfak with fit_mode = 'joint_bayes' still writes the core output files", {
+  yi <- list(
+    x = make_counts(
+      c(10, 12,
+        20, 18),
+      rownames_vec = c("2.2.2", "2.2.1"),
+      colnames_vec = c("0", "1")
+    ),
+    dt = 1
+  )
+  fq_boot_stub <- list(
+    initial_fitness = matrix(0, nrow = 2, ncol = 1, dimnames = list(NULL, "2.2.2")),
+    final_fitness = matrix(0, nrow = 2, ncol = 1, dimnames = list(NULL, "2.2.2")),
+    initial_frequencies = matrix(1, nrow = 2, ncol = 1, dimnames = list(NULL, "2.2.2")),
+    final_frequencies = matrix(1, nrow = 2, ncol = 1, dimnames = list(NULL, "2.2.2")),
+    nn_fitness = matrix(numeric(0), nrow = 2, ncol = 0),
+    fit_mode = "joint_bayes",
+    draw_type = "laplace"
+  )
+  landscape_stub <- list(
+    summary_stats = data.frame(
+      k = "2.2.2",
+      mean = 0,
+      median = 0,
+      sd = 0,
+      fq = TRUE,
+      nn = FALSE
+    ),
+    posterior_samples = matrix(0, nrow = 1, ncol = 1),
+    krig_stable_mean = NULL,
+    krig_stable_median = NULL
+  )
+  outdir <- file.path(tempdir(), "alfak_joint_bayes_outputs")
+  unlink(outdir, recursive = TRUE)
+
+  testthat::with_mocked_bindings(
+    {
+      invisible(alfakR::alfak(
+        yi = yi,
+        outdir = outdir,
+        passage_times = NULL,
+        minobs = 1,
+        nboot = 2,
+        n0 = 1e4,
+        nb = 1e6,
+        pm = 1e-4,
+        fit_mode = "joint_bayes"
+      ))
+      expect_true(file.exists(file.path(outdir, "bootstrap_res.Rds")))
+      expect_true(file.exists(file.path(outdir, "landscape.Rds")))
+      expect_true(file.exists(file.path(outdir, "landscape_posterior_samples.Rds")))
+      expect_true(file.exists(file.path(outdir, "xval.Rds")))
+    },
+    solve_fitness_joint_bayes = function(...) fq_boot_stub,
+    fitKrig = function(...) landscape_stub,
+    xval = function(...) 0.25,
     .package = "alfakR"
   )
 })

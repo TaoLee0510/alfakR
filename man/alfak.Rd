@@ -16,6 +16,7 @@ alfak(
   allow_noninteger_counts = FALSE,
   correct_efflux = FALSE,
   landscape_data_output = FALSE,
+  fit_mode = c("bootstrap", "joint_bayes"),
   nn_prior = c("empirical_censored", "none", "empirical"),
   nn_prior_sd = NULL,
   nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
@@ -74,18 +75,32 @@ rather than a chromosome-specific model.}
 model objects. Default is \code{FALSE}, so only the documented core outputs are
 written.}
 
+\item{fit_mode}{Character; backend used for the frequent-state and nearest-
+neighbour fit.
+\code{"bootstrap"} (default) keeps the current nonparametric bootstrap path.
+\code{"joint_bayes"} enables the Stage 1 joint MAP + Laplace backend: birth-time
+scaffolding is frozen from a deterministic pre-fit, \code{nboot} controls the
+number of approximate posterior draws, and the return object preserves the
+current downstream contract expected by \code{fitKrig()} and \code{xval()}.}
+
 \item{nn_prior}{Character; nearest-neighbour prior mode for latent children.
 \code{"empirical_censored"} fits an empirical-Bayes prior from all neighbour
 children, including zero-count latent neighbours, to correct observation
 bias. This mode errors if the prior hyperparameter fit fails and is the
-default.
+default for \code{fit_mode = "bootstrap"}.
 \code{"none"} disables the latent-neighbour prior contribution.
 \code{"empirical"} opt-in uses the empirical child-minus-parent prior estimated
 from observed neighbours.
+Under \code{fit_mode = "joint_bayes"}, \code{"empirical_censored"} is treated as a
+compatibility alias for a jointly inferred shared Gaussian child-minus-
+parent offset prior, \code{"none"} disables that prior, and \code{"empirical"} is
+not implemented in Stage 1.
 Default is \code{"empirical_censored"}.}
 
 \item{nn_prior_sd}{Optional numeric scalar. If supplied, this overrides the
-empirically estimated prior standard deviation for latent-neighbour fitting.}
+empirically estimated prior standard deviation for latent-neighbour fitting.
+Under \code{fit_mode = "joint_bayes"} with \code{nn_prior = "empirical_censored"},
+this instead fixes the shared Gaussian child-minus-parent prior SD.}
 
 \item{nn_prior_sd_floor}{Numeric scalar giving the minimum standard deviation
 used when the empirical prior variance is zero or too small. Default is
@@ -105,7 +120,8 @@ across karyotypes.}
 Returns the cross-validation R-squared value (\code{Rxv}) invisibly.
 The function primarily saves its results to RDS files in the \code{outdir}:
 \itemize{
-\item \code{bootstrap_res.Rds}: Results from \code{solve_fitness_bootstrap}.
+\item \code{bootstrap_res.Rds}: Results from \code{solve_fitness_bootstrap()} or
+the Stage 1 \code{solve_fitness_joint_bayes()} backend.
 \item \code{landscape.Rds}: Summary statistics (mean, median, sd) of the
 Kriging-inferred fitness landscape from \code{fitKrig}.
 \item \code{landscape_posterior_samples.Rds}: The full matrix of posterior

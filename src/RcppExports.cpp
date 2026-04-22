@@ -83,6 +83,37 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// alfak_joint_objective_cpp
+double alfak_joint_objective_cpp(Rcpp::NumericVector f_rel, Rcpp::NumericVector x0, Rcpp::NumericVector nn_fitness, Rcpp::NumericMatrix counts_fq, Rcpp::NumericVector timepoints, Rcpp::NumericVector viability_vec, double g0_val, bool correct_efflux, Rcpp::List nn_parent_indices, Rcpp::List nn_pij_values, Rcpp::NumericVector birth_times, Rcpp::NumericMatrix child_obs, Rcpp::NumericVector ntot, bool use_prior, double mu_delta, double sigma_delta, double weak_mu_sd, bool apply_sigma_regularization, double log_sigma_raw, double weak_log_sigma_sd, double tol);
+RcppExport SEXP _alfakR_alfak_joint_objective_cpp(SEXP f_relSEXP, SEXP x0SEXP, SEXP nn_fitnessSEXP, SEXP counts_fqSEXP, SEXP timepointsSEXP, SEXP viability_vecSEXP, SEXP g0_valSEXP, SEXP correct_effluxSEXP, SEXP nn_parent_indicesSEXP, SEXP nn_pij_valuesSEXP, SEXP birth_timesSEXP, SEXP child_obsSEXP, SEXP ntotSEXP, SEXP use_priorSEXP, SEXP mu_deltaSEXP, SEXP sigma_deltaSEXP, SEXP weak_mu_sdSEXP, SEXP apply_sigma_regularizationSEXP, SEXP log_sigma_rawSEXP, SEXP weak_log_sigma_sdSEXP, SEXP tolSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type f_rel(f_relSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type x0(x0SEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type nn_fitness(nn_fitnessSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type counts_fq(counts_fqSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type timepoints(timepointsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type viability_vec(viability_vecSEXP);
+    Rcpp::traits::input_parameter< double >::type g0_val(g0_valSEXP);
+    Rcpp::traits::input_parameter< bool >::type correct_efflux(correct_effluxSEXP);
+    Rcpp::traits::input_parameter< Rcpp::List >::type nn_parent_indices(nn_parent_indicesSEXP);
+    Rcpp::traits::input_parameter< Rcpp::List >::type nn_pij_values(nn_pij_valuesSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type birth_times(birth_timesSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type child_obs(child_obsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type ntot(ntotSEXP);
+    Rcpp::traits::input_parameter< bool >::type use_prior(use_priorSEXP);
+    Rcpp::traits::input_parameter< double >::type mu_delta(mu_deltaSEXP);
+    Rcpp::traits::input_parameter< double >::type sigma_delta(sigma_deltaSEXP);
+    Rcpp::traits::input_parameter< double >::type weak_mu_sd(weak_mu_sdSEXP);
+    Rcpp::traits::input_parameter< bool >::type apply_sigma_regularization(apply_sigma_regularizationSEXP);
+    Rcpp::traits::input_parameter< double >::type log_sigma_raw(log_sigma_rawSEXP);
+    Rcpp::traits::input_parameter< double >::type weak_log_sigma_sd(weak_log_sigma_sdSEXP);
+    Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
+    rcpp_result_gen = Rcpp::wrap(alfak_joint_objective_cpp(f_rel, x0, nn_fitness, counts_fq, timepoints, viability_vec, g0_val, correct_efflux, nn_parent_indices, nn_pij_values, birth_times, child_obs, ntot, use_prior, mu_delta, sigma_delta, weak_mu_sd, apply_sigma_regularization, log_sigma_raw, weak_log_sigma_sd, tol));
+    return rcpp_result_gen;
+END_RCPP
+}
 // alfak_qr_accum_cpp
 Rcpp::List alfak_qr_accum_cpp(Rcpp::NumericMatrix x_trim, Rcpp::NumericMatrix dx_dt);
 RcppExport SEXP _alfakR_alfak_qr_accum_cpp(SEXP x_trimSEXP, SEXP dx_dtSEXP) {
@@ -267,6 +298,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_alfakR_alfak_project_forward_log_cpp", (DL_FUNC) &_alfakR_alfak_project_forward_log_cpp, 3},
     {"_alfakR_alfak_neg_log_lik_cpp", (DL_FUNC) &_alfakR_alfak_neg_log_lik_cpp, 3},
     {"_alfakR_alfak_neighbor_objective_cpp", (DL_FUNC) &_alfakR_alfak_neighbor_objective_cpp, 13},
+    {"_alfakR_alfak_joint_objective_cpp", (DL_FUNC) &_alfakR_alfak_joint_objective_cpp, 21},
     {"_alfakR_alfak_qr_accum_cpp", (DL_FUNC) &_alfakR_alfak_qr_accum_cpp, 2},
     {"_alfakR_pij_cpp", (DL_FUNC) &_alfakR_pij_cpp, 3},
     {"_alfakR_get_A_inputs", (DL_FUNC) &_alfakR_get_A_inputs, 3},

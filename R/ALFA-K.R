@@ -44,17 +44,30 @@
 #'   `landscape_data.Rds` file containing the stable Kriging mean and median
 #'   model objects. Default is `FALSE`, so only the documented core outputs are
 #'   written.
+#' @param fit_mode Character; backend used for the frequent-state and nearest-
+#'   neighbour fit.
+#'   `"bootstrap"` (default) keeps the current nonparametric bootstrap path.
+#'   `"joint_bayes"` enables the Stage 1 joint MAP + Laplace backend: birth-time
+#'   scaffolding is frozen from a deterministic pre-fit, `nboot` controls the
+#'   number of approximate posterior draws, and the return object preserves the
+#'   current downstream contract expected by `fitKrig()` and `xval()`.
 #' @param nn_prior Character; nearest-neighbour prior mode for latent children.
 #'   `"empirical_censored"` fits an empirical-Bayes prior from all neighbour
 #'   children, including zero-count latent neighbours, to correct observation
 #'   bias. This mode errors if the prior hyperparameter fit fails and is the
-#'   default.
+#'   default for `fit_mode = "bootstrap"`.
 #'   `"none"` disables the latent-neighbour prior contribution.
 #'   `"empirical"` opt-in uses the empirical child-minus-parent prior estimated
 #'   from observed neighbours.
+#'   Under `fit_mode = "joint_bayes"`, `"empirical_censored"` is treated as a
+#'   compatibility alias for a jointly inferred shared Gaussian child-minus-
+#'   parent offset prior, `"none"` disables that prior, and `"empirical"` is
+#'   not implemented in Stage 1.
 #'   Default is `"empirical_censored"`.
 #' @param nn_prior_sd Optional numeric scalar. If supplied, this overrides the
 #'   empirically estimated prior standard deviation for latent-neighbour fitting.
+#'   Under `fit_mode = "joint_bayes"` with `nn_prior = "empirical_censored"`,
+#'   this instead fixes the shared Gaussian child-minus-parent prior SD.
 #' @param nn_prior_sd_floor Numeric scalar giving the minimum standard deviation
 #'   used when the empirical prior variance is zero or too small. Default is
 #'   `1e-3`.
@@ -70,7 +83,8 @@
 #' @return Returns the cross-validation R-squared value (`Rxv`) invisibly.
 #'   The function primarily saves its results to RDS files in the `outdir`:
 #'   \itemize{
-#'     \item `bootstrap_res.Rds`: Results from `solve_fitness_bootstrap`.
+#'     \item `bootstrap_res.Rds`: Results from `solve_fitness_bootstrap()` or
+#'       the Stage 1 `solve_fitness_joint_bayes()` backend.
 #'     \item `landscape.Rds`: Summary statistics (mean, median, sd) of the
 #'       Kriging-inferred fitness landscape from `fitKrig`.
 #'     \item `landscape_posterior_samples.Rds`: The full matrix of posterior
@@ -132,6 +146,7 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
                   allow_noninteger_counts = FALSE,
                   correct_efflux=FALSE,
                   landscape_data_output = FALSE,
+                  fit_mode = c("bootstrap", "joint_bayes"),
                   nn_prior = c("empirical_censored", "none", "empirical"),
                   nn_prior_sd = NULL,
                   nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
@@ -148,6 +163,7 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
   validate_scalar_logical(allow_noninteger_counts, "allow_noninteger_counts")
   validate_scalar_logical(correct_efflux, "correct_efflux")
   validate_scalar_logical(landscape_data_output, "landscape_data_output")
+  fit_mode <- validate_fit_mode(fit_mode)
   nn_prior <- validate_nn_prior_mode(nn_prior)
   krig_bootstrap_mode <- validate_krig_bootstrap_mode(krig_bootstrap_mode)
   validate_nn_prior_controls(
@@ -163,14 +179,24 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
 
   # Parallelism and cl related code removed
 
-  fq_boot <- solve_fitness_bootstrap(yi, minobs = minobs, nboot = nboot,
-                                     n0 = n0, nb = nb, pm = pm,
-                                     allow_noninteger_counts = allow_noninteger_counts,
-                                     passage_times = passage_times,correct_efflux=correct_efflux,
-                                     nn_prior = nn_prior,
-                                     nn_prior_sd = nn_prior_sd,
-                                     nn_prior_sd_floor = nn_prior_sd_floor,
-                                     nn_prior_grid_n = nn_prior_grid_n)
+  if (fit_mode == "bootstrap") {
+    fq_boot <- solve_fitness_bootstrap(yi, minobs = minobs, nboot = nboot,
+                                       n0 = n0, nb = nb, pm = pm,
+                                       allow_noninteger_counts = allow_noninteger_counts,
+                                       passage_times = passage_times,correct_efflux=correct_efflux,
+                                       nn_prior = nn_prior,
+                                       nn_prior_sd = nn_prior_sd,
+                                       nn_prior_sd_floor = nn_prior_sd_floor,
+                                       nn_prior_grid_n = nn_prior_grid_n)
+  } else {
+    fq_boot <- solve_fitness_joint_bayes(yi, minobs = minobs, nboot = nboot,
+                                         n0 = n0, nb = nb, pm = pm,
+                                         allow_noninteger_counts = allow_noninteger_counts,
+                                         passage_times = passage_times,correct_efflux=correct_efflux,
+                                         nn_prior = nn_prior,
+                                         nn_prior_sd = nn_prior_sd,
+                                         nn_prior_sd_floor = nn_prior_sd_floor)
+  }
   saveRDS(fq_boot, file = file.path(outdir, "bootstrap_res.Rds"))
 
   landscape_data <- fitKrig(fq_boot, nboot, krig_bootstrap_mode = krig_bootstrap_mode)
@@ -356,6 +382,18 @@ validate_probability <- function(x, name, upper_inclusive = FALSE) {
 #' @noRd
 validate_krig_bootstrap_mode <- function(mode) {
   match.arg(mode, c("marginal", "joint"))
+}
+
+#' Validate fitter backend selection
+#' @keywords internal
+#' @noRd
+validate_fit_mode <- function(mode) {
+  tryCatch(
+    match.arg(mode, c("bootstrap", "joint_bayes")),
+    error = function(...) {
+      stop("`fit_mode` must be one of 'bootstrap' or 'joint_bayes'.", call. = FALSE)
+    }
+  )
 }
 
 #' Validate that every timepoint has positive sequencing depth
