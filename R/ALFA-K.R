@@ -460,6 +460,12 @@ coerce_count_matrix <- function(x, allow_noninteger_counts = FALSE) {
   }
   x_dim <- dim(x)
   if (length(x_dim) != 2) {
+    if (is.numeric(x) && is.null(x_dim)) {
+      stop(
+        "`yi$x`/`data$x` must be a two-dimensional numeric count object. Received a vector instead; this usually means a one-column subset dropped matrix dimensions. Use `drop = FALSE` when subsetting count matrices.",
+        call. = FALSE
+      )
+    }
     stop("`yi$x`/`data$x` must be a two-dimensional numeric count object.")
   }
 

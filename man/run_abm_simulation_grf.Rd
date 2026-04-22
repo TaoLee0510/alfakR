@@ -54,7 +54,7 @@ Use \code{-1} to record only at culling events. \code{0} is invalid.}
 }
 \value{
 A \strong{wide data‑frame}: first column \code{time}, remaining columns
-one per karyotype, giving relative frequencies at each sampled time.
+one per karyotype, giving relative frequencies at each recorded ABM time point.
 }
 \description{
 This function runs the C++ agent‑based model (\code{run_karyotype_abm}) in

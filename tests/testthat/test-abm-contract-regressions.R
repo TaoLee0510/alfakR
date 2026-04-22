@@ -168,7 +168,7 @@ test_that("abm_max_pop accepts unlimited and capped semantics in regular and GRF
   expect_identical(grf_caps, c(-1, 0, 5))
 })
 
-test_that("ABM wrappers return time columns exactly as requested and preserve duplicates", {
+test_that("ABM wrappers pass through cull-only mode and return recorded ABM steps", {
   lscape <- data.frame(k = c("2.2", "3.1"), mean = c(0.1, 0.2), stringsAsFactors = FALSE)
   x0 <- c("2.2" = 0.25, "3.1" = 0.75)
   requested_times <- c(0, 0, 0.1)
@@ -203,10 +203,11 @@ test_that("ABM wrappers return time columns exactly as requested and preserve du
     .package = "alfakR"
   )
 
-  expect_identical(regular_interval, 1L)
-  expect_identical(regular_res$time, requested_times)
-  expect_identical(nrow(regular_res), length(requested_times))
-  expect_identical(as.list(regular_res[1, c("2.2", "3.1")]), as.list(regular_res[2, c("2.2", "3.1")]))
+  expect_identical(regular_interval, -1L)
+  expect_identical(regular_res$time, c(0, 0.1))
+  expect_identical(nrow(regular_res), 2L)
+  expect_equal(as.numeric(regular_res[1, c("2.2", "3.1")]), c(0.25, 0.75))
+  expect_equal(as.numeric(regular_res[2, c("2.2", "3.1")]), c(0.4, 0.6))
 
   grf_res <- testthat::with_mocked_bindings(
     {
@@ -234,47 +235,107 @@ test_that("ABM wrappers return time columns exactly as requested and preserve du
     .package = "alfakR"
   )
 
-  expect_identical(grf_interval, 1L)
-  expect_identical(grf_res$time, requested_times)
-  expect_identical(nrow(grf_res), length(requested_times))
-  expect_identical(as.list(grf_res[1, "2.2", drop = FALSE]), as.list(grf_res[2, "2.2", drop = FALSE]))
+  expect_identical(grf_interval, -1L)
+  expect_identical(grf_res$time, c(0, 0.1))
+  expect_identical(nrow(grf_res), 2L)
+  expect_identical(as.numeric(grf_res[["2.2"]]), c(1, 1))
 })
 
-test_that("ABM wrappers reject times that do not align with the ABM step grid", {
+test_that("GRF ABM outputs remain compatible with ALFA-K batch fitting scripts", {
+  grf_res <- testthat::with_mocked_bindings(
+    {
+      alfakR::run_abm_simulation_grf(
+        centroids = matrix(c(2, 2, 3, 1), ncol = 2, byrow = TRUE),
+        lambda = 1,
+        p = 0.01,
+        times = c(0, 30),
+        x0 = c("2.2" = 1),
+        abm_pop_size = 100,
+        abm_delta_t = 1,
+        abm_record_interval = -1,
+        abm_seed = 1
+      )
+    },
+    run_karyotype_abm = function(initial_population_r, fitness_map_r, p_missegregation, dt,
+                                 n_steps, max_population_size, culling_survival_fraction,
+                                 record_interval, seed, grf_centroids, grf_lambda) {
+      stats::setNames(
+        lapply(0:30, function(step_idx) stats::setNames(100, "2.2")),
+        as.character(0:30)
+      )
+    },
+    .package = "alfakR"
+  )
+
+  yi <- list(x = t(as.matrix(grf_res[, -1, drop = FALSE])), dt = 1)
+  colnames(yi$x) <- grf_res$time
+  pass_times_all <- as.numeric(colnames(yi$x))
+  pass_times <- tail(pass_times_all[pass_times_all < 12], 2)
+  yi$x <- yi$x[, pass_times_all %in% pass_times, drop = FALSE]
+
+  expect_identical(dim(yi$x), c(1L, 2L))
+  expect_identical(colnames(yi$x), c("10", "11"))
+})
+
+test_that("ABM wrappers allow times off the ABM step grid and return recorded steps", {
   lscape <- data.frame(k = c("2.2", "3.1"), mean = c(0.1, 0.2), stringsAsFactors = FALSE)
   x0 <- c("2.2" = 0.5, "3.1" = 0.5)
 
-  expect_error(
-    suppressMessages(
-      alfakR::predict_evo(
-        lscape = lscape,
+  regular_res <- testthat::with_mocked_bindings(
+    {
+      suppressMessages(
+        alfakR::predict_evo(
+          lscape = lscape,
+          p = 0.01,
+          times = c(0, 0.15),
+          x0 = x0,
+          prediction_type = "ABM",
+          abm_pop_size = 100,
+          abm_delta_t = 0.1,
+          abm_record_interval = 1,
+          abm_seed = 1
+        )
+      )
+    },
+    run_karyotype_abm = function(initial_population_r, fitness_map_r, p_missegregation, dt,
+                                 n_steps, max_population_size, culling_survival_fraction,
+                                 record_interval, seed, grf_centroids, grf_lambda) {
+      list(
+        "0" = stats::setNames(c(50, 50), c("2.2", "3.1")),
+        "1" = stats::setNames(c(40, 60), c("2.2", "3.1")),
+        "2" = stats::setNames(c(30, 70), c("2.2", "3.1"))
+      )
+    },
+    .package = "alfakR"
+  )
+  expect_identical(regular_res$time, c(0, 0.1, 0.2))
+
+  grf_res <- testthat::with_mocked_bindings(
+    {
+      alfakR::run_abm_simulation_grf(
+        centroids = matrix(c(2, 2, 3, 1), ncol = 2, byrow = TRUE),
+        lambda = 1,
         p = 0.01,
         times = c(0, 0.15),
-        x0 = x0,
-        prediction_type = "ABM",
+        x0 = c("2.2" = 1),
         abm_pop_size = 100,
         abm_delta_t = 0.1,
         abm_record_interval = 1,
         abm_seed = 1
       )
-    ),
-    "align exactly with the ABM step grid"
+    },
+    run_karyotype_abm = function(initial_population_r, fitness_map_r, p_missegregation, dt,
+                                 n_steps, max_population_size, culling_survival_fraction,
+                                 record_interval, seed, grf_centroids, grf_lambda) {
+      list(
+        "0" = stats::setNames(c(100), "2.2"),
+        "1" = stats::setNames(c(100), "2.2"),
+        "2" = stats::setNames(c(100), "2.2")
+      )
+    },
+    .package = "alfakR"
   )
-
-  expect_error(
-    alfakR::run_abm_simulation_grf(
-      centroids = matrix(c(2, 2, 3, 1), ncol = 2, byrow = TRUE),
-      lambda = 1,
-      p = 0.01,
-      times = c(0, 0.15),
-      x0 = c("2.2" = 1),
-      abm_pop_size = 100,
-      abm_delta_t = 0.1,
-      abm_record_interval = 1,
-      abm_seed = 1
-    ),
-    "align exactly with the ABM step grid"
-  )
+  expect_identical(grf_res$time, c(0, 0.1, 0.2))
 })
 
 test_that("chrmod kernels validate transition-matrix shape and still accept legal inputs", {

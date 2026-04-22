@@ -138,42 +138,6 @@ largest_remainder_allocate <- function(prob, total_size) {
   counts
 }
 
-abm_times_to_steps <- function(times, abm_delta_t, name = "times") {
-  if (!length(times)) {
-    return(integer(0))
-  }
-  raw_steps <- times / abm_delta_t
-  rounded_steps <- round(raw_steps)
-  tol <- 100 * .Machine$double.eps * pmax(1, abs(raw_steps))
-  if (any(abs(raw_steps - rounded_steps) > tol)) {
-    stop(sprintf("`%s` must align exactly with the ABM step grid defined by `abm_delta_t`.", name), call. = FALSE)
-  }
-  if (any(rounded_steps < 0)) {
-    stop(sprintf("`%s` must contain only non-negative ABM step indices.", name), call. = FALSE)
-  }
-  if (any(rounded_steps > .Machine$integer.max)) {
-    stop("Computed ABM step index exceeds the supported integer range.", call. = FALSE)
-  }
-  as.integer(rounded_steps)
-}
-
-abm_steps_covered_by_record_interval <- function(requested_steps, n_steps, record_interval) {
-  if (!length(requested_steps)) {
-    return(TRUE)
-  }
-  if (record_interval < 0L) {
-    return(all(requested_steps == 0L))
-  }
-  all(requested_steps == 0L | requested_steps == n_steps | (requested_steps %% as.integer(record_interval) == 0L))
-}
-
-resolve_abm_record_interval <- function(requested_steps, n_steps, record_interval) {
-  if (abm_steps_covered_by_record_interval(requested_steps, n_steps, record_interval)) {
-    return(as.integer(record_interval))
-  }
-  1L
-}
-
 prepare_abm_initial_population <- function(x0, abm_pop_size) {
   initial_counts <- largest_remainder_allocate(x0, abm_pop_size)
   if (length(initial_counts) != length(x0) || any(!is.finite(initial_counts)) || any(initial_counts < 0) ||
@@ -185,67 +149,6 @@ prepare_abm_initial_population <- function(x0, abm_pop_size) {
     stop("Initial population for ABM is zero after filtering zero counts.", call. = FALSE)
   }
   initial_pop_list
-}
-
-abm_cpp_results_to_wide <- function(cpp_results, requested_steps, requested_times, known_karyotypes,
-                                    normalize_counts = TRUE, source_label = "ABM") {
-  out <- data.frame(time = requested_times, stringsAsFactors = FALSE)
-  if (!length(cpp_results)) {
-    for (kt_name in known_karyotypes) {
-      out[[kt_name]] <- numeric(length(requested_times))
-    }
-    return(out)
-  }
-
-  result_steps <- names(cpp_results)
-  if (is.null(result_steps) || any(!nzchar(result_steps))) {
-    stop(sprintf("%s simulation returned unnamed step records.", source_label), call. = FALSE)
-  }
-  missing_steps <- setdiff(unique(as.character(requested_steps)), result_steps)
-  if (length(missing_steps) > 0) {
-    stop(
-      sprintf("%s simulation did not record requested ABM step(s): %s", source_label, paste(missing_steps, collapse = ", ")),
-      call. = FALSE
-    )
-  }
-
-  results_by_step <- vector("list", length(cpp_results))
-  names(results_by_step) <- result_steps
-  extra_karyotypes <- character(0)
-
-  for (step_name in result_steps) {
-    counts_vec <- cpp_results[[step_name]]
-    if (length(counts_vec) == 0 || sum(counts_vec, na.rm = TRUE) <= 0) {
-      results_by_step[[step_name]] <- numeric(0)
-      next
-    }
-    values <- as.numeric(counts_vec)
-    karyo_names <- names(counts_vec)
-    if (is.null(karyo_names) && length(values) > 0) {
-      warning(sprintf("%s step %s returned unnamed counts; synthesizing V1, V2, ... labels.", source_label, step_name), call. = FALSE)
-      karyo_names <- paste0("V", seq_along(values))
-    }
-    if (normalize_counts) {
-      values <- values / sum(values)
-    }
-    names(values) <- karyo_names
-    results_by_step[[step_name]] <- values
-    extra_karyotypes <- c(extra_karyotypes, karyo_names)
-  }
-
-  all_karyotypes <- c(known_karyotypes, setdiff(unique(extra_karyotypes), known_karyotypes))
-  for (kt_name in all_karyotypes) {
-    out[[kt_name]] <- numeric(length(requested_times))
-  }
-
-  for (idx in seq_along(requested_steps)) {
-    values <- results_by_step[[as.character(requested_steps[idx])]]
-    if (length(values)) {
-      out[idx, names(values)] <- unname(values)
-    }
-  }
-
-  out
 }
 
 validate_named_frequency_vector <- function(x, expected_names = NULL, expected_dim = NULL, name = "x0") {
@@ -420,9 +323,8 @@ run_abm_simulation <- function(lscape, p, times, x0, abm_pop_size, abm_delta_t,
   
   fitness_map_list <- stats::setNames(as.list(lscape$mean), lscape$k)
   
-  requested_steps <- abm_times_to_steps(times, abm_delta_t)
   max_time <- max(times, na.rm = TRUE)
-  num_steps <- max(requested_steps)
+  num_steps <- ceiling(max_time / abm_delta_t)
   if (!is.finite(num_steps) || num_steps < 0) stop("Number of ABM steps is invalid (max_time / abm_delta_t). Check 'times' and 'abm_delta_t'.", call. = FALSE)
   if (num_steps > 1e7) {
     warning("ABM simulation requires a very large number of steps; check `times` and `abm_delta_t`.", call. = FALSE)
@@ -430,7 +332,6 @@ run_abm_simulation <- function(lscape, p, times, x0, abm_pop_size, abm_delta_t,
   if (num_steps > .Machine$integer.max) {
     stop("Computed number of ABM steps exceeds the supported integer range.", call. = FALSE)
   }
-  effective_record_interval <- resolve_abm_record_interval(requested_steps, num_steps, abm_record_interval)
   
   message(sprintf("Starting ABM simulation for %d steps (up to time %.2f)...", num_steps, max_time))
   sim_results_list_cpp <- tryCatch(
@@ -442,7 +343,7 @@ run_abm_simulation <- function(lscape, p, times, x0, abm_pop_size, abm_delta_t,
       n_steps              = as.integer(num_steps),
       max_population_size  = abm_max_pop,
       culling_survival_fraction = abm_culling_survival,
-      record_interval      = effective_record_interval,
+      record_interval      = as.integer(abm_record_interval),
       seed                 = as.integer(abm_seed),
       grf_centroids        = matrix(numeric(0), nrow = 0, ncol = 0), # CORRECT R equivalent
       grf_lambda           = NA_real_                                # R equivalent
@@ -457,23 +358,81 @@ run_abm_simulation <- function(lscape, p, times, x0, abm_pop_size, abm_delta_t,
   message("Processing ABM results...")
   if (length(sim_results_list_cpp) == 0) {
     warning("ABM simulation returned no results from C++.", call. = FALSE)
-    return(abm_cpp_results_to_wide(
-      cpp_results = list(),
-      requested_steps = requested_steps,
-      requested_times = times,
-      known_karyotypes = names(x0),
-      normalize_counts = TRUE,
-      source_label = "ABM"
-    ))
+    empty_df_res <- data.frame(time = numeric(0))
+    ktypes_all <- names(x0)
+    for (kt_name in ktypes_all) empty_df_res[[kt_name]] <- numeric(0)
+    return(empty_df_res)
   }
-  abm_cpp_results_to_wide(
-    cpp_results = sim_results_list_cpp,
-    requested_steps = requested_steps,
-    requested_times = times,
-    known_karyotypes = names(x0),
-    normalize_counts = TRUE,
-    source_label = "ABM"
-  )
+
+  results_df_list <- lapply(names(sim_results_list_cpp), function(step_name_str) {
+    counts_vec <- sim_results_list_cpp[[step_name_str]]
+    step_num <- as.integer(step_name_str)
+    time_point <- step_num * abm_delta_t
+
+    if (length(counts_vec) > 0 && sum(counts_vec, na.rm = TRUE) > 0) {
+      total_count <- sum(counts_vec, na.rm = TRUE)
+      freq_vec <- counts_vec / total_count
+      karyo_names <- names(freq_vec)
+      if (is.null(karyo_names) && length(freq_vec) > 0) {
+        warning(paste0("Step ", step_name_str, ": ABM counts vector missing names. Using V1, V2..."), call. = FALSE)
+        karyo_names <- paste0("V", seq_along(freq_vec))
+      }
+
+      data.frame(
+        time = time_point,
+        Karyotype = karyo_names,
+        Frequency = as.numeric(freq_vec),
+        stringsAsFactors = FALSE
+      )
+    } else {
+      data.frame(
+        time = time_point,
+        Karyotype = character(0),
+        Frequency = numeric(0),
+        stringsAsFactors = FALSE
+      )
+    }
+  })
+  results_long_df <- do.call(rbind, results_df_list)
+
+  all_karyotypes_initial <- names(x0)
+
+  if (nrow(results_long_df) > 0 && "Karyotype" %in% names(results_long_df)) {
+    results_wide_df <- tidyr::pivot_wider(
+      results_long_df,
+      names_from = "Karyotype",
+      values_from = "Frequency",
+      values_fill = 0.0
+    )
+
+    missing_cols <- setdiff(all_karyotypes_initial, names(results_wide_df))
+    if (length(missing_cols) > 0) {
+      for (col_name in missing_cols) results_wide_df[[col_name]] <- 0.0
+    }
+
+    time_col_present <- "time" %in% names(results_wide_df)
+    if (!time_col_present && nrow(results_wide_df) > 0) {
+      stop("Internal error: 'time' column lost during pivot_wider in ABM processing.", call. = FALSE)
+    }
+
+    final_col_order <- intersect(c("time", all_karyotypes_initial), names(results_wide_df))
+    results_final_df <- results_wide_df[, final_col_order, drop = FALSE]
+  } else {
+    message("ABM processing resulted in empty data frame or no 'Karyotype' column; returning structure based on initial times and karyotypes.")
+    results_final_df <- data.frame(time = if (length(times) > 0) unique(times) else numeric(0))
+    for (kt_name in all_karyotypes_initial) results_final_df[[kt_name]] <- 0.0
+    if (nrow(results_final_df) == 0 && length(times) == 0) {
+      col_names_for_empty <- "time"
+      if (length(all_karyotypes_initial) > 0) col_names_for_empty <- c("time", all_karyotypes_initial)
+      results_final_df <- data.frame(matrix(
+        ncol = length(col_names_for_empty),
+        nrow = 0,
+        dimnames = list(NULL, col_names_for_empty)
+      ))
+    }
+  }
+
+  results_final_df
 }
 # -------------------------------------------------------------
 # Master Prediction Function
@@ -794,7 +753,7 @@ find_steady_state <- function(lscape, p, Nmax=Inf) {
 #' @param abm_seed RNG seed.  Use \code{-1} for a random seed.
 #' @param normalize_freq Should ABM counts be normalized to frequencies?
 #' @return A **wide data‑frame**: first column \code{time}, remaining columns
-#'   one per karyotype, giving relative frequencies at each sampled time.
+#'   one per karyotype, giving relative frequencies at each recorded ABM time point.
 #'
 #' @examples
 #' # Two‑chromosome example with 4 centroids
@@ -850,15 +809,13 @@ run_abm_simulation_grf <- function(centroids, lambda, p, times, x0,
   init_list <- prepare_abm_initial_population(x0, abm_pop_size)
   
   ## -- run C++ ---------------------------------------------------------------
-  requested_steps <- abm_times_to_steps(times, abm_delta_t)
-  steps <- max(requested_steps)
+  steps <- ceiling(max(times) / abm_delta_t)
   if (steps > 1e7) {
     warning("ABM simulation requires a very large number of steps; check `times` and `abm_delta_t`.", call. = FALSE)
   }
   if (!is.finite(steps) || steps < 0 || steps > .Machine$integer.max) {
     stop("Computed number of ABM steps exceeds the supported integer range.", call. = FALSE)
   }
-  effective_record_interval <- resolve_abm_record_interval(requested_steps, steps, abm_record_interval)
   elapsed <- system.time({
     cpp_res <- run_karyotype_abm(
       initial_population_r      = init_list,
@@ -868,7 +825,7 @@ run_abm_simulation_grf <- function(centroids, lambda, p, times, x0,
       n_steps                   = as.integer(steps),
       max_population_size       = abm_max_pop,
       culling_survival_fraction = abm_culling_survival,
-      record_interval           = effective_record_interval,
+      record_interval           = as.integer(abm_record_interval),
       seed                      = as.integer(abm_seed),
       grf_centroids             = centroids,
       grf_lambda                = lambda
@@ -879,23 +836,35 @@ run_abm_simulation_grf <- function(centroids, lambda, p, times, x0,
   ## -- convert to wide data‑frame (unchanged) --------------------------------
   if(!length(cpp_res)) {
     warning("C++ returned no results.")
-    return(abm_cpp_results_to_wide(
-      cpp_results = list(),
-      requested_steps = requested_steps,
-      requested_times = times,
-      known_karyotypes = names(x0),
-      normalize_counts = normalize_freq,
-      source_label = "GRF ABM"
-    ))
+    out <- data.frame(time = numeric(0))
+    for (nm in names(x0)) out[[nm]] <- numeric(0)
+    return(out)
   }
-  abm_cpp_results_to_wide(
-    cpp_results = cpp_res,
-    requested_steps = requested_steps,
-    requested_times = times,
-    known_karyotypes = names(x0),
-    normalize_counts = normalize_freq,
-    source_label = "GRF ABM"
-  )
+  long <- lapply(names(cpp_res), function(s) {
+    t <- as.numeric(s) * abm_delta_t
+    cnt <- cpp_res[[s]]
+    if (length(cnt) && sum(cnt) > 0) {
+      freq <- cnt
+      if (normalize_freq) freq <- cnt / sum(cnt)
+      data.frame(time = t, Karyotype = names(freq), Frequency = as.numeric(freq))
+    } else {
+      data.frame(time = t, Karyotype = character(0), Frequency = numeric(0))
+    }
+  })
+  long <- do.call(rbind, long)
+
+  if (nrow(long)) {
+    wide <- tidyr::pivot_wider(long, names_from = "Karyotype",
+                               values_from = "Frequency", values_fill = 0)
+    miss <- setdiff(names(x0), names(wide))
+    for (m in miss) wide[[m]] <- 0
+    karyo_cols <- setdiff(names(wide), "time")
+    wide[, c("time", karyo_cols), drop = FALSE]
+  } else {
+    data.frame(time = unique(times),
+               t(matrix(0, nrow = length(times), ncol = length(x0),
+                        dimnames = list(NULL, names(x0)))))
+  }
 }
 
 

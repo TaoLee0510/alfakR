@@ -229,6 +229,12 @@ test_that("count-matrix validation rejects invalid values and rounds non-integer
     "rounding to the nearest integer once at entry"
   )
   expect_equal(rounded, round(as.matrix(x_non_integer)))
+
+  x_dropped <- c("0" = 10, "1" = 9)
+  expect_error(
+    alfakR:::coerce_count_matrix(x_dropped),
+    "drop = FALSE"
+  )
 })
 
 test_that("zero-depth timepoints are rejected before normalization or bootstrap", {
@@ -2074,7 +2080,7 @@ test_that("ABM public wrappers accept abm_record_interval = -1 and reject other 
           abm_seed = 1
         )
       )
-      expect_identical(captured_interval, 1L)
+      expect_identical(captured_interval, -1L)
       expect_true(is.data.frame(res))
     },
     run_karyotype_abm = function(initial_population_r, fitness_map_r, p_missegregation, dt,
@@ -2103,7 +2109,7 @@ test_that("ABM public wrappers accept abm_record_interval = -1 and reject other 
         abm_record_interval = -1,
         abm_seed = 1
       )
-      expect_identical(captured_grf_interval, 1L)
+      expect_identical(captured_grf_interval, -1L)
       expect_true(is.data.frame(res))
     },
     run_karyotype_abm = function(initial_population_r, fitness_map_r, p_missegregation, dt,
