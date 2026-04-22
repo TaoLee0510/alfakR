@@ -1560,6 +1560,498 @@ test_that("empirical prior SD uses floor and user-supplied nn_prior_sd is respec
   expect_equal(user_capture$prior_sd, 0.456, tolerance = 1e-12)
 })
 
+test_that("weighted nearest-neighbour prior mode and controls validate", {
+  expect_identical(
+    alfakR:::validate_nn_prior_mode("empirical_censored_weighted"),
+    "empirical_censored_weighted"
+  )
+  expect_identical(
+    alfakR:::validate_nn_prior_fit_subset("hybrid"),
+    "hybrid"
+  )
+  expect_silent(
+    alfakR:::validate_nn_prior_controls(
+      nn_prior_sd = NULL,
+      nn_prior_sd_floor = 0.1,
+      nn_prior_grid_n = 9L,
+      nn_prior_fit_subset = "all",
+      nn_prior_zero_exposure_min = 0,
+      nn_prior_zero_exposure_quantile = 0.2,
+      nn_prior_zero_weight_scale = 0.5,
+      nn_prior_zero_weight_cap_ratio = 0.75,
+      nn_prior_zero_birth_fallback_weight = 0.25,
+      nn_prior_hybrid_min_obs = 2L
+    )
+  )
+})
+
+test_that("censored EB fitter is unchanged when explicit child weights are all one", {
+  nn_info <- list(
+    list(ni = "obs_child", nj = "parent", pij = 1),
+    list(ni = "latent_child", nj = "parent", pij = 1)
+  )
+  names(nn_info) <- c("obs_child", "latent_child")
+  fpar <- c(parent = 0)
+
+  fit_default <- alfakR:::estimate_nn_prior_censored_eb(
+    nn_info_items = nn_info,
+    fpar = fpar,
+    build_opt_fc = function(nni_param, prior_mean_param = NaN, prior_sd_param = NaN, do_prior_param = FALSE) {
+      target <- if (identical(nni_param$ni, "obs_child")) 1 else -1
+      function(fc_param) (fc_param - target)^2
+    },
+    search_interval = c(-3, 3),
+    nn_prior_sd = 0.4
+  )
+
+  fit_weighted <- alfakR:::estimate_nn_prior_censored_eb(
+    nn_info_items = nn_info,
+    fpar = fpar,
+    build_opt_fc = function(nni_param, prior_mean_param = NaN, prior_sd_param = NaN, do_prior_param = FALSE) {
+      target <- if (identical(nni_param$ni, "obs_child")) 1 else -1
+      function(fc_param) (fc_param - target)^2
+    },
+    search_interval = c(-3, 3),
+    nn_prior_sd = 0.4,
+    child_weights = c(1, 1)
+  )
+
+  expect_equal(fit_weighted$prior_mean, fit_default$prior_mean, tolerance = 1e-12)
+  expect_equal(fit_weighted$prior_sd, fit_default$prior_sd, tolerance = 1e-12)
+  expect_equal(fit_weighted$n_children, fit_default$n_children, tolerance = 0)
+})
+
+test_that("weighted projected child exposure uses the projected neutral child trajectory", {
+  exposure <- alfakR:::project_nn_child_exposure(
+    fc_param = 0.5,
+    parent_fitness = 0.5,
+    pij_values = 0.2,
+    parent_birth_times = 0,
+    timepoints = c(0, 2),
+    parent_xfit = matrix(c(0.8, 0.4), nrow = 1),
+    ntot = c(100, 50)
+  )
+
+  expect_equal(exposure, 4, tolerance = 1e-12)
+})
+
+test_that("weighted parent centering uses exposure opportunity weights and falls back cleanly", {
+  parent_fitness <- c(1, 3)
+  pij_values <- c(0.5, 0.5)
+  parent_birth_times <- c(0, 1)
+  timepoints <- c(0, 1, 2)
+  parent_xfit <- matrix(
+    c(0.9, 0.9, 0.9,
+      0.1, 0.1, 0.1),
+    nrow = 2,
+    byrow = TRUE
+  )
+  ntot <- c(10, 10, 10)
+  fallback_mean <- stats::weighted.mean(parent_fitness, w = pij_values)
+  expected_weights <- c(
+    0.5 * sum(ntot * c(1, 1, 1) * parent_xfit[1, ]),
+    0.5 * sum(ntot * c(0, 1, 1) * parent_xfit[2, ])
+  )
+
+  expect_equal(
+    alfakR:::weighted_parent_fitness_exposure(
+      parent_fitness = parent_fitness,
+      pij_values = pij_values,
+      parent_birth_times = parent_birth_times,
+      timepoints = timepoints,
+      parent_xfit = parent_xfit,
+      ntot = ntot,
+      fallback_mean = fallback_mean
+    ),
+    stats::weighted.mean(parent_fitness, w = expected_weights),
+    tolerance = 1e-12
+  )
+
+  expect_equal(
+    alfakR:::weighted_parent_fitness_exposure(
+      parent_fitness = parent_fitness,
+      pij_values = pij_values,
+      parent_birth_times = parent_birth_times,
+      timepoints = timepoints,
+      parent_xfit = matrix(0, nrow = 2, ncol = 3),
+      ntot = ntot,
+      fallback_mean = fallback_mean
+    ),
+    fallback_mean,
+    tolerance = 1e-12
+  )
+})
+
+test_that("weighted hybrid prior screens low-exposure zeros and keeps observed children at unit weight", {
+  yi <- list(
+    x = make_counts(
+      c(40, 40,
+        5, 5),
+      rownames_vec = c("2.2.2", "2.2.3"),
+      colnames_vec = c("0", "1")
+    ),
+    dt = 1
+  )
+  seen <- new.env(parent = emptyenv())
+
+  res <- testthat::with_mocked_bindings(
+    {
+      alfakR:::solve_fitness_bootstrap(
+        yi,
+        minobs = 20,
+        nboot = 1,
+        n0 = 1e4,
+        nb = 1e6,
+        pm = 1e-4,
+        nn_prior = "empirical_censored_weighted",
+        nn_prior_fit_subset = "hybrid",
+        nn_prior_zero_exposure_min = 10,
+        nn_prior_zero_weight_scale = 0.5,
+        nn_prior_zero_weight_cap_ratio = 1
+      )
+    },
+    bootstrap_counts = function(x) x,
+    compute_dx_dt = function(x, timepoints) matrix(0, nrow = nrow(x), ncol = ncol(x) - 1),
+    run_solve_qp_checked = function(Dmat, dvec, Amat, bvec, meq, context) list(solution = rep(0.5, nrow(Dmat))),
+    optimize_initial_frequencies = function(x_obs, f, timepoints) rep(1 / length(f), length(f)),
+    joint_optimize = function(counts, timepoints, f_init, x0_init) list(f = 0.5, x0 = 1),
+    project_forward_log = function(x0, f, timepoints) {
+      matrix(c(0.8, 0.4), nrow = 1, dimnames = list("2.2.2", NULL))
+    },
+    find_birth_times = function(opt_res, time_range, minF) 0,
+    gen_nn_info = function(fq, pm) {
+      nn <- list(
+        list(ni = "2.2.3", nj = "2.2.2", pij = 0.5),
+        list(ni = "2.2.1", nj = "2.2.2", pij = 0.5),
+        list(ni = "2.3.2", nj = "2.2.2", pij = 0.05)
+      )
+      names(nn) <- c("2.2.3", "2.2.1", "2.3.2")
+      nn
+    },
+    estimate_nn_prior_censored_eb = function(nn_info_items, ..., child_weights, parent_mean_fn) {
+      seen$prior_children <- names(nn_info_items)
+      seen$child_weights <- child_weights
+      list(
+        prior_mean = 0.1,
+        prior_sd = 0.2,
+        informative_child_count = length(child_weights),
+        map_delta_lower_boundary_rate = 0,
+        map_delta_upper_boundary_rate = 0
+      )
+    },
+    alfak_neighbor_objective_cpp = function(fc_param, parent_fitness, pij_values,
+                                            parent_birth_times, timepoints, parent_xfit,
+                                            child_obs, ntot, parent_fitness_mean,
+                                            prior_mean, prior_sd, do_prior, tol) {
+      0
+    },
+    run_optimise_checked = function(f, interval, ..., context) {
+      f(mean(interval))
+      list(minimum = mean(interval), objective = 0)
+    },
+    run_optimise_strict_checked = function(f, interval, ..., context) {
+      f(mean(interval))
+      list(minimum = mean(interval), objective = 0)
+    },
+    .package = "alfakR"
+  )
+
+  expect_identical(seen$prior_children, c("2.2.3", "2.2.1"))
+  expect_equal(seen$child_weights, c(1, 0.5), tolerance = 1e-12)
+
+  diag <- res$nn_prior_diagnostics[1, ]
+  required_diag_cols <- c(
+    "nn_prior_mode_used",
+    "nn_prior_fit_subset_used",
+    "n_observed_children",
+    "n_zero_children_total",
+    "n_zero_children_retained",
+    "n_zero_children_screened",
+    "sum_observed_weight",
+    "sum_zero_weight_raw",
+    "sum_zero_weight_final",
+    "zero_weight_cap_applied",
+    "exposure_threshold_used",
+    "exposure_reference_used",
+    "n_zero_children_with_birth_fallback",
+    "prior_mu_hat",
+    "prior_sigma_hat",
+    "informative_child_count",
+    "map_delta_lower_boundary_rate",
+    "map_delta_upper_boundary_rate",
+    "used_no_prior_fallback_for_this_replicate"
+  )
+  expect_true(all(required_diag_cols %in% colnames(res$nn_prior_diagnostics)))
+  expect_identical(diag$nn_prior_mode_used, "empirical_censored_weighted")
+  expect_identical(diag$nn_prior_fit_subset_used, "hybrid")
+  expect_equal(diag$n_observed_children, 1L, tolerance = 0)
+  expect_equal(diag$n_zero_children_total, 2L, tolerance = 0)
+  expect_equal(diag$n_zero_children_retained, 1L, tolerance = 0)
+  expect_equal(diag$n_zero_children_screened, 1L, tolerance = 0)
+  expect_true(is.finite(diag$sum_observed_weight))
+  expect_true(is.finite(diag$sum_zero_weight_raw))
+  expect_true(is.finite(diag$sum_zero_weight_final))
+  expect_true(is.finite(diag$exposure_threshold_used))
+  expect_true(is.finite(diag$exposure_reference_used))
+})
+
+test_that("weighted prior downweights zero children when birth times were filled by fallback", {
+  yi <- list(
+    x = make_counts(
+      c(40, 40,
+        5, 5),
+      rownames_vec = c("2.2.2", "2.2.3"),
+      colnames_vec = c("0", "1")
+    ),
+    dt = 1
+  )
+  seen <- new.env(parent = emptyenv())
+
+  res <- testthat::with_mocked_bindings(
+    {
+      alfakR:::solve_fitness_bootstrap(
+        yi,
+        minobs = 20,
+        nboot = 1,
+        n0 = 1e4,
+        nb = 1e6,
+        pm = 1e-4,
+        nn_prior = "empirical_censored_weighted",
+        nn_prior_zero_weight_scale = 1,
+        nn_prior_zero_weight_cap_ratio = 1,
+        nn_prior_zero_birth_fallback_weight = 0.25
+      )
+    },
+    bootstrap_counts = function(x) x,
+    compute_dx_dt = function(x, timepoints) matrix(0, nrow = nrow(x), ncol = ncol(x) - 1),
+    run_solve_qp_checked = function(Dmat, dvec, Amat, bvec, meq, context) list(solution = rep(0.5, nrow(Dmat))),
+    optimize_initial_frequencies = function(x_obs, f, timepoints) rep(1 / length(f), length(f)),
+    joint_optimize = function(counts, timepoints, f_init, x0_init) list(f = 0.5, x0 = 1),
+    project_forward_log = function(x0, f, timepoints) {
+      matrix(c(0.8, 0.4), nrow = 1, dimnames = list("2.2.2", NULL))
+    },
+    find_birth_times = function(opt_res, time_range, minF) NA_real_,
+    gen_nn_info = function(fq, pm) {
+      nn <- list(
+        list(ni = "2.2.3", nj = "2.2.2", pij = 0.5),
+        list(ni = "2.2.1", nj = "2.2.2", pij = 0.5)
+      )
+      names(nn) <- c("2.2.3", "2.2.1")
+      nn
+    },
+    estimate_nn_prior_censored_eb = function(nn_info_items, ..., child_weights, parent_mean_fn) {
+      seen$child_weights <- child_weights
+      list(
+        prior_mean = 0.1,
+        prior_sd = 0.2,
+        informative_child_count = length(child_weights),
+        map_delta_lower_boundary_rate = 0,
+        map_delta_upper_boundary_rate = 0
+      )
+    },
+    alfak_neighbor_objective_cpp = function(fc_param, parent_fitness, pij_values,
+                                            parent_birth_times, timepoints, parent_xfit,
+                                            child_obs, ntot, parent_fitness_mean,
+                                            prior_mean, prior_sd, do_prior, tol) {
+      0
+    },
+    run_optimise_checked = function(f, interval, ..., context) {
+      f(mean(interval))
+      list(minimum = mean(interval), objective = 0)
+    },
+    run_optimise_strict_checked = function(f, interval, ..., context) {
+      f(mean(interval))
+      list(minimum = mean(interval), objective = 0)
+    },
+    .package = "alfakR"
+  )
+
+  expect_equal(seen$child_weights, c(1, 0.25), tolerance = 1e-12)
+  expect_equal(res$nn_prior_diagnostics$n_zero_children_with_birth_fallback[1], 1L, tolerance = 0)
+})
+
+test_that("weighted prior applies the zero-weight cap by common rescaling", {
+  yi <- list(
+    x = make_counts(
+      c(40, 40,
+        5, 5),
+      rownames_vec = c("2.2.2", "2.2.3"),
+      colnames_vec = c("0", "1")
+    ),
+    dt = 1
+  )
+  seen <- new.env(parent = emptyenv())
+
+  res <- testthat::with_mocked_bindings(
+    {
+      alfakR:::solve_fitness_bootstrap(
+        yi,
+        minobs = 20,
+        nboot = 1,
+        n0 = 1e4,
+        nb = 1e6,
+        pm = 1e-4,
+        nn_prior = "empirical_censored_weighted",
+        nn_prior_zero_weight_scale = 0.5,
+        nn_prior_zero_weight_cap_ratio = 0.25
+      )
+    },
+    bootstrap_counts = function(x) x,
+    compute_dx_dt = function(x, timepoints) matrix(0, nrow = nrow(x), ncol = ncol(x) - 1),
+    run_solve_qp_checked = function(Dmat, dvec, Amat, bvec, meq, context) list(solution = rep(0.5, nrow(Dmat))),
+    optimize_initial_frequencies = function(x_obs, f, timepoints) rep(1 / length(f), length(f)),
+    joint_optimize = function(counts, timepoints, f_init, x0_init) list(f = 0.5, x0 = 1),
+    project_forward_log = function(x0, f, timepoints) {
+      matrix(c(0.8, 0.4), nrow = 1, dimnames = list("2.2.2", NULL))
+    },
+    find_birth_times = function(opt_res, time_range, minF) 0,
+    gen_nn_info = function(fq, pm) {
+      nn <- list(
+        list(ni = "2.2.3", nj = "2.2.2", pij = 0.5),
+        list(ni = "2.2.1", nj = "2.2.2", pij = 0.5),
+        list(ni = "2.3.2", nj = "2.2.2", pij = 0.5)
+      )
+      names(nn) <- c("2.2.3", "2.2.1", "2.3.2")
+      nn
+    },
+    estimate_nn_prior_censored_eb = function(nn_info_items, ..., child_weights, parent_mean_fn) {
+      seen$child_weights <- child_weights
+      list(
+        prior_mean = 0.1,
+        prior_sd = 0.2,
+        informative_child_count = length(child_weights),
+        map_delta_lower_boundary_rate = 0,
+        map_delta_upper_boundary_rate = 0
+      )
+    },
+    alfak_neighbor_objective_cpp = function(fc_param, parent_fitness, pij_values,
+                                            parent_birth_times, timepoints, parent_xfit,
+                                            child_obs, ntot, parent_fitness_mean,
+                                            prior_mean, prior_sd, do_prior, tol) {
+      0
+    },
+    run_optimise_checked = function(f, interval, ..., context) {
+      f(mean(interval))
+      list(minimum = mean(interval), objective = 0)
+    },
+    run_optimise_strict_checked = function(f, interval, ..., context) {
+      f(mean(interval))
+      list(minimum = mean(interval), objective = 0)
+    },
+    .package = "alfakR"
+  )
+
+  expect_equal(seen$child_weights, c(1, 0.125, 0.125), tolerance = 1e-12)
+  expect_true(res$nn_prior_diagnostics$zero_weight_cap_applied[1])
+  expect_equal(res$nn_prior_diagnostics$sum_zero_weight_final[1], 0.25, tolerance = 1e-12)
+})
+
+test_that("weighted prior falls back to no prior when a bootstrap replicate has no observed neighbour children", {
+  yi <- list(
+    x = make_counts(
+      c(40, 40),
+      rownames_vec = "2.2.2",
+      colnames_vec = c("0", "1")
+    ),
+    dt = 1
+  )
+  seen <- new.env(parent = emptyenv())
+
+  res <- testthat::with_mocked_bindings(
+    {
+      alfakR:::solve_fitness_bootstrap(
+        yi,
+        minobs = 20,
+        nboot = 1,
+        n0 = 1e4,
+        nb = 1e6,
+        pm = 1e-4,
+        nn_prior = "empirical_censored_weighted"
+      )
+    },
+    bootstrap_counts = function(x) x,
+    compute_dx_dt = function(x, timepoints) matrix(0, nrow = nrow(x), ncol = ncol(x) - 1),
+    run_solve_qp_checked = function(Dmat, dvec, Amat, bvec, meq, context) list(solution = rep(0.5, nrow(Dmat))),
+    optimize_initial_frequencies = function(x_obs, f, timepoints) rep(1 / length(f), length(f)),
+    joint_optimize = function(counts, timepoints, f_init, x0_init) list(f = 0.5, x0 = 1),
+    project_forward_log = function(x0, f, timepoints) {
+      matrix(c(0.8, 0.4), nrow = 1, dimnames = list("2.2.2", NULL))
+    },
+    find_birth_times = function(opt_res, time_range, minF) 0,
+    gen_nn_info = function(fq, pm) {
+      nn <- list(
+        list(ni = "2.2.3", nj = "2.2.2", pij = 0.5),
+        list(ni = "2.2.1", nj = "2.2.2", pij = 0.5)
+      )
+      names(nn) <- c("2.2.3", "2.2.1")
+      nn
+    },
+    estimate_nn_prior_censored_eb = function(...) {
+      stop("weighted prior fit should not run without observed neighbour children")
+    },
+    alfak_neighbor_objective_cpp = function(fc_param, parent_fitness, pij_values,
+                                            parent_birth_times, timepoints, parent_xfit,
+                                            child_obs, ntot, parent_fitness_mean,
+                                            prior_mean, prior_sd, do_prior, tol) {
+      if (isTRUE(do_prior)) {
+        seen$latent_do_prior <- TRUE
+      }
+      0
+    },
+    run_optimise_checked = function(f, interval, ..., context) {
+      f(mean(interval))
+      list(minimum = mean(interval), objective = 0)
+    },
+    run_optimise_strict_checked = function(f, interval, ..., context) {
+      stop("weighted no-prior fallback should not use strict prior optimisation")
+    },
+    .package = "alfakR"
+  )
+
+  expect_false(isTRUE(seen$latent_do_prior))
+  expect_identical(res$nn_prior_diagnostics$nn_prior_mode_used[1], "none")
+  expect_true(res$nn_prior_diagnostics$used_no_prior_fallback_for_this_replicate[1])
+})
+
+test_that("fitKrig and xval ignore bootstrap nearest-neighbour diagnostics", {
+  fq_boot <- list(
+    final_fitness = matrix(
+      c(1, 10, 100,
+        2, 20, 200,
+        3, 30, 300),
+      nrow = 3,
+      byrow = TRUE,
+      dimnames = list(NULL, c("1.1", "3.3", "5.5"))
+    ),
+    nn_fitness = matrix(numeric(0), nrow = 3, ncol = 0),
+    nn_prior_diagnostics = data.frame(
+      nn_prior_mode_used = c("empirical_censored_weighted", "none", "none"),
+      stringsAsFactors = FALSE
+    )
+  )
+
+  testthat::with_mocked_bindings(
+    {
+      testthat::with_mocked_bindings(
+        {
+          expect_silent(suppressWarnings(alfakR:::fitKrig(fq_boot, nboot = 3)))
+          set.seed(123)
+          res <- alfakR:::xval(fq_boot)
+          expect_true(is.numeric(res) && length(res) == 1)
+        },
+        predict = function(object, x, ...) {
+          rep(mean(object$train_f), nrow(x))
+        },
+        .package = "stats"
+      )
+    },
+    Krig = function(x, Y, ...) {
+      structure(list(train_f = as.numeric(Y)), class = "mock_krig")
+    },
+    .package = "fields"
+  )
+})
+
 test_that("find_steady_state selects the eigenvalue with the largest real part", {
   skip_if_not_installed("deSolve")
   skip_if_not_installed("Matrix")

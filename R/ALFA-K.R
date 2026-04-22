@@ -49,6 +49,12 @@
 #'   children, including zero-count latent neighbours, to correct observation
 #'   bias. This mode errors if the prior hyperparameter fit fails and is the
 #'   default.
+#'   `"empirical_censored_weighted"` fits the same single-Gaussian censored
+#'   empirical-Bayes prior, but only in the bootstrap pathway it computes
+#'   projected child exposure from the neighbour likelihood ingredients,
+#'   downweights zero-only latent children, optionally screens very low-exposure
+#'   zeros before fitting the prior, and falls back to no prior for a bootstrap
+#'   replicate when that replicate has no observed neighbour children.
 #'   `"none"` disables the latent-neighbour prior contribution.
 #'   `"empirical"` opt-in uses the empirical child-minus-parent prior estimated
 #'   from observed neighbours.
@@ -59,8 +65,39 @@
 #'   used when the empirical prior variance is zero or too small. Default is
 #'   `1e-3`.
 #' @param nn_prior_grid_n Integer; number of equally spaced grid points used for
-#'   the fixed-grid numerical integration in `nn_prior = "empirical_censored"`.
-#'   Default is `81`.
+#'   the fixed-grid numerical integration in `nn_prior = "empirical_censored"`
+#'   and `nn_prior = "empirical_censored_weighted"`. Default is `81`.
+#' @param nn_prior_fit_subset Character; weighted-mode only control for which
+#'   zero-only latent children are allowed into the empirical-Bayes prior fit.
+#'   `"hybrid"` (default) keeps all observed neighbour children, then screens
+#'   zero-only children by projected exposure before weighting them. `"all"`
+#'   skips the hard exposure screen but still downweights zero-only children and
+#'   still applies the total zero-weight cap.
+#' @param nn_prior_zero_exposure_min Optional non-negative numeric scalar used
+#'   only when `nn_prior = "empirical_censored_weighted"` and
+#'   `nn_prior_fit_subset = "hybrid"`. If supplied, this is the projected
+#'   child-exposure threshold used to retain zero-only children in the prior fit.
+#' @param nn_prior_zero_exposure_quantile Numeric scalar in `[0, 1]` used only
+#'   for weighted hybrid fitting when `nn_prior_zero_exposure_min` is `NULL` and
+#'   enough observed neighbour children are available. The threshold is the
+#'   corresponding quantile of the observed projected child exposures.
+#' @param nn_prior_zero_weight_scale Numeric scalar in `[0, 1]` giving the
+#'   baseline downweighting applied to zero-only latent children in weighted
+#'   mode before the global zero-weight cap.
+#' @param nn_prior_zero_weight_cap_ratio Optional non-negative numeric scalar
+#'   used only in weighted mode. When supplied, the total zero-child weight is
+#'   capped at this ratio times the number of observed neighbour children.
+#'   When `NULL`, a data-adaptive cap is used.
+#' @param nn_prior_zero_birth_fallback_weight Numeric scalar in `[0, 1]` used
+#'   only in weighted mode. If any parent birth time for a zero-only child was
+#'   imputed by the finite fallback logic, that zero child's raw weight is
+#'   multiplied by this value.
+#' @param nn_prior_hybrid_min_obs Positive integer used only when
+#'   `nn_prior = "empirical_censored_weighted"` and
+#'   `nn_prior_fit_subset = "hybrid"`. When fewer than this many observed
+#'   neighbour children are available, weighted hybrid fitting does not estimate
+#'   a hard observed-based exposure threshold from that small sample and instead
+#'   relies on weighting plus the zero-weight cap.
 #' @param krig_bootstrap_mode Character; `"marginal"` (default) samples
 #'   bootstrap fitness values independently by column, matching the original
 #'   ALFA-K Kriging bootstrap and cross-validation behavior. `"joint"` samples
@@ -132,10 +169,17 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
                   allow_noninteger_counts = FALSE,
                   correct_efflux=FALSE,
                   landscape_data_output = FALSE,
-                  nn_prior = c("empirical_censored", "none", "empirical"),
+                  nn_prior = c("empirical_censored", "empirical_censored_weighted", "none", "empirical"),
                   nn_prior_sd = NULL,
                   nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
                   nn_prior_grid_n = ALFAK_NN_PRIOR_CENSORED_GRID_POINTS,
+                  nn_prior_fit_subset = c("hybrid", "all"),
+                  nn_prior_zero_exposure_min = NULL,
+                  nn_prior_zero_exposure_quantile = 0.10,
+                  nn_prior_zero_weight_scale = 0.50,
+                  nn_prior_zero_weight_cap_ratio = NULL,
+                  nn_prior_zero_birth_fallback_weight = 0.50,
+                  nn_prior_hybrid_min_obs = 3L,
                   krig_bootstrap_mode = c("marginal", "joint")) {
 
   # Note: library calls removed, dependencies handled by @importFrom or DESCRIPTION
@@ -149,11 +193,19 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
   validate_scalar_logical(correct_efflux, "correct_efflux")
   validate_scalar_logical(landscape_data_output, "landscape_data_output")
   nn_prior <- validate_nn_prior_mode(nn_prior)
+  nn_prior_fit_subset <- validate_nn_prior_fit_subset(nn_prior_fit_subset)
   krig_bootstrap_mode <- validate_krig_bootstrap_mode(krig_bootstrap_mode)
   validate_nn_prior_controls(
     nn_prior_sd = nn_prior_sd,
     nn_prior_sd_floor = nn_prior_sd_floor,
-    nn_prior_grid_n = nn_prior_grid_n
+    nn_prior_grid_n = nn_prior_grid_n,
+    nn_prior_fit_subset = nn_prior_fit_subset,
+    nn_prior_zero_exposure_min = nn_prior_zero_exposure_min,
+    nn_prior_zero_exposure_quantile = nn_prior_zero_exposure_quantile,
+    nn_prior_zero_weight_scale = nn_prior_zero_weight_scale,
+    nn_prior_zero_weight_cap_ratio = nn_prior_zero_weight_cap_ratio,
+    nn_prior_zero_birth_fallback_weight = nn_prior_zero_birth_fallback_weight,
+    nn_prior_hybrid_min_obs = nn_prior_hybrid_min_obs
   )
   yi$x <- coerce_count_matrix(yi$x, allow_noninteger_counts = allow_noninteger_counts)
   validate_positive_depth(yi$x)
@@ -170,7 +222,14 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
                                      nn_prior = nn_prior,
                                      nn_prior_sd = nn_prior_sd,
                                      nn_prior_sd_floor = nn_prior_sd_floor,
-                                     nn_prior_grid_n = nn_prior_grid_n)
+                                     nn_prior_grid_n = nn_prior_grid_n,
+                                     nn_prior_fit_subset = nn_prior_fit_subset,
+                                     nn_prior_zero_exposure_min = nn_prior_zero_exposure_min,
+                                     nn_prior_zero_exposure_quantile = nn_prior_zero_exposure_quantile,
+                                     nn_prior_zero_weight_scale = nn_prior_zero_weight_scale,
+                                     nn_prior_zero_weight_cap_ratio = nn_prior_zero_weight_cap_ratio,
+                                     nn_prior_zero_birth_fallback_weight = nn_prior_zero_birth_fallback_weight,
+                                     nn_prior_hybrid_min_obs = nn_prior_hybrid_min_obs)
   saveRDS(fq_boot, file = file.path(outdir, "bootstrap_res.Rds"))
 
   landscape_data <- fitKrig(fq_boot, nboot, krig_bootstrap_mode = krig_bootstrap_mode)
@@ -329,6 +388,16 @@ validate_positive_finite <- function(x, name) {
   invisible(NULL)
 }
 
+#' Validate scalar non-negative finite numeric input
+#' @keywords internal
+#' @noRd
+validate_nonnegative_finite <- function(x, name) {
+  if (!is.numeric(x) || length(x) != 1 || !is.finite(x) || x < 0) {
+    stop(sprintf("`%s` must be a single non-negative finite numeric value.", name), call. = FALSE)
+  }
+  invisible(NULL)
+}
+
 #' Validate scalar logical input
 #' @keywords internal
 #' @noRd
@@ -431,7 +500,14 @@ sd_or_na <- function(x) {
 #' @keywords internal
 #' @noRd
 validate_nn_prior_mode <- function(nn_prior) {
-  match.arg(nn_prior, c("empirical_censored", "none", "empirical"))
+  match.arg(nn_prior, c("empirical_censored", "empirical_censored_weighted", "none", "empirical"))
+}
+
+#' Validate weighted nearest-neighbour prior subset mode
+#' @keywords internal
+#' @noRd
+validate_nn_prior_fit_subset <- function(nn_prior_fit_subset) {
+  match.arg(nn_prior_fit_subset, c("hybrid", "all"))
 }
 
 #' Validate nearest-neighbour prior controls
@@ -439,7 +515,15 @@ validate_nn_prior_mode <- function(nn_prior) {
 #' @noRd
 validate_nn_prior_controls <- function(nn_prior_sd = NULL,
                                        nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
-                                       nn_prior_grid_n = ALFAK_NN_PRIOR_CENSORED_GRID_POINTS) {
+                                       nn_prior_grid_n = ALFAK_NN_PRIOR_CENSORED_GRID_POINTS,
+                                       nn_prior_fit_subset = c("hybrid", "all"),
+                                       nn_prior_zero_exposure_min = NULL,
+                                       nn_prior_zero_exposure_quantile = 0.10,
+                                       nn_prior_zero_weight_scale = 0.50,
+                                       nn_prior_zero_weight_cap_ratio = NULL,
+                                       nn_prior_zero_birth_fallback_weight = 0.50,
+                                       nn_prior_hybrid_min_obs = 3L) {
+  nn_prior_fit_subset <- validate_nn_prior_fit_subset(nn_prior_fit_subset)
   if (!is.null(nn_prior_sd)) {
     validate_positive_finite(nn_prior_sd, "nn_prior_sd")
   }
@@ -448,6 +532,16 @@ validate_nn_prior_controls <- function(nn_prior_sd = NULL,
   if (nn_prior_grid_n < 3) {
     stop("`nn_prior_grid_n` must be at least 3.", call. = FALSE)
   }
+  if (!is.null(nn_prior_zero_exposure_min)) {
+    validate_nonnegative_finite(nn_prior_zero_exposure_min, "nn_prior_zero_exposure_min")
+  }
+  validate_probability(nn_prior_zero_exposure_quantile, "nn_prior_zero_exposure_quantile", upper_inclusive = TRUE)
+  validate_probability(nn_prior_zero_weight_scale, "nn_prior_zero_weight_scale", upper_inclusive = TRUE)
+  if (!is.null(nn_prior_zero_weight_cap_ratio)) {
+    validate_nonnegative_finite(nn_prior_zero_weight_cap_ratio, "nn_prior_zero_weight_cap_ratio")
+  }
+  validate_probability(nn_prior_zero_birth_fallback_weight, "nn_prior_zero_birth_fallback_weight", upper_inclusive = TRUE)
+  validate_positive_integer(nn_prior_hybrid_min_obs, "nn_prior_hybrid_min_obs")
   invisible(NULL)
 }
 
@@ -530,6 +624,7 @@ softmax_from_free_logits <- function(logits_free) {
 sanitize_birth_times <- function(birth_times_est, peak_times, timepoints) {
   mean_risetime <- mean(peak_times - birth_times_est, na.rm = TRUE)
   fallback_used <- FALSE
+  fallback_mask <- rep(FALSE, length(birth_times_est))
   if (!is.finite(mean_risetime)) {
     mean_risetime <- 0
     fallback_used <- TRUE
@@ -539,6 +634,7 @@ sanitize_birth_times <- function(birth_times_est, peak_times, timepoints) {
   if (any(missing_birth)) {
     birth_times_est[missing_birth] <- peak_times[missing_birth] - mean_risetime
     fallback_used <- TRUE
+    fallback_mask[missing_birth] <- TRUE
   }
 
   unresolved <- !is.finite(birth_times_est)
@@ -547,13 +643,21 @@ sanitize_birth_times <- function(birth_times_est, peak_times, timepoints) {
     safe_fallback[!is.finite(safe_fallback)] <- min(timepoints)
     birth_times_est[unresolved] <- safe_fallback[unresolved]
     fallback_used <- TRUE
+    fallback_mask[unresolved] <- TRUE
   }
 
   if (fallback_used) {
     warning("Using finite fallback birth times for nearest-neighbour estimation because root-finding did not return enough finite birth times.")
   }
 
-  birth_times_est
+  if (!is.null(names(birth_times_est))) {
+    names(fallback_mask) <- names(birth_times_est)
+  }
+
+  list(
+    birth_times = birth_times_est,
+    fallback_mask = fallback_mask
+  )
 }
 
 #' Format a short karyotype preview for diagnostics
@@ -857,13 +961,43 @@ weighted_parent_fitness <- function(nni_item, fpar) {
   mean(parent_fitness, na.rm = TRUE)
 }
 
-#' Estimate an observation-bias corrected latent-neighbour prior
+#' Exposure-weighted parent fitness for weighted nearest-neighbour priors
 #' @keywords internal
 #' @noRd
-estimate_nn_prior_censored_eb <- function(nn_info_items, fpar, build_opt_fc, search_interval,
-                                          nn_prior_sd = NULL,
-                                          nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
+weighted_parent_fitness_exposure <- function(parent_fitness, pij_values, parent_birth_times,
+                                             timepoints, parent_xfit, ntot,
+                                             fallback_mean) {
+  n_parents <- length(parent_fitness)
+  if (n_parents == 0) {
+    return(fallback_mean)
+  }
+  if (length(pij_values) != n_parents || length(parent_birth_times) != n_parents ||
+      !is.matrix(parent_xfit) || nrow(parent_xfit) != n_parents ||
+      ncol(parent_xfit) != length(timepoints) || length(ntot) != length(timepoints)) {
+    stop("Internal error: malformed parent inputs for exposure-weighted nearest-neighbour prior centering.")
+  }
+
+  parent_weights <- numeric(n_parents)
+  for (p in seq_len(n_parents)) {
+    parent_active <- as.numeric(timepoints >= parent_birth_times[p])
+    parent_weights[p] <- pij_values[p] * sum(ntot * parent_xfit[p, ] * parent_active)
+  }
+
+  if (all(is.finite(parent_weights)) &&
+      all(parent_weights >= 0) &&
+      sum(parent_weights) > 0) {
+    return(stats::weighted.mean(parent_fitness, w = parent_weights))
+  }
+
+  fallback_mean
+}
+
+#' Build child likelihood surfaces for the censored EB nearest-neighbour prior
+#' @keywords internal
+#' @noRd
+build_nn_prior_child_surfaces <- function(nn_info_items, fpar, build_opt_fc, search_interval,
                                           nn_prior_grid_n = ALFAK_NN_PRIOR_CENSORED_GRID_POINTS,
+                                          parent_mean_fn = weighted_parent_fitness,
                                           context = "fit empirical_censored latent-neighbour prior") {
   if (!length(nn_info_items)) {
     stop(sprintf("%s failed: no nearest-neighbour children were available.", context))
@@ -877,7 +1011,7 @@ estimate_nn_prior_censored_eb <- function(nn_info_items, fpar, build_opt_fc, sea
     child_names <- vapply(nn_info_items, function(x) x$ni, character(1))
   }
 
-  parent_means <- vapply(nn_info_items, weighted_parent_fitness, numeric(1), fpar = fpar)
+  parent_means <- vapply(nn_info_items, parent_mean_fn, numeric(1), fpar = fpar)
   valid_children <- is.finite(parent_means)
   if (!any(valid_children)) {
     stop(sprintf("%s failed: no child had a finite weighted parent fitness mean.", context))
@@ -906,6 +1040,7 @@ estimate_nn_prior_censored_eb <- function(nn_info_items, fpar, build_opt_fc, sea
   loglik_mat <- matrix(NA_real_, nrow = length(nn_info_items), ncol = length(fc_grid),
                        dimnames = list(child_names, NULL))
   map_delta <- rep(NA_real_, length(nn_info_items))
+  map_fc <- rep(NA_real_, length(nn_info_items))
   informative_children <- rep(FALSE, length(nn_info_items))
   for (i in seq_along(nn_info_items)) {
     objective_fn <- build_opt_fc(nn_info_items[[i]], do_prior_param = FALSE)
@@ -930,23 +1065,69 @@ estimate_nn_prior_censored_eb <- function(nn_info_items, fpar, build_opt_fc, sea
     }
     informative_children[i] <- TRUE
     loglik_mat[i, ] <- centered_vals
-    map_delta[i] <- fc_grid[finite_mask][which.max(loglik_vals[finite_mask])] - parent_means[i]
+    map_fc[i] <- fc_grid[finite_mask][which.max(loglik_vals[finite_mask])]
+    map_delta[i] <- map_fc[i] - parent_means[i]
   }
 
-  if (!any(informative_children)) {
+  list(
+    nn_info_items = nn_info_items,
+    child_names = child_names,
+    parent_means = parent_means,
+    fc_grid = fc_grid,
+    grid_step = grid_step,
+    log_weights = log_weights,
+    loglik_mat = loglik_mat,
+    map_delta = map_delta,
+    map_fc = map_fc,
+    informative_children = informative_children
+  )
+}
+
+#' Filter and weight child likelihood surfaces for the censored EB prior fit
+#' @keywords internal
+#' @noRd
+filter_nn_prior_child_surfaces <- function(surface_obj, child_weights = NULL,
+                                           context = "fit empirical_censored latent-neighbour prior") {
+  n_children <- length(surface_obj$child_names)
+  if (is.null(child_weights)) {
+    child_weights <- rep(1, n_children)
+  }
+  if (!is.numeric(child_weights) || length(child_weights) != n_children ||
+      any(!is.finite(child_weights)) || any(child_weights < 0)) {
+    stop(sprintf("%s failed: child_weights must be a finite non-negative numeric vector aligned with the child surfaces.", context))
+  }
+
+  if (!any(surface_obj$informative_children)) {
     stop(sprintf(
       "%s failed: no neighbour children produced an informative finite likelihood surface across the prior grid.",
       context
     ))
   }
 
-  nn_info_items <- nn_info_items[informative_children]
-  child_names <- child_names[informative_children]
-  parent_means <- parent_means[informative_children]
-  loglik_mat <- loglik_mat[informative_children, , drop = FALSE]
-  map_delta <- map_delta[informative_children]
+  keep_children <- surface_obj$informative_children & child_weights > 0
+  if (!any(keep_children)) {
+    stop(sprintf("%s failed: no informative neighbour child retained a positive prior-fit weight.", context))
+  }
 
-  finite_map_delta <- map_delta[is.finite(map_delta)]
+  surface_obj$nn_info_items <- surface_obj$nn_info_items[keep_children]
+  surface_obj$child_names <- surface_obj$child_names[keep_children]
+  surface_obj$parent_means <- surface_obj$parent_means[keep_children]
+  surface_obj$loglik_mat <- surface_obj$loglik_mat[keep_children, , drop = FALSE]
+  surface_obj$map_delta <- surface_obj$map_delta[keep_children]
+  surface_obj$map_fc <- surface_obj$map_fc[keep_children]
+  surface_obj$child_weights <- child_weights[keep_children]
+  surface_obj$informative_child_count <- length(surface_obj$child_weights)
+  surface_obj
+}
+
+#' Fit a single-Gaussian censored EB nearest-neighbour prior
+#' @keywords internal
+#' @noRd
+fit_nn_prior_single_gaussian <- function(surface_obj,
+                                         nn_prior_sd = NULL,
+                                         nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
+                                         context = "fit empirical_censored latent-neighbour prior") {
+  finite_map_delta <- surface_obj$map_delta[is.finite(surface_obj$map_delta)]
   if (!length(finite_map_delta)) {
     stop(sprintf("%s failed: could not derive finite initial delta estimates.", context))
   }
@@ -965,8 +1146,8 @@ estimate_nn_prior_censored_eb <- function(nn_info_items, fpar, build_opt_fc, sea
   }
   sigma_init <- max(sigma_init, nn_prior_sd_floor)
 
-  delta_lower <- min(fc_grid) - max(parent_means)
-  delta_upper <- max(fc_grid) - min(parent_means)
+  delta_lower <- min(surface_obj$fc_grid) - max(surface_obj$parent_means)
+  delta_upper <- max(surface_obj$fc_grid) - min(surface_obj$parent_means)
   delta_span <- delta_upper - delta_lower
   if (!is.finite(delta_span) || delta_span <= 0) {
     delta_span <- max(abs(c(delta_lower, delta_upper)), na.rm = TRUE)
@@ -982,14 +1163,16 @@ estimate_nn_prior_censored_eb <- function(nn_info_items, fpar, build_opt_fc, sea
       return(1e9)
     }
     total <- 0
-    for (i in seq_len(nrow(loglik_mat))) {
-      log_prior <- stats::dnorm(fc_grid - parent_means[i], mean = mu, sd = sigma, log = TRUE)
-      vals <- loglik_mat[i, ] + log_prior + log_weights
+    for (i in seq_len(nrow(surface_obj$loglik_mat))) {
+      log_prior <- stats::dnorm(surface_obj$fc_grid - surface_obj$parent_means[i],
+                                mean = mu, sd = sigma, log = TRUE)
+      vals <- surface_obj$loglik_mat[i, ] + log_prior + surface_obj$log_weights
       max_val <- max(vals)
       if (!is.finite(max_val)) {
         return(1e9)
       }
-      total <- total - (max_val + log(sum(exp(vals - max_val))))
+      log_marginal <- max_val + log(sum(exp(vals - max_val)))
+      total <- total - surface_obj$child_weights[i] * log_marginal
     }
     if (!is.finite(total)) {
       return(1e9)
@@ -1026,10 +1209,49 @@ estimate_nn_prior_censored_eb <- function(nn_info_items, fpar, build_opt_fc, sea
     stop(sprintf("%s failed: fitted prior hyperparameters were invalid.", context))
   }
 
+  lower_boundary_rate <- mean(surface_obj$map_fc <= min(surface_obj$fc_grid) + surface_obj$grid_step)
+  upper_boundary_rate <- mean(surface_obj$map_fc >= max(surface_obj$fc_grid) - surface_obj$grid_step)
+
   list(
     prior_mean = prior_mean,
     prior_sd = prior_sd,
-    n_children = length(nn_info_items)
+    n_children = nrow(surface_obj$loglik_mat),
+    informative_child_count = surface_obj$informative_child_count,
+    sum_child_weight = sum(surface_obj$child_weights),
+    map_delta_lower_boundary_rate = lower_boundary_rate,
+    map_delta_upper_boundary_rate = upper_boundary_rate
+  )
+}
+
+#' Estimate an observation-bias corrected latent-neighbour prior
+#' @keywords internal
+#' @noRd
+estimate_nn_prior_censored_eb <- function(nn_info_items, fpar, build_opt_fc, search_interval,
+                                          nn_prior_sd = NULL,
+                                          nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
+                                          nn_prior_grid_n = ALFAK_NN_PRIOR_CENSORED_GRID_POINTS,
+                                          child_weights = NULL,
+                                          parent_mean_fn = weighted_parent_fitness,
+                                          context = "fit empirical_censored latent-neighbour prior") {
+  surface_obj <- build_nn_prior_child_surfaces(
+    nn_info_items = nn_info_items,
+    fpar = fpar,
+    build_opt_fc = build_opt_fc,
+    search_interval = search_interval,
+    nn_prior_grid_n = nn_prior_grid_n,
+    parent_mean_fn = parent_mean_fn,
+    context = context
+  )
+  surface_obj <- filter_nn_prior_child_surfaces(
+    surface_obj = surface_obj,
+    child_weights = child_weights,
+    context = context
+  )
+  fit_nn_prior_single_gaussian(
+    surface_obj = surface_obj,
+    nn_prior_sd = nn_prior_sd,
+    nn_prior_sd_floor = nn_prior_sd_floor,
+    context = context
   )
 }
 
@@ -1043,6 +1265,325 @@ fExp_stable <- function(fc_arg, fp_arg, pij_val, tt_arg, tol = ALFAK_FEXP_DELTA_
     return(pij_val * fp_arg * tt_arg)
   }
   pij_val * fp_arg * expm1(tt_arg * delta) / delta
+}
+
+#' Project a neutral nearest-neighbour child trajectory from parent inputs
+#' @keywords internal
+#' @noRd
+project_nn_child_trajectory <- function(fc_param, parent_fitness, pij_values, parent_birth_times,
+                                        timepoints, parent_xfit, tol = ALFAK_FEXP_DELTA_TOL) {
+  n_parents <- length(parent_fitness)
+  n_time <- length(timepoints)
+  if (n_parents == 0) {
+    return(rep(0, n_time))
+  }
+  if (length(pij_values) != n_parents || length(parent_birth_times) != n_parents ||
+      !is.matrix(parent_xfit) || nrow(parent_xfit) != n_parents || ncol(parent_xfit) != n_time) {
+    stop("Internal error: malformed inputs for projected nearest-neighbour child trajectory.")
+  }
+
+  projected <- numeric(n_time)
+  for (p in seq_len(n_parents)) {
+    tt <- pmax(0, timepoints - parent_birth_times[p])
+    projected <- projected + fExp_stable(fc_param, parent_fitness[p], pij_values[p], tt, tol = tol) * parent_xfit[p, ]
+  }
+  pmax(0, pmin(1, projected))
+}
+
+#' Project nearest-neighbour child exposure from the neutral child trajectory
+#' @keywords internal
+#' @noRd
+project_nn_child_exposure <- function(fc_param, parent_fitness, pij_values, parent_birth_times,
+                                      timepoints, parent_xfit, ntot,
+                                      tol = ALFAK_FEXP_DELTA_TOL) {
+  if (length(ntot) != length(timepoints) || any(!is.finite(ntot)) || any(ntot < 0)) {
+    stop("Internal error: malformed ntot input for projected nearest-neighbour child exposure.")
+  }
+  xhat_child <- project_nn_child_trajectory(
+    fc_param = fc_param,
+    parent_fitness = parent_fitness,
+    pij_values = pij_values,
+    parent_birth_times = parent_birth_times,
+    timepoints = timepoints,
+    parent_xfit = parent_xfit,
+    tol = tol
+  )
+  sum(ntot * xhat_child)
+}
+
+#' Resolve a safe projected-exposure reference scale
+#' @keywords internal
+#' @noRd
+resolve_nn_exposure_reference <- function(observed_exposure, candidate_exposure, ntot) {
+  ref <- NA_real_
+
+  obs_positive <- observed_exposure[is.finite(observed_exposure) & observed_exposure > 0]
+  if (length(obs_positive)) {
+    ref <- stats::median(obs_positive, na.rm = TRUE)
+  }
+
+  if (!is.finite(ref) || ref <= 0) {
+    candidate_positive <- candidate_exposure[is.finite(candidate_exposure) & candidate_exposure > 0]
+    if (length(candidate_positive)) {
+      ref <- stats::median(candidate_positive, na.rm = TRUE)
+    }
+  }
+
+  if (!is.finite(ref) || ref <= 0) {
+    ntot_positive <- ntot[is.finite(ntot) & ntot > 0]
+    if (length(ntot_positive)) {
+      ref <- stats::median(ntot_positive, na.rm = TRUE)
+    }
+  }
+
+  if (!is.finite(ref) || ref <= 0) {
+    ref <- 1
+  }
+
+  ref
+}
+
+#' Prepare per-child nearest-neighbour inputs for optimisation and diagnostics
+#' @keywords internal
+#' @noRd
+prepare_nn_child_context <- function(nni_item, boot_data, fpar, birth_times_est,
+                                     birth_time_fallback_mask, xfit, timepoints, ntot) {
+  valid_parents <- nni_item$nj[nni_item$nj %in% names(fpar)]
+  child_obs <- rep(0, length(timepoints))
+  if (nni_item$ni %in% rownames(boot_data)) {
+    child_obs <- as.numeric(boot_data[nni_item$ni, ])
+  }
+
+  if (length(valid_parents) == 0) {
+    return(list(
+      ni = nni_item$ni,
+      nj = character(0),
+      pij = numeric(0),
+      parent_fitness = numeric(0),
+      parent_birth_times = numeric(0),
+      parent_birth_fallback = logical(0),
+      parent_xfit = matrix(numeric(0), nrow = 0, ncol = length(timepoints)),
+      child_obs = child_obs,
+      ntot = as.numeric(ntot),
+      parent_fitness_mean_pij = NA_real_,
+      parent_fitness_mean_exposure = NA_real_,
+      projected_exposure = NA_real_
+    ))
+  }
+
+  parent_match <- match(valid_parents, nni_item$nj)
+  pij_values <- unname(nni_item$pij[parent_match])
+  parent_fitness <- unname(fpar[valid_parents])
+  parent_birth_times <- unname(birth_times_est[valid_parents])
+  parent_birth_fallback <- as.logical(unname(birth_time_fallback_mask[valid_parents]))
+  parent_xfit <- xfit[valid_parents, , drop = FALSE]
+
+  parent_fitness_mean_pij <- weighted_parent_fitness(
+    list(nj = valid_parents, pij = pij_values),
+    fpar = fpar
+  )
+  parent_fitness_mean_exposure <- weighted_parent_fitness_exposure(
+    parent_fitness = parent_fitness,
+    pij_values = pij_values,
+    parent_birth_times = parent_birth_times,
+    timepoints = timepoints,
+    parent_xfit = parent_xfit,
+    ntot = ntot,
+    fallback_mean = parent_fitness_mean_pij
+  )
+  projected_exposure <- if (is.finite(parent_fitness_mean_exposure)) {
+    project_nn_child_exposure(
+      fc_param = parent_fitness_mean_exposure,
+      parent_fitness = parent_fitness,
+      pij_values = pij_values,
+      parent_birth_times = parent_birth_times,
+      timepoints = timepoints,
+      parent_xfit = parent_xfit,
+      ntot = ntot,
+      tol = ALFAK_FEXP_DELTA_TOL
+    )
+  } else {
+    NA_real_
+  }
+
+  list(
+    ni = nni_item$ni,
+    nj = valid_parents,
+    pij = pij_values,
+    parent_fitness = parent_fitness,
+    parent_birth_times = parent_birth_times,
+    parent_birth_fallback = parent_birth_fallback,
+    parent_xfit = parent_xfit,
+    child_obs = child_obs,
+    ntot = as.numeric(ntot),
+    parent_fitness_mean_pij = parent_fitness_mean_pij,
+    parent_fitness_mean_exposure = parent_fitness_mean_exposure,
+    projected_exposure = projected_exposure
+  )
+}
+
+#' Build an empty nearest-neighbour prior diagnostics row
+#' @keywords internal
+#' @noRd
+new_nn_prior_diagnostics <- function(nn_prior_mode_requested,
+                                     nn_prior_fit_subset_used = NA_character_) {
+  list(
+    nn_prior_mode_requested = nn_prior_mode_requested,
+    nn_prior_mode_used = nn_prior_mode_requested,
+    nn_prior_fit_subset_used = nn_prior_fit_subset_used,
+    n_observed_children = 0L,
+    n_zero_children_total = 0L,
+    n_zero_children_retained = 0L,
+    n_zero_children_screened = 0L,
+    sum_observed_weight = 0,
+    sum_zero_weight_raw = 0,
+    sum_zero_weight_final = 0,
+    zero_weight_cap_applied = FALSE,
+    exposure_threshold_used = NA_real_,
+    exposure_reference_used = NA_real_,
+    n_zero_children_with_birth_fallback = 0L,
+    prior_mu_hat = NA_real_,
+    prior_sigma_hat = NA_real_,
+    informative_child_count = NA_integer_,
+    map_delta_lower_boundary_rate = NA_real_,
+    map_delta_upper_boundary_rate = NA_real_,
+    used_no_prior_fallback_for_this_replicate = FALSE
+  )
+}
+
+#' Prepare weighted-mode nearest-neighbour prior inputs and diagnostics
+#' @keywords internal
+#' @noRd
+prepare_weighted_nn_prior_fit <- function(nn_child_contexts, nn_present,
+                                          nn_prior_fit_subset = c("hybrid", "all"),
+                                          nn_prior_zero_exposure_min = NULL,
+                                          nn_prior_zero_exposure_quantile = 0.10,
+                                          nn_prior_zero_weight_scale = 0.50,
+                                          nn_prior_zero_weight_cap_ratio = NULL,
+                                          nn_prior_zero_birth_fallback_weight = 0.50,
+                                          nn_prior_hybrid_min_obs = 3L,
+                                          ntot) {
+  nn_prior_fit_subset <- validate_nn_prior_fit_subset(nn_prior_fit_subset)
+  child_names <- names(nn_child_contexts)
+  if (is.null(child_names)) {
+    child_names <- vapply(nn_child_contexts, function(item) item$ni, character(1))
+  }
+  projected_exposure <- vapply(nn_child_contexts, function(item) item$projected_exposure, numeric(1))
+
+  observed_mask <- as.logical(nn_present)
+  zero_mask <- !observed_mask
+  n_observed <- sum(observed_mask)
+  n_zero_total <- sum(zero_mask)
+  diagnostics <- list(
+    nn_prior_fit_subset_used = nn_prior_fit_subset,
+    n_observed_children = as.integer(n_observed),
+    n_zero_children_total = as.integer(n_zero_total),
+    n_zero_children_retained = 0L,
+    n_zero_children_screened = as.integer(n_zero_total),
+    sum_observed_weight = as.numeric(n_observed),
+    sum_zero_weight_raw = 0,
+    sum_zero_weight_final = 0,
+    zero_weight_cap_applied = FALSE,
+    exposure_threshold_used = NA_real_,
+    exposure_reference_used = NA_real_,
+    n_zero_children_with_birth_fallback = 0L,
+    used_no_prior_fallback_for_this_replicate = FALSE
+  )
+
+  if (n_observed == 0L) {
+    diagnostics$used_no_prior_fallback_for_this_replicate <- TRUE
+    return(list(
+      prior_items = nn_child_contexts[FALSE],
+      child_weights = numeric(0),
+      parent_mean_fn = function(item, fpar) item$parent_fitness_mean_exposure,
+      diagnostics = diagnostics
+    ))
+  }
+
+  if (nn_prior_fit_subset == "hybrid") {
+    if (!is.null(nn_prior_zero_exposure_min)) {
+      exposure_threshold <- nn_prior_zero_exposure_min
+    } else if (n_observed >= nn_prior_hybrid_min_obs) {
+      observed_exposure <- projected_exposure[observed_mask & is.finite(projected_exposure)]
+      if (length(observed_exposure)) {
+        exposure_threshold <- as.numeric(stats::quantile(
+          observed_exposure,
+          probs = nn_prior_zero_exposure_quantile,
+          na.rm = TRUE,
+          names = FALSE,
+          type = 7
+        ))
+      } else {
+        exposure_threshold <- 0
+      }
+    } else {
+      exposure_threshold <- 0
+    }
+    zero_retained_mask <- zero_mask & is.finite(projected_exposure) & projected_exposure >= exposure_threshold
+    diagnostics$exposure_threshold_used <- exposure_threshold
+  } else {
+    zero_retained_mask <- zero_mask & is.finite(projected_exposure)
+  }
+
+  diagnostics$n_zero_children_retained <- as.integer(sum(zero_retained_mask))
+  diagnostics$n_zero_children_screened <- as.integer(n_zero_total - sum(zero_retained_mask))
+
+  exposure_reference <- resolve_nn_exposure_reference(
+    observed_exposure = projected_exposure[observed_mask],
+    candidate_exposure = projected_exposure[zero_mask],
+    ntot = ntot
+  )
+  diagnostics$exposure_reference_used <- exposure_reference
+
+  zero_weights_raw <- numeric(sum(zero_retained_mask))
+  zero_birth_fallback <- logical(sum(zero_retained_mask))
+  if (length(zero_weights_raw)) {
+    retained_zero_items <- nn_child_contexts[zero_retained_mask]
+    retained_zero_exposure <- projected_exposure[zero_retained_mask]
+    zero_birth_fallback <- vapply(retained_zero_items, function(item) {
+      any(item$parent_birth_fallback)
+    }, logical(1))
+    birth_reliability_multiplier <- ifelse(
+      zero_birth_fallback,
+      nn_prior_zero_birth_fallback_weight,
+      1
+    )
+    zero_weights_raw <- nn_prior_zero_weight_scale *
+      pmin(1, retained_zero_exposure / exposure_reference) *
+      birth_reliability_multiplier
+    zero_weights_raw[!is.finite(zero_weights_raw)] <- 0
+    zero_weights_raw <- pmax(0, zero_weights_raw)
+  }
+
+  diagnostics$sum_zero_weight_raw <- sum(zero_weights_raw)
+  diagnostics$n_zero_children_with_birth_fallback <- as.integer(sum(zero_birth_fallback))
+
+  cap_ratio <- if (!is.null(nn_prior_zero_weight_cap_ratio)) {
+    nn_prior_zero_weight_cap_ratio
+  } else {
+    min(1, sqrt(n_observed / max(sum(zero_retained_mask), 1)))
+  }
+  zero_weight_max <- cap_ratio * n_observed
+  zero_weights_final <- zero_weights_raw
+  if (sum(zero_weights_raw) > zero_weight_max && sum(zero_weights_raw) > 0) {
+    zero_weights_final <- zero_weights_raw * (zero_weight_max / sum(zero_weights_raw))
+    diagnostics$zero_weight_cap_applied <- TRUE
+  }
+  diagnostics$sum_zero_weight_final <- sum(zero_weights_final)
+
+  full_weights <- numeric(length(nn_child_contexts))
+  full_weights[observed_mask] <- 1
+  if (length(zero_weights_final)) {
+    full_weights[zero_retained_mask] <- zero_weights_final
+  }
+  prior_keep <- observed_mask | (zero_retained_mask & full_weights > 0)
+
+  list(
+    prior_items = nn_child_contexts[prior_keep],
+    child_weights = full_weights[prior_keep],
+    parent_mean_fn = function(item, fpar) item$parent_fitness_mean_exposure,
+    diagnostics = diagnostics
+  )
 }
 
 #' Generate all single-step neighbours for karyotype IDs
@@ -1361,10 +1902,17 @@ find_birth_times <- function(opt_res, time_range, minF) {
 #' @noRd
 solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, pm = 0.00005,
                                     n0, nb, passage_times = NULL, allow_noninteger_counts = FALSE, correct_efflux=FALSE,
-                                    nn_prior = c("empirical_censored", "none", "empirical"),
+                                    nn_prior = c("empirical_censored", "empirical_censored_weighted", "none", "empirical"),
                                     nn_prior_sd = NULL,
                                     nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
-                                    nn_prior_grid_n = ALFAK_NN_PRIOR_CENSORED_GRID_POINTS) {
+                                    nn_prior_grid_n = ALFAK_NN_PRIOR_CENSORED_GRID_POINTS,
+                                    nn_prior_fit_subset = c("hybrid", "all"),
+                                    nn_prior_zero_exposure_min = NULL,
+                                    nn_prior_zero_exposure_quantile = 0.10,
+                                    nn_prior_zero_weight_scale = 0.50,
+                                    nn_prior_zero_weight_cap_ratio = NULL,
+                                    nn_prior_zero_birth_fallback_weight = 0.50,
+                                    nn_prior_hybrid_min_obs = 3L) {
   data$x <- coerce_count_matrix(data$x, allow_noninteger_counts = allow_noninteger_counts)
   validate_positive_depth(data$x)
   validate_positive_integer(nboot, "nboot")
@@ -1374,10 +1922,18 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
   validate_scalar_logical(allow_noninteger_counts, "allow_noninteger_counts")
   validate_scalar_logical(correct_efflux, "correct_efflux")
   nn_prior <- validate_nn_prior_mode(nn_prior)
+  nn_prior_fit_subset <- validate_nn_prior_fit_subset(nn_prior_fit_subset)
   validate_nn_prior_controls(
     nn_prior_sd = nn_prior_sd,
     nn_prior_sd_floor = nn_prior_sd_floor,
-    nn_prior_grid_n = nn_prior_grid_n
+    nn_prior_grid_n = nn_prior_grid_n,
+    nn_prior_fit_subset = nn_prior_fit_subset,
+    nn_prior_zero_exposure_min = nn_prior_zero_exposure_min,
+    nn_prior_zero_exposure_quantile = nn_prior_zero_exposure_quantile,
+    nn_prior_zero_weight_scale = nn_prior_zero_weight_scale,
+    nn_prior_zero_weight_cap_ratio = nn_prior_zero_weight_cap_ratio,
+    nn_prior_zero_birth_fallback_weight = nn_prior_zero_birth_fallback_weight,
+    nn_prior_hybrid_min_obs = nn_prior_hybrid_min_obs
   )
   fq <- get_frequent_karyotypes(data$x, minobs)
   nn_info_list <- gen_nn_info(fq, pm) # Renamed 'nn' to 'nn_info_list' for clarity
@@ -1446,17 +2002,23 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
       opt_res$f <- opt_res$f + g0_val - sum(opt_res$x0 * opt_res$f)
     }
 
-    birth_times_est <- find_birth_times(opt_res, time_range = c(-1000, max(current_timepoints)), minF = 1 / current_n0) # Renamed
     peak_times <- current_timepoints[apply(x, 1, which.max)]
+    birth_times_info <- sanitize_birth_times(
+      find_birth_times(opt_res, time_range = c(-1000, max(current_timepoints)), minF = 1 / current_n0),
+      peak_times = peak_times,
+      timepoints = current_timepoints
+    )
     # Neighbour estimation relies on finite parent birth times; fall back to peak-aligned
     # values when root-finding cannot recover them.
-    birth_times_est <- sanitize_birth_times(birth_times_est, peak_times = peak_times, timepoints = current_timepoints)
+    birth_times_est <- birth_times_info$birth_times
+    birth_time_fallback_mask <- birth_times_info$fallback_mask
 
     x0par <- opt_res$x0
     names(x0par) <- current_fq
     fpar <- opt_res$f
     names(fpar) <- current_fq
     names(birth_times_est) <- current_fq
+    names(birth_time_fallback_mask) <- current_fq
 
     # dfb <- as.matrix(stats::dist(as.numeric(fpar))) # dfb was not used
     # dfb[upper.tri(dfb)] <- dfb[upper.tri(dfb)] * (-1)
@@ -1467,29 +2029,42 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
     rownames(xfit) <- current_fq
     ntot <- colSums(boot_data) # Total counts from bootstrapped data
     ntot_rounded <- round(ntot)
-    build_opt_fc <- function(nni_param, prior_mean_param = NaN, prior_sd_param = NaN, do_prior_param = FALSE) {
+    nn_child_contexts <- lapply(current_nn_info, function(nni_item) {
+      prepare_nn_child_context(
+        nni_item = nni_item,
+        boot_data = boot_data,
+        fpar = fpar,
+        birth_times_est = birth_times_est,
+        birth_time_fallback_mask = birth_time_fallback_mask,
+        xfit = xfit,
+        timepoints = current_timepoints,
+        ntot = ntot_rounded
+      )
+    })
+    names(nn_child_contexts) <- names(current_nn_info)
+
+    build_opt_fc <- function(nni_param, prior_mean_param = NaN, prior_sd_param = NaN,
+                             do_prior_param = FALSE,
+                             parent_mean_mode = c("pij", "exposure")) {
+      parent_mean_mode <- match.arg(parent_mean_mode)
       if (length(nni_param$nj) == 0) {
         return(function(fc_param) 10^9)
       }
-      child <- nni_param$ni
-      parent_fitness_mean <- weighted_parent_fitness(nni_param, fpar)
-      parent_fitness <- unname(fpar[nni_param$nj])
-      parent_birth_times <- unname(birth_times_est[nni_param$nj])
-      parent_xfit <- xfit[nni_param$nj, , drop = FALSE]
-      child_obs <- rep(0, length(current_timepoints))
-      if (child %in% rownames(boot_data)) {
-        child_obs <- as.numeric(boot_data[child, ])
-      }
+      parent_fitness_mean <- switch(
+        parent_mean_mode,
+        pij = nni_param$parent_fitness_mean_pij,
+        exposure = nni_param$parent_fitness_mean_exposure
+      )
 
       function(fc_param) {
         alfak_neighbor_objective_cpp(
           fc_param = fc_param,
-          parent_fitness = parent_fitness,
+          parent_fitness = nni_param$parent_fitness,
           pij_values = nni_param$pij,
-          parent_birth_times = parent_birth_times,
+          parent_birth_times = nni_param$parent_birth_times,
           timepoints = current_timepoints,
-          parent_xfit = parent_xfit,
-          child_obs = child_obs,
+          parent_xfit = nni_param$parent_xfit,
+          child_obs = nni_param$child_obs,
           ntot = ntot_rounded,
           parent_fitness_mean = parent_fitness_mean,
           prior_mean = prior_mean_param,
@@ -1512,23 +2087,36 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
     }
 
 
-    nn_present <- names(current_nn_info) %in% rownames(boot_data)
+    nn_present <- names(nn_child_contexts) %in% rownames(boot_data)
     if(length(nn_present) > 0 && any(nn_present)){ # Check if nn_present is not empty
       nn_present_indices <- which(nn_present)
-      nn_present[nn_present_indices] <- nn_present[nn_present_indices] & sapply(names(current_nn_info)[nn_present_indices], function(ni_sapply) { #Renamed ni
+      nn_present[nn_present_indices] <- nn_present[nn_present_indices] & sapply(names(nn_child_contexts)[nn_present_indices], function(ni_sapply) { #Renamed ni
         sum(boot_data[ni_sapply, ]) > 0
       })
     }
 
-    fc <- rep(NaN, length(current_nn_info))
-    names(fc) <- names(current_nn_info) # Pre-name fc
+    fc <- rep(NaN, length(nn_child_contexts))
+    names(fc) <- names(nn_child_contexts) # Pre-name fc
+    nn_prior_diag <- new_nn_prior_diagnostics(
+      nn_prior_mode_requested = nn_prior,
+      nn_prior_fit_subset_used = if (nn_prior == "empirical_censored_weighted") nn_prior_fit_subset else NA_character_
+    )
+    nn_prior_diag$n_observed_children <- as.integer(sum(nn_present))
+    nn_prior_diag$n_zero_children_total <- as.integer(sum(!nn_present))
+    if (any(!nn_present)) {
+      nn_prior_diag$n_zero_children_with_birth_fallback <- as.integer(sum(vapply(
+        nn_child_contexts[!nn_present],
+        function(item) any(item$parent_birth_fallback),
+        logical(1)
+      )))
+    }
 
     if (any(nn_present)) {
       # Use names for sapply for robustness if current_nn_info can be sparse/differently ordered
-      sapply_names <- names(current_nn_info)[nn_present]
+      sapply_names <- names(nn_child_contexts)[nn_present]
       if(length(sapply_names) > 0) { # Ensure there are names to iterate over
         for (child_name in sapply_names) {
-          objective_fn <- build_opt_fc(current_nn_info[[child_name]], do_prior_param = FALSE)
+          objective_fn <- build_opt_fc(nn_child_contexts[[child_name]], do_prior_param = FALSE)
           res <- run_optimise_checked(objective_fn, interval = search_interval,
                                       context = sprintf("optimise nearest-neighbour fitness for observed child %s", child_name))
           if (!is.null(res)) {
@@ -1543,19 +2131,40 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
       # Calculate differences based on nn_info items that were present AND had their fc computed
       nn_present_and_fc_computed <- nn_present & !is.na(fc)
       if(any(nn_present_and_fc_computed)){
-        fc_prior_vals <- unlist(lapply(current_nn_info[nn_present_and_fc_computed], function(nni_item) {
-          parent_f_mean <- weighted_parent_fitness(nni_item, fpar)
+        fc_prior_vals <- unlist(lapply(nn_child_contexts[nn_present_and_fc_computed], function(nni_item) {
+          parent_f_mean <- nni_item$parent_fitness_mean_pij
           if(is.finite(parent_f_mean)){
             fc[nni_item$ni] - parent_f_mean
           } else {
             numeric(0) # No valid parents to compute difference from
           }
         }))
+        fc_prior_vals <- fc_prior_vals[is.finite(fc_prior_vals)]
       }
     }
 
     use_empirical_prior <- nn_prior == "empirical"
     use_empirical_censored_prior <- nn_prior == "empirical_censored"
+    use_empirical_censored_weighted_prior <- nn_prior == "empirical_censored_weighted"
+    weighted_prior_config <- NULL
+    if (use_empirical_censored_weighted_prior && any(!nn_present)) {
+      weighted_prior_config <- prepare_weighted_nn_prior_fit(
+        nn_child_contexts = nn_child_contexts,
+        nn_present = nn_present,
+        nn_prior_fit_subset = nn_prior_fit_subset,
+        nn_prior_zero_exposure_min = nn_prior_zero_exposure_min,
+        nn_prior_zero_exposure_quantile = nn_prior_zero_exposure_quantile,
+        nn_prior_zero_weight_scale = nn_prior_zero_weight_scale,
+        nn_prior_zero_weight_cap_ratio = nn_prior_zero_weight_cap_ratio,
+        nn_prior_zero_birth_fallback_weight = nn_prior_zero_birth_fallback_weight,
+        nn_prior_hybrid_min_obs = nn_prior_hybrid_min_obs,
+        ntot = ntot_rounded
+      )
+      nn_prior_diag[names(weighted_prior_config$diagnostics)] <- weighted_prior_config$diagnostics
+      if (isTRUE(weighted_prior_config$diagnostics$used_no_prior_fallback_for_this_replicate)) {
+        nn_prior_diag$nn_prior_mode_used <- "none"
+      }
+    }
 
     if (use_empirical_prior && any(!nn_present) && length(fc_prior_vals) > 0 && !all(is.na(fc_prior_vals))) {
       mean_fc_prior_val <- mean(fc_prior_vals, na.rm = TRUE) # Renamed mean_fc_prior
@@ -1568,11 +2177,15 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
       } else {
         sd_fc_prior_val <- nn_prior_sd
       }
+      nn_prior_diag$nn_prior_mode_used <- "empirical"
+      nn_prior_diag$sum_observed_weight <- length(fc_prior_vals)
+      nn_prior_diag$prior_mu_hat <- mean_fc_prior_val
+      nn_prior_diag$prior_sigma_hat <- sd_fc_prior_val
 
-      sapply_names_not_present <- names(current_nn_info)[!nn_present]
+      sapply_names_not_present <- names(nn_child_contexts)[!nn_present]
       if(length(sapply_names_not_present) > 0) {
         for (child_name in sapply_names_not_present) {
-          objective_fn <- build_opt_fc(current_nn_info[[child_name]],
+          objective_fn <- build_opt_fc(nn_child_contexts[[child_name]],
                                        prior_mean_param = mean_fc_prior_val,
                                        prior_sd_param = sd_fc_prior_val,
                                        do_prior_param = TRUE)
@@ -1585,7 +2198,7 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
       }
     } else if (use_empirical_censored_prior && any(!nn_present)) {
       prior_fit <- estimate_nn_prior_censored_eb(
-        nn_info_items = current_nn_info,
+        nn_info_items = nn_child_contexts,
         fpar = fpar,
         build_opt_fc = build_opt_fc,
         search_interval = search_interval,
@@ -1597,11 +2210,28 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
           b_iter_idx
         )
       )
+      nn_prior_diag$nn_prior_mode_used <- "empirical_censored"
+      nn_prior_diag$n_zero_children_retained <- as.integer(sum(!nn_present))
+      nn_prior_diag$n_zero_children_screened <- 0L
+      nn_prior_diag$sum_observed_weight <- sum(nn_present)
+      nn_prior_diag$sum_zero_weight_raw <- sum(!nn_present)
+      nn_prior_diag$sum_zero_weight_final <- sum(!nn_present)
+      nn_prior_diag$prior_mu_hat <- prior_fit$prior_mean
+      nn_prior_diag$prior_sigma_hat <- prior_fit$prior_sd
+      if (!is.null(prior_fit$informative_child_count)) {
+        nn_prior_diag$informative_child_count <- prior_fit$informative_child_count
+      }
+      if (!is.null(prior_fit$map_delta_lower_boundary_rate)) {
+        nn_prior_diag$map_delta_lower_boundary_rate <- prior_fit$map_delta_lower_boundary_rate
+      }
+      if (!is.null(prior_fit$map_delta_upper_boundary_rate)) {
+        nn_prior_diag$map_delta_upper_boundary_rate <- prior_fit$map_delta_upper_boundary_rate
+      }
 
-      sapply_names_not_present <- names(current_nn_info)[!nn_present]
+      sapply_names_not_present <- names(nn_child_contexts)[!nn_present]
       if (length(sapply_names_not_present) > 0) {
         for (child_name in sapply_names_not_present) {
-          objective_fn <- build_opt_fc(current_nn_info[[child_name]],
+          objective_fn <- build_opt_fc(nn_child_contexts[[child_name]],
                                        prior_mean_param = prior_fit$prior_mean,
                                        prior_sd_param = prior_fit$prior_sd,
                                        do_prior_param = TRUE)
@@ -1618,11 +2248,68 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
           }
         }
       }
+    } else if (use_empirical_censored_weighted_prior &&
+               any(!nn_present) &&
+               !isTRUE(weighted_prior_config$diagnostics$used_no_prior_fallback_for_this_replicate)) {
+      prior_fit <- estimate_nn_prior_censored_eb(
+        nn_info_items = weighted_prior_config$prior_items,
+        fpar = fpar,
+        build_opt_fc = build_opt_fc,
+        search_interval = search_interval,
+        nn_prior_sd = nn_prior_sd,
+        nn_prior_sd_floor = nn_prior_sd_floor,
+        nn_prior_grid_n = nn_prior_grid_n,
+        child_weights = weighted_prior_config$child_weights,
+        parent_mean_fn = weighted_prior_config$parent_mean_fn,
+        context = sprintf(
+          "fit empirical_censored_weighted latent-neighbour prior for bootstrap replicate %d",
+          b_iter_idx
+        )
+      )
+      nn_prior_diag$nn_prior_mode_used <- "empirical_censored_weighted"
+      nn_prior_diag$prior_mu_hat <- prior_fit$prior_mean
+      nn_prior_diag$prior_sigma_hat <- prior_fit$prior_sd
+      if (!is.null(prior_fit$informative_child_count)) {
+        nn_prior_diag$informative_child_count <- prior_fit$informative_child_count
+      }
+      if (!is.null(prior_fit$map_delta_lower_boundary_rate)) {
+        nn_prior_diag$map_delta_lower_boundary_rate <- prior_fit$map_delta_lower_boundary_rate
+      }
+      if (!is.null(prior_fit$map_delta_upper_boundary_rate)) {
+        nn_prior_diag$map_delta_upper_boundary_rate <- prior_fit$map_delta_upper_boundary_rate
+      }
+
+      sapply_names_not_present <- names(nn_child_contexts)[!nn_present]
+      if (length(sapply_names_not_present) > 0) {
+        for (child_name in sapply_names_not_present) {
+          objective_fn <- build_opt_fc(nn_child_contexts[[child_name]],
+                                       prior_mean_param = prior_fit$prior_mean,
+                                       prior_sd_param = prior_fit$prior_sd,
+                                       do_prior_param = TRUE,
+                                       parent_mean_mode = "exposure")
+          res <- run_optimise_strict_checked(
+            objective_fn,
+            interval = search_interval,
+            context = sprintf(
+              "optimise nearest-neighbour fitness with empirical_censored_weighted prior for latent child %s",
+              child_name
+            )
+          )
+          if (!is.null(res)) {
+            fc[child_name] <- res$minimum
+          }
+        }
+      }
     } else if (any(!nn_present)) { # No prior to use
-      sapply_names_not_present <- names(current_nn_info)[!nn_present]
+      if (use_empirical_prior) {
+        nn_prior_diag$nn_prior_mode_used <- "none"
+      } else if (!use_empirical_censored_weighted_prior) {
+        nn_prior_diag$nn_prior_mode_used <- "none"
+      }
+      sapply_names_not_present <- names(nn_child_contexts)[!nn_present]
       if(length(sapply_names_not_present) > 0) {
         for (child_name in sapply_names_not_present) {
-          objective_fn <- build_opt_fc(current_nn_info[[child_name]], do_prior_param = FALSE)
+          objective_fn <- build_opt_fc(nn_child_contexts[[child_name]], do_prior_param = FALSE)
           res <- run_optimise_checked(objective_fn, interval = search_interval,
                                       context = sprintf("optimise nearest-neighbour fitness without prior for latent child %s", child_name))
           if (!is.null(res)) {
@@ -1636,7 +2323,8 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
          f_final = f_final,
          x0_initial = x0_init,
          x0_final = x0_final,
-         f_nn = fc)
+         f_nn = fc,
+         nn_prior_diagnostics = nn_prior_diag)
   }
 
   # Run bootstrap iterations serially using lapply
@@ -1655,6 +2343,10 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
   if (is.null(f_nn_mat)) {
     f_nn_mat <- matrix(numeric(0), nrow = length(boot_list), ncol = 0)
   }
+  nn_prior_diagnostics <- do.call(rbind, lapply(boot_list, function(x) {
+    as.data.frame(x$nn_prior_diagnostics, stringsAsFactors = FALSE)
+  }))
+  rownames(nn_prior_diagnostics) <- NULL
 
   # Set column names if matrices are not empty and fq/names(nn_info_list) are not empty
   if(length(fq) > 0) {
@@ -1671,7 +2363,8 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
        final_fitness = f_final_mat,
        initial_frequencies = x0_initial_mat,
        final_frequencies = x0_final_mat,
-       nn_fitness = f_nn_mat)
+       nn_fitness = f_nn_mat,
+       nn_prior_diagnostics = nn_prior_diagnostics)
 }
 
 #' Fit Kriging model to fitness data (Internal function)

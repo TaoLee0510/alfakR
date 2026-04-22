@@ -16,10 +16,17 @@ alfak(
   allow_noninteger_counts = FALSE,
   correct_efflux = FALSE,
   landscape_data_output = FALSE,
-  nn_prior = c("empirical_censored", "none", "empirical"),
+  nn_prior = c("empirical_censored", "empirical_censored_weighted", "none", "empirical"),
   nn_prior_sd = NULL,
   nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
   nn_prior_grid_n = ALFAK_NN_PRIOR_CENSORED_GRID_POINTS,
+  nn_prior_fit_subset = c("hybrid", "all"),
+  nn_prior_zero_exposure_min = NULL,
+  nn_prior_zero_exposure_quantile = 0.1,
+  nn_prior_zero_weight_scale = 0.5,
+  nn_prior_zero_weight_cap_ratio = NULL,
+  nn_prior_zero_birth_fallback_weight = 0.5,
+  nn_prior_hybrid_min_obs = 3L,
   krig_bootstrap_mode = c("marginal", "joint")
 )
 }
@@ -79,6 +86,12 @@ written.}
 children, including zero-count latent neighbours, to correct observation
 bias. This mode errors if the prior hyperparameter fit fails and is the
 default.
+\code{"empirical_censored_weighted"} fits the same single-Gaussian censored
+empirical-Bayes prior, but only in the bootstrap pathway it computes
+projected child exposure from the neighbour likelihood ingredients,
+downweights zero-only latent children, optionally screens very low-exposure
+zeros before fitting the prior, and falls back to no prior for a bootstrap
+replicate when that replicate has no observed neighbour children.
 \code{"none"} disables the latent-neighbour prior contribution.
 \code{"empirical"} opt-in uses the empirical child-minus-parent prior estimated
 from observed neighbours.
@@ -92,8 +105,46 @@ used when the empirical prior variance is zero or too small. Default is
 \code{1e-3}.}
 
 \item{nn_prior_grid_n}{Integer; number of equally spaced grid points used for
-the fixed-grid numerical integration in \code{nn_prior = "empirical_censored"}.
-Default is \code{81}.}
+the fixed-grid numerical integration in \code{nn_prior = "empirical_censored"}
+and \code{nn_prior = "empirical_censored_weighted"}. Default is \code{81}.}
+
+\item{nn_prior_fit_subset}{Character; weighted-mode only control for which
+zero-only latent children are allowed into the empirical-Bayes prior fit.
+\code{"hybrid"} (default) keeps all observed neighbour children, then screens
+zero-only children by projected exposure before weighting them. \code{"all"}
+skips the hard exposure screen but still downweights zero-only children and
+still applies the total zero-weight cap.}
+
+\item{nn_prior_zero_exposure_min}{Optional non-negative numeric scalar used
+only when \code{nn_prior = "empirical_censored_weighted"} and
+\code{nn_prior_fit_subset = "hybrid"}. If supplied, this is the projected
+child-exposure threshold used to retain zero-only children in the prior fit.}
+
+\item{nn_prior_zero_exposure_quantile}{Numeric scalar in \code{[0, 1]} used only
+for weighted hybrid fitting when \code{nn_prior_zero_exposure_min} is
+\code{NULL} and enough observed neighbour children are available. The threshold
+is the corresponding quantile of the observed projected child exposures.}
+
+\item{nn_prior_zero_weight_scale}{Numeric scalar in \code{[0, 1]} giving the
+baseline downweighting applied to zero-only latent children in weighted mode
+before the global zero-weight cap.}
+
+\item{nn_prior_zero_weight_cap_ratio}{Optional non-negative numeric scalar used
+only in weighted mode. When supplied, the total zero-child weight is capped at
+this ratio times the number of observed neighbour children. When \code{NULL},
+a data-adaptive cap is used.}
+
+\item{nn_prior_zero_birth_fallback_weight}{Numeric scalar in \code{[0, 1]} used
+only in weighted mode. If any parent birth time for a zero-only child was
+imputed by the finite fallback logic, that zero child's raw weight is
+multiplied by this value.}
+
+\item{nn_prior_hybrid_min_obs}{Positive integer used only when
+\code{nn_prior = "empirical_censored_weighted"} and
+\code{nn_prior_fit_subset = "hybrid"}. When fewer than this many observed
+neighbour children are available, weighted hybrid fitting does not estimate
+a hard observed-based exposure threshold from that small sample and instead
+relies on weighting plus the zero-weight cap.}
 
 \item{krig_bootstrap_mode}{Character; \code{"marginal"} (default) samples
 bootstrap fitness values independently by column, matching the original
