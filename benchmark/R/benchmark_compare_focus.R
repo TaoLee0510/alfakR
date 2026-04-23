@@ -122,6 +122,25 @@ build_focus_parameter_bundles <- function(results_tbl,
   bundle_list
 }
 
+build_focus_parameter_bundles_from_selected <- function(selected_fit_tbl,
+                                                        beneficial_move_levels,
+                                                        parameter_levels) {
+  if (is.null(selected_fit_tbl) || !nrow(selected_fit_tbl)) {
+    return(list())
+  }
+
+  selected_fit_tbl <- selected_fit_tbl %>%
+    dplyr::filter(parameter_label %in% parameter_levels) %>%
+    dplyr::arrange(match(parameter_label, parameter_levels))
+  if (!nrow(selected_fit_tbl)) {
+    return(list())
+  }
+
+  bundle_list <- lapply(selected_fit_tbl$outdir, read_fit_bundle, beneficial_move_levels = beneficial_move_levels)
+  names(bundle_list) <- selected_fit_tbl$parameter_label
+  bundle_list
+}
+
 landscape_long_from_bundles <- function(bundle_list) {
   if (!length(bundle_list)) {
     return(tibble::tibble())

@@ -27,20 +27,35 @@ same_optional_numeric <- function(lhs, rhs, tol = 1e-12) {
 
 weighted_prior_cache_matches <- function(cached,
                                          nn_prior,
+                                         nn_prior_grid_n,
                                          nn_prior_fit_subset,
                                          nn_prior_zero_exposure_quantile,
                                          nn_prior_zero_weight_scale,
                                          nn_prior_zero_weight_cap_ratio,
-                                         nn_prior_zero_birth_fallback_weight) {
+                                         nn_prior_zero_birth_fallback_weight,
+                                         nn_prior_zero_birth_child_floor,
+                                         nn_prior_zero_birth_child_shape,
+                                         nn_prior_zero_birth_replicate_floor,
+                                         nn_prior_zero_birth_replicate_shape) {
+  if (identical(nn_prior, "empirical_censored") &&
+      !same_optional_numeric(cached$nn_prior_grid_n, nn_prior_grid_n)) {
+    return(FALSE)
+  }
+
   if (!identical(nn_prior, "empirical_censored_weighted")) {
     return(TRUE)
   }
 
-  identical(as.character(cached$nn_prior_fit_subset), nn_prior_fit_subset) &&
+  same_optional_numeric(cached$nn_prior_grid_n, nn_prior_grid_n) &&
+    identical(as.character(cached$nn_prior_fit_subset), nn_prior_fit_subset) &&
     same_optional_numeric(cached$nn_prior_zero_exposure_quantile, nn_prior_zero_exposure_quantile) &&
     same_optional_numeric(cached$nn_prior_zero_weight_scale, nn_prior_zero_weight_scale) &&
     same_optional_numeric(cached$nn_prior_zero_weight_cap_ratio, nn_prior_zero_weight_cap_ratio) &&
-    same_optional_numeric(cached$nn_prior_zero_birth_fallback_weight, nn_prior_zero_birth_fallback_weight)
+    same_optional_numeric(cached$nn_prior_zero_birth_fallback_weight, nn_prior_zero_birth_fallback_weight) &&
+    same_optional_numeric(cached$nn_prior_zero_birth_child_floor, nn_prior_zero_birth_child_floor) &&
+    same_optional_numeric(cached$nn_prior_zero_birth_child_shape, nn_prior_zero_birth_child_shape) &&
+    same_optional_numeric(cached$nn_prior_zero_birth_replicate_floor, nn_prior_zero_birth_replicate_floor) &&
+    same_optional_numeric(cached$nn_prior_zero_birth_replicate_shape, nn_prior_zero_birth_replicate_shape)
 }
 
 extract_xval_metrics <- function(xv) {
@@ -112,6 +127,10 @@ refresh_cached_fit_row <- function(cached,
                                    nn_prior_zero_weight_scale,
                                    nn_prior_zero_weight_cap_ratio,
                                    nn_prior_zero_birth_fallback_weight,
+                                   nn_prior_zero_birth_child_floor,
+                                   nn_prior_zero_birth_child_shape,
+                                   nn_prior_zero_birth_replicate_floor,
+                                   nn_prior_zero_birth_replicate_shape,
                                    warning_log_path,
                                    landscape_path,
                                    bootstrap_path,
@@ -136,6 +155,10 @@ refresh_cached_fit_row <- function(cached,
   cached$nn_prior_zero_weight_scale <- nn_prior_zero_weight_scale
   cached$nn_prior_zero_weight_cap_ratio <- nn_prior_zero_weight_cap_ratio
   cached$nn_prior_zero_birth_fallback_weight <- nn_prior_zero_birth_fallback_weight
+  cached$nn_prior_zero_birth_child_floor <- nn_prior_zero_birth_child_floor
+  cached$nn_prior_zero_birth_child_shape <- nn_prior_zero_birth_child_shape
+  cached$nn_prior_zero_birth_replicate_floor <- nn_prior_zero_birth_replicate_floor
+  cached$nn_prior_zero_birth_replicate_shape <- nn_prior_zero_birth_replicate_shape
   cached$cached <- TRUE
   cached$warning_count <- length(warning_lines)
   cached$lambda_endpoint_warning_count <- sum(grepl("^Grid searches over lambda", warning_lines))
@@ -243,7 +266,11 @@ run_alfak_fit <- function(patient_id,
                           nn_prior_zero_exposure_quantile = 0.10,
                           nn_prior_zero_weight_scale = 0.50,
                           nn_prior_zero_weight_cap_ratio = NA_real_,
-                          nn_prior_zero_birth_fallback_weight = 0.50,
+                          nn_prior_zero_birth_fallback_weight = NA_real_,
+                          nn_prior_zero_birth_child_floor = 0.25,
+                          nn_prior_zero_birth_child_shape = 1,
+                          nn_prior_zero_birth_replicate_floor = 0.50,
+                          nn_prior_zero_birth_replicate_shape = 1,
                           force_refit = FALSE) {
   landscape_path <- file.path(outdir, "landscape.Rds")
   bootstrap_path <- file.path(outdir, "bootstrap_res.Rds")
@@ -264,7 +291,13 @@ run_alfak_fit <- function(patient_id,
       " | zero_q=", signif(nn_prior_zero_exposure_quantile, 4),
       " | zero_scale=", signif(nn_prior_zero_weight_scale, 4),
       " | zero_cap=", if (is.na(nn_prior_zero_weight_cap_ratio)) "adaptive" else signif(nn_prior_zero_weight_cap_ratio, 4),
-      " | zero_birth_fallback=", signif(nn_prior_zero_birth_fallback_weight, 4)
+      if (!is.na(nn_prior_zero_birth_fallback_weight)) paste0(
+        " | zero_birth_fallback_alias=", signif(nn_prior_zero_birth_fallback_weight, 4)
+      ) else "",
+      " | zero_birth_child_floor=", signif(nn_prior_zero_birth_child_floor, 4),
+      " | zero_birth_child_shape=", signif(nn_prior_zero_birth_child_shape, 4),
+      " | zero_birth_replicate_floor=", signif(nn_prior_zero_birth_replicate_floor, 4),
+      " | zero_birth_replicate_shape=", signif(nn_prior_zero_birth_replicate_shape, 4)
     ) else ""
   )
 
@@ -276,11 +309,16 @@ run_alfak_fit <- function(patient_id,
         weighted_prior_cache_matches(
           cached = cached,
           nn_prior = nn_prior,
+          nn_prior_grid_n = nn_prior_grid_n,
           nn_prior_fit_subset = nn_prior_fit_subset,
           nn_prior_zero_exposure_quantile = nn_prior_zero_exposure_quantile,
           nn_prior_zero_weight_scale = nn_prior_zero_weight_scale,
           nn_prior_zero_weight_cap_ratio = nn_prior_zero_weight_cap_ratio,
-          nn_prior_zero_birth_fallback_weight = nn_prior_zero_birth_fallback_weight
+          nn_prior_zero_birth_fallback_weight = nn_prior_zero_birth_fallback_weight,
+          nn_prior_zero_birth_child_floor = nn_prior_zero_birth_child_floor,
+          nn_prior_zero_birth_child_shape = nn_prior_zero_birth_child_shape,
+          nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
+          nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape
         )) {
       cached <- refresh_cached_fit_row(
         cached = cached,
@@ -297,6 +335,10 @@ run_alfak_fit <- function(patient_id,
         nn_prior_zero_weight_scale = nn_prior_zero_weight_scale,
         nn_prior_zero_weight_cap_ratio = nn_prior_zero_weight_cap_ratio,
         nn_prior_zero_birth_fallback_weight = nn_prior_zero_birth_fallback_weight,
+        nn_prior_zero_birth_child_floor = nn_prior_zero_birth_child_floor,
+        nn_prior_zero_birth_child_shape = nn_prior_zero_birth_child_shape,
+        nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
+        nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape,
         warning_log_path = warning_log_path,
         landscape_path = landscape_path,
         bootstrap_path = bootstrap_path,
@@ -307,46 +349,6 @@ run_alfak_fit <- function(patient_id,
       alfak_log("ALFA-K cached: ", task_tag)
       return(tibble::as_tibble(cached))
     }
-  }
-
-  if (!force_refit &&
-      has_complete_alfak_outputs(outdir) &&
-      !identical(nn_prior, "empirical_censored_weighted")) {
-    warning_lines <- if (file.exists(warning_log_path)) readLines(warning_log_path, warn = FALSE) else character()
-    xv <- tryCatch(readRDS(xval_path), error = function(e) NULL)
-    cached <- c(
-      list(
-        patient_id = patient_id,
-        outdir = outdir,
-        pm = pm,
-        pm_label = pm_label,
-        minobs = minobs,
-        benchmark_seed = benchmark_seed,
-        parameter_label = parameter_label,
-        nn_prior = nn_prior,
-        nn_prior_grid_n = nn_prior_grid_n,
-        nn_prior_fit_subset = nn_prior_fit_subset,
-        nn_prior_zero_exposure_quantile = nn_prior_zero_exposure_quantile,
-        nn_prior_zero_weight_scale = nn_prior_zero_weight_scale,
-        nn_prior_zero_weight_cap_ratio = nn_prior_zero_weight_cap_ratio,
-        nn_prior_zero_birth_fallback_weight = nn_prior_zero_birth_fallback_weight,
-        status = "ok",
-        cached = TRUE,
-        error_message = NA_character_,
-        elapsed_sec = NA_real_,
-        warning_count = length(warning_lines),
-        lambda_endpoint_warning_count = sum(grepl("^Grid searches over lambda", warning_lines)),
-        warning_messages = if (length(warning_lines)) paste(warning_lines, collapse = " || ") else NA_character_,
-        landscape_path = landscape_path,
-        bootstrap_path = if (file.exists(bootstrap_path)) bootstrap_path else NA_character_,
-        posterior_path = if (file.exists(posterior_path)) posterior_path else NA_character_,
-        xval_path = xval_path
-      ),
-      extract_xval_metrics(xv)
-    )
-    saveRDS(cached, summary_path)
-    alfak_log("ALFA-K cached: ", task_tag)
-    return(tibble::as_tibble(cached))
   }
 
   alfak_log("ALFA-K start: ", task_tag)
@@ -386,7 +388,11 @@ run_alfak_fit <- function(patient_id,
         nn_prior_zero_exposure_quantile = nn_prior_zero_exposure_quantile,
         nn_prior_zero_weight_scale = nn_prior_zero_weight_scale,
         nn_prior_zero_weight_cap_ratio = if (is.na(nn_prior_zero_weight_cap_ratio)) NULL else nn_prior_zero_weight_cap_ratio,
-        nn_prior_zero_birth_fallback_weight = nn_prior_zero_birth_fallback_weight
+        nn_prior_zero_birth_fallback_weight = if (is.na(nn_prior_zero_birth_fallback_weight)) NULL else nn_prior_zero_birth_fallback_weight,
+        nn_prior_zero_birth_child_floor = nn_prior_zero_birth_child_floor,
+        nn_prior_zero_birth_child_shape = nn_prior_zero_birth_child_shape,
+        nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
+        nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape
       )
     }, warning = function(w) {
       warning_messages <<- c(warning_messages, conditionMessage(w))
@@ -416,6 +422,10 @@ run_alfak_fit <- function(patient_id,
         nn_prior_zero_weight_scale = nn_prior_zero_weight_scale,
         nn_prior_zero_weight_cap_ratio = nn_prior_zero_weight_cap_ratio,
         nn_prior_zero_birth_fallback_weight = nn_prior_zero_birth_fallback_weight,
+        nn_prior_zero_birth_child_floor = nn_prior_zero_birth_child_floor,
+        nn_prior_zero_birth_child_shape = nn_prior_zero_birth_child_shape,
+        nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
+        nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape,
         status = "ok",
         cached = FALSE,
         error_message = NA_character_,
@@ -453,6 +463,10 @@ run_alfak_fit <- function(patient_id,
       nn_prior_zero_weight_scale = nn_prior_zero_weight_scale,
       nn_prior_zero_weight_cap_ratio = nn_prior_zero_weight_cap_ratio,
       nn_prior_zero_birth_fallback_weight = nn_prior_zero_birth_fallback_weight,
+      nn_prior_zero_birth_child_floor = nn_prior_zero_birth_child_floor,
+      nn_prior_zero_birth_child_shape = nn_prior_zero_birth_child_shape,
+      nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
+      nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape,
       status = "error",
       cached = FALSE,
       error_message = conditionMessage(e),
@@ -502,6 +516,10 @@ build_parameter_tasks <- function(input_index_tbl,
                                   nn_prior_zero_weight_scale,
                                   nn_prior_zero_weight_cap_ratio,
                                   nn_prior_zero_birth_fallback_weight,
+                                  nn_prior_zero_birth_child_floor,
+                                  nn_prior_zero_birth_child_shape,
+                                  nn_prior_zero_birth_replicate_floor,
+                                  nn_prior_zero_birth_replicate_shape,
                                   nboot,
                                   n0,
                                   nb,
@@ -525,6 +543,10 @@ build_parameter_tasks <- function(input_index_tbl,
       nn_prior_zero_weight_scale = nn_prior_zero_weight_scale,
       nn_prior_zero_weight_cap_ratio = nn_prior_zero_weight_cap_ratio,
       nn_prior_zero_birth_fallback_weight = nn_prior_zero_birth_fallback_weight,
+      nn_prior_zero_birth_child_floor = nn_prior_zero_birth_child_floor,
+      nn_prior_zero_birth_child_shape = nn_prior_zero_birth_child_shape,
+      nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
+      nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape,
       outdir = purrr::pmap_chr(
         list(patient_id, minobs, pm, parameter_label),
         ~ task_outdir_parameter(fit_root, ..1, ..2, ..3, ..4)
@@ -576,6 +598,10 @@ run_task_table_parallel <- function(task_tbl, n_cores, diploid_state) {
           nn_prior_zero_weight_scale = rr$nn_prior_zero_weight_scale,
           nn_prior_zero_weight_cap_ratio = rr$nn_prior_zero_weight_cap_ratio,
           nn_prior_zero_birth_fallback_weight = rr$nn_prior_zero_birth_fallback_weight,
+          nn_prior_zero_birth_child_floor = rr$nn_prior_zero_birth_child_floor,
+          nn_prior_zero_birth_child_shape = rr$nn_prior_zero_birth_child_shape,
+          nn_prior_zero_birth_replicate_floor = rr$nn_prior_zero_birth_replicate_floor,
+          nn_prior_zero_birth_replicate_shape = rr$nn_prior_zero_birth_replicate_shape,
           force_refit = rr$force_refit
         )
       },
@@ -606,6 +632,10 @@ run_task_table_parallel <- function(task_tbl, n_cores, diploid_state) {
         nn_prior_zero_weight_scale = rr$nn_prior_zero_weight_scale,
         nn_prior_zero_weight_cap_ratio = rr$nn_prior_zero_weight_cap_ratio,
         nn_prior_zero_birth_fallback_weight = rr$nn_prior_zero_birth_fallback_weight,
+        nn_prior_zero_birth_child_floor = rr$nn_prior_zero_birth_child_floor,
+        nn_prior_zero_birth_child_shape = rr$nn_prior_zero_birth_child_shape,
+        nn_prior_zero_birth_replicate_floor = rr$nn_prior_zero_birth_replicate_floor,
+        nn_prior_zero_birth_replicate_shape = rr$nn_prior_zero_birth_replicate_shape,
         force_refit = rr$force_refit
       )
     })

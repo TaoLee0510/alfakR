@@ -1746,6 +1746,90 @@ test_that("weighted birth fallback burden uses child and replicate burden smooth
     0.6875,
     tolerance = 1e-12
   )
+  expect_equal(
+    weighted_fit$diagnostics$zero_effective_mass_used,
+    1.0625,
+    tolerance = 1e-12
+  )
+})
+
+test_that("adaptive zero cap uses effective zero mass rather than raw zero counts", {
+  zero_items <- lapply(seq_len(100), function(i) {
+    list(
+      ni = paste0("zero_", i),
+      projected_exposure = 1,
+      parent_birth_fallback = FALSE,
+      parent_opportunity_weights = 1,
+      parent_fitness_mean_exposure = 0
+    )
+  })
+  names(zero_items) <- vapply(zero_items, function(item) item$ni, character(1))
+  nn_child_contexts <- c(
+    list(obs = list(
+      ni = "obs",
+      projected_exposure = 100,
+      parent_birth_fallback = FALSE,
+      parent_opportunity_weights = 1,
+      parent_fitness_mean_exposure = 0
+    )),
+    zero_items
+  )
+
+  weighted_fit <- alfakR:::prepare_weighted_nn_prior_fit(
+    nn_child_contexts = nn_child_contexts,
+    nn_present = c(TRUE, rep(FALSE, length(zero_items))),
+    nn_prior_fit_subset = "all",
+    nn_prior_zero_weight_scale = 1,
+    nn_prior_zero_weight_cap_ratio = NULL,
+    ntot = c(10, 10)
+  )
+
+  expect_false(weighted_fit$diagnostics$zero_weight_cap_applied)
+  expect_equal(weighted_fit$diagnostics$zero_effective_mass_used, 1, tolerance = 1e-12)
+  expect_equal(weighted_fit$diagnostics$zero_weight_cap_ratio_used, 1, tolerance = 1e-12)
+  expect_equal(weighted_fit$diagnostics$sum_zero_weight_final, 1, tolerance = 1e-12)
+  expect_equal(weighted_fit$child_weights[1], 1, tolerance = 1e-12)
+  expect_equal(weighted_fit$child_weights[-1], rep(0.01, length(zero_items)), tolerance = 1e-12)
+})
+
+test_that("adaptive zero cap still shrinks a small number of strong zero children", {
+  weighted_fit <- alfakR:::prepare_weighted_nn_prior_fit(
+    nn_child_contexts = list(
+      obs = list(
+        ni = "obs",
+        projected_exposure = 100,
+        parent_birth_fallback = FALSE,
+        parent_opportunity_weights = 1,
+        parent_fitness_mean_exposure = 0
+      ),
+      zero_a = list(
+        ni = "zero_a",
+        projected_exposure = 100,
+        parent_birth_fallback = FALSE,
+        parent_opportunity_weights = 1,
+        parent_fitness_mean_exposure = 0
+      ),
+      zero_b = list(
+        ni = "zero_b",
+        projected_exposure = 100,
+        parent_birth_fallback = FALSE,
+        parent_opportunity_weights = 1,
+        parent_fitness_mean_exposure = 0
+      )
+    ),
+    nn_present = c(TRUE, FALSE, FALSE),
+    nn_prior_fit_subset = "all",
+    nn_prior_zero_weight_scale = 1,
+    nn_prior_zero_weight_cap_ratio = NULL,
+    ntot = c(10, 10)
+  )
+
+  expect_true(weighted_fit$diagnostics$zero_weight_cap_applied)
+  expect_equal(weighted_fit$diagnostics$zero_effective_mass_used, 2, tolerance = 1e-12)
+  expect_equal(weighted_fit$diagnostics$zero_weight_cap_ratio_used, sqrt(1 / 2), tolerance = 1e-12)
+  expect_equal(weighted_fit$diagnostics$sum_zero_weight_pre_cap, 2, tolerance = 1e-12)
+  expect_equal(weighted_fit$diagnostics$sum_zero_weight_post_cap, sqrt(1 / 2), tolerance = 1e-12)
+  expect_equal(weighted_fit$child_weights, c(1, sqrt(1 / 8), sqrt(1 / 8)), tolerance = 1e-12)
 })
 
 test_that("weighted hybrid prior screens low-exposure zeros and keeps observed children at unit weight", {
@@ -1828,6 +1912,7 @@ test_that("weighted hybrid prior screens low-exposure zeros and keeps observed c
   diag <- res$nn_prior_diagnostics[1, ]
   required_diag_cols <- c(
     "nn_prior_mode_used",
+    "nn_prior_source_used",
     "nn_prior_fit_subset_used",
     "n_observed_children",
     "n_zero_children_total",
@@ -1837,6 +1922,12 @@ test_that("weighted hybrid prior screens low-exposure zeros and keeps observed c
     "sum_zero_weight_raw",
     "sum_zero_weight_final",
     "zero_weight_cap_applied",
+    "zero_weight_cap_ratio_used",
+    "zero_effective_mass_used",
+    "zero_effective_mass_mean",
+    "zero_effective_mass_median",
+    "sum_zero_weight_pre_cap",
+    "sum_zero_weight_post_cap",
     "exposure_threshold_used",
     "exposure_reference_used",
     "n_zero_children_with_birth_fallback",
@@ -1846,15 +1937,23 @@ test_that("weighted hybrid prior screens low-exposure zeros and keeps observed c
     "mean_zero_birth_reliability_multiplier",
     "median_zero_birth_reliability_multiplier",
     "replicate_birth_reliability_multiplier",
+    "sample_pooled_prior_available",
+    "sample_pooled_prior_mu",
+    "sample_pooled_prior_sigma",
+    "sample_pooled_prior_informative_child_count",
+    "sample_pooled_alpha_used",
+    "sample_pooled_sigma_used",
     "prior_mu_hat",
     "prior_sigma_hat",
     "informative_child_count",
     "map_delta_lower_boundary_rate",
     "map_delta_upper_boundary_rate",
+    "used_sample_pooled_fallback_for_this_replicate",
     "used_no_prior_fallback_for_this_replicate"
   )
   expect_true(all(required_diag_cols %in% colnames(res$nn_prior_diagnostics)))
   expect_identical(diag$nn_prior_mode_used, "empirical_censored_weighted")
+  expect_identical(diag$nn_prior_source_used, "observed_replicate")
   expect_identical(diag$nn_prior_fit_subset_used, "hybrid")
   expect_equal(diag$n_observed_children, 1L, tolerance = 0)
   expect_equal(diag$n_zero_children_total, 2L, tolerance = 0)
@@ -1863,6 +1962,12 @@ test_that("weighted hybrid prior screens low-exposure zeros and keeps observed c
   expect_true(is.finite(diag$sum_observed_weight))
   expect_true(is.finite(diag$sum_zero_weight_raw))
   expect_true(is.finite(diag$sum_zero_weight_final))
+  expect_true(is.finite(diag$zero_weight_cap_ratio_used))
+  expect_true(is.finite(diag$zero_effective_mass_used))
+  expect_true(is.finite(diag$zero_effective_mass_mean))
+  expect_true(is.finite(diag$zero_effective_mass_median))
+  expect_true(is.finite(diag$sum_zero_weight_pre_cap))
+  expect_true(is.finite(diag$sum_zero_weight_post_cap))
   expect_true(is.finite(diag$exposure_threshold_used))
   expect_true(is.finite(diag$exposure_reference_used))
   expect_true(is.finite(diag$mean_zero_birth_fallback_burden))
@@ -1871,6 +1976,12 @@ test_that("weighted hybrid prior screens low-exposure zeros and keeps observed c
   expect_true(is.finite(diag$mean_zero_birth_reliability_multiplier))
   expect_true(is.finite(diag$median_zero_birth_reliability_multiplier))
   expect_true(is.finite(diag$replicate_birth_reliability_multiplier))
+  expect_true(isTRUE(diag$sample_pooled_prior_available))
+  expect_true(is.finite(diag$sample_pooled_prior_mu))
+  expect_true(is.finite(diag$sample_pooled_prior_sigma))
+  expect_equal(diag$sample_pooled_prior_informative_child_count, 1L, tolerance = 0)
+  expect_false(isTRUE(diag$used_sample_pooled_fallback_for_this_replicate))
+  expect_false(isTRUE(diag$used_no_prior_fallback_for_this_replicate))
 })
 
 test_that("weighted prior downweights zero children when birth times were filled by fallback", {
@@ -1949,6 +2060,7 @@ test_that("weighted prior downweights zero children when birth times were filled
   expect_equal(res$nn_prior_diagnostics$n_zero_children_with_birth_fallback[1], 1L, tolerance = 0)
   expect_equal(res$nn_prior_diagnostics$replicate_birth_fallback_burden[1], 1, tolerance = 1e-12)
   expect_equal(res$nn_prior_diagnostics$replicate_birth_reliability_multiplier[1], 0.5, tolerance = 1e-12)
+  expect_equal(res$nn_prior_diagnostics$zero_effective_mass_used[1], 0.25, tolerance = 1e-12)
 })
 
 test_that("weighted prior applies the zero-weight cap by common rescaling", {
@@ -2024,10 +2136,115 @@ test_that("weighted prior applies the zero-weight cap by common rescaling", {
 
   expect_equal(seen$child_weights, c(1, 0.125, 0.125), tolerance = 1e-12)
   expect_true(res$nn_prior_diagnostics$zero_weight_cap_applied[1])
+  expect_equal(res$nn_prior_diagnostics$zero_weight_cap_ratio_used[1], 0.25, tolerance = 1e-12)
+  expect_equal(res$nn_prior_diagnostics$sum_zero_weight_pre_cap[1], 1, tolerance = 1e-12)
+  expect_equal(res$nn_prior_diagnostics$sum_zero_weight_post_cap[1], 0.25, tolerance = 1e-12)
   expect_equal(res$nn_prior_diagnostics$sum_zero_weight_final[1], 0.25, tolerance = 1e-12)
 })
 
-test_that("weighted prior falls back to no prior when a bootstrap replicate has no observed neighbour children", {
+test_that("weighted prior uses a sample-pooled fallback when a bootstrap replicate has no observed neighbour children", {
+  yi <- list(
+    x = make_counts(
+      c(40, 40,
+        5, 5),
+      rownames_vec = c("2.2.2", "2.2.3"),
+      colnames_vec = c("0", "1")
+    ),
+    dt = 1
+  )
+  seen <- new.env(parent = emptyenv())
+
+  res <- testthat::with_mocked_bindings(
+    {
+      alfakR:::solve_fitness_bootstrap(
+        yi,
+        minobs = 20,
+        nboot = 1,
+        n0 = 1e4,
+        nb = 1e6,
+        pm = 1e-4,
+        nn_prior = "empirical_censored_weighted"
+      )
+    },
+    bootstrap_counts = function(x) {
+      y <- x
+      y["2.2.3", ] <- 0
+      y
+    },
+    compute_dx_dt = function(x, timepoints) matrix(0, nrow = nrow(x), ncol = ncol(x) - 1),
+    run_solve_qp_checked = function(Dmat, dvec, Amat, bvec, meq, context) list(solution = rep(0.5, nrow(Dmat))),
+    optimize_initial_frequencies = function(x_obs, f, timepoints) rep(1 / length(f), length(f)),
+    joint_optimize = function(counts, timepoints, f_init, x0_init) list(f = 0.5, x0 = 1),
+    project_forward_log = function(x0, f, timepoints) {
+      matrix(c(0.8, 0.4), nrow = 1, dimnames = list("2.2.2", NULL))
+    },
+    find_birth_times = function(opt_res, time_range, minF) 0,
+    gen_nn_info = function(fq, pm) {
+      nn <- list(
+        list(ni = "2.2.3", nj = "2.2.2", pij = 0.5),
+        list(ni = "2.2.1", nj = "2.2.2", pij = 0.5)
+      )
+      names(nn) <- c("2.2.3", "2.2.1")
+      nn
+    },
+    estimate_nn_prior_censored_eb = function(..., context) {
+      seen$estimate_contexts <- c(seen$estimate_contexts, context)
+      if (grepl("sample-pooled", context)) {
+        return(list(
+          prior_mean = 0.1,
+          prior_sd = 0.2,
+          informative_child_count = 1L,
+          sum_child_weight = 1,
+          map_delta_lower_boundary_rate = 0,
+          map_delta_upper_boundary_rate = 0
+        ))
+      }
+      stop("weighted replicate prior fit should not run without observed neighbour children")
+    },
+    alfak_neighbor_objective_cpp = function(fc_param, parent_fitness, pij_values,
+                                            parent_birth_times, timepoints, parent_xfit,
+                                            child_obs, ntot, parent_fitness_mean,
+                                            prior_mean, prior_sd, do_prior, tol) {
+      if (isTRUE(do_prior)) {
+        seen$latent_do_prior <- TRUE
+      }
+      0
+    },
+    run_optimise_checked = function(f, interval, ..., context) {
+      f(mean(interval))
+      list(minimum = mean(interval), objective = 0)
+    },
+    run_optimise_strict_checked = function(f, interval, ..., context) {
+      seen$strict_contexts <- c(seen$strict_contexts, context)
+      f(mean(interval))
+      list(minimum = mean(interval), objective = 0)
+    },
+    .package = "alfakR"
+  )
+
+  expect_true(isTRUE(seen$latent_do_prior))
+  expect_length(seen$estimate_contexts, 1)
+  expect_match(seen$estimate_contexts[[1]], "sample-pooled")
+  expect_true(any(grepl("sample-pooled empirical_censored_weighted prior", seen$strict_contexts)))
+  expect_identical(res$nn_prior_diagnostics$nn_prior_mode_used[1], "empirical_censored_weighted")
+  expect_identical(res$nn_prior_diagnostics$nn_prior_source_used[1], "sample_pooled")
+  expect_true(res$nn_prior_diagnostics$sample_pooled_prior_available[1])
+  expect_equal(res$nn_prior_diagnostics$sample_pooled_prior_mu[1], 0.1, tolerance = 1e-12)
+  expect_equal(res$nn_prior_diagnostics$sample_pooled_prior_sigma[1], 0.2, tolerance = 1e-12)
+  expect_equal(res$nn_prior_diagnostics$prior_mu_hat[1], 0.1, tolerance = 1e-12)
+  expect_true(is.finite(res$nn_prior_diagnostics$sample_pooled_alpha_used[1]))
+  expect_true(res$nn_prior_diagnostics$sample_pooled_alpha_used[1] > 0)
+  expect_true(res$nn_prior_diagnostics$sample_pooled_sigma_used[1] >= res$nn_prior_diagnostics$sample_pooled_prior_sigma[1])
+  expect_equal(
+    res$nn_prior_diagnostics$prior_sigma_hat[1],
+    res$nn_prior_diagnostics$sample_pooled_sigma_used[1],
+    tolerance = 1e-12
+  )
+  expect_true(res$nn_prior_diagnostics$used_sample_pooled_fallback_for_this_replicate[1])
+  expect_false(res$nn_prior_diagnostics$used_no_prior_fallback_for_this_replicate[1])
+})
+
+test_that("weighted prior falls back to no prior when sample-pooled fallback is unavailable", {
   yi <- list(
     x = make_counts(
       c(40, 40),
@@ -2068,7 +2285,7 @@ test_that("weighted prior falls back to no prior when a bootstrap replicate has 
       nn
     },
     estimate_nn_prior_censored_eb = function(...) {
-      stop("weighted prior fit should not run without observed neighbour children")
+      stop("sample-pooled or replicate weighted prior fit should not run without any observed neighbour children")
     },
     alfak_neighbor_objective_cpp = function(fc_param, parent_fitness, pij_values,
                                             parent_birth_times, timepoints, parent_xfit,
@@ -2091,6 +2308,9 @@ test_that("weighted prior falls back to no prior when a bootstrap replicate has 
 
   expect_false(isTRUE(seen$latent_do_prior))
   expect_identical(res$nn_prior_diagnostics$nn_prior_mode_used[1], "none")
+  expect_identical(res$nn_prior_diagnostics$nn_prior_source_used[1], "none")
+  expect_false(res$nn_prior_diagnostics$sample_pooled_prior_available[1])
+  expect_false(res$nn_prior_diagnostics$used_sample_pooled_fallback_for_this_replicate[1])
   expect_true(res$nn_prior_diagnostics$used_no_prior_fallback_for_this_replicate[1])
 })
 

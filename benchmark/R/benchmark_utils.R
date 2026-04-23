@@ -63,15 +63,14 @@ load_saved_table <- function(stem) {
 
 render_tbl <- function(x, caption = NULL, digits = 4) {
   if (knitr::is_html_output()) {
-    return(
-      knitr::kable(
-        x,
-        format = "html",
-        digits = digits,
-        caption = caption,
-        table.attr = 'class="three-line-table"'
-      )
+    tbl_html <- knitr::kable(
+      x,
+      format = "html",
+      digits = digits,
+      caption = caption,
+      table.attr = 'class="three-line-table"'
     )
+    return(knitr::asis_output(tbl_html))
   }
 
   knitr::kable(
@@ -107,6 +106,68 @@ emit_report_image <- function(path, alt = "") {
     )
   } else {
     cat(sprintf("![](%s)\n\n", path))
+  }
+
+  invisible(TRUE)
+}
+
+emit_report_image_grid <- function(items, cols = 2L) {
+  if (is.null(items) || !nrow(items)) {
+    return(invisible(FALSE))
+  }
+
+  items <- tibble::as_tibble(items)
+  if (!"title" %in% names(items)) {
+    items$title <- rep("", nrow(items))
+  }
+  if (!"path" %in% names(items)) {
+    stop("emit_report_image_grid() requires a `path` column.")
+  }
+  if (!"alt" %in% names(items)) {
+    items$alt <- items$title
+  }
+
+  cols <- max(1L, as.integer(cols))
+
+  if (knitr::is_html_output()) {
+    cat(
+      sprintf(
+        "<div class=\"report-image-grid\" style=\"grid-template-columns: repeat(%d, minmax(0, 1fr));\">\n",
+        cols
+      )
+    )
+    for (i in seq_len(nrow(items))) {
+      rr <- items[i, , drop = FALSE]
+      title <- html_escape_attr(rr$title[[1]])
+      path <- as.character(rr$path[[1]])
+      alt <- html_escape_attr(rr$alt[[1]])
+
+      cat("<div class=\"report-image-grid-item\">\n")
+      if (nzchar(title)) {
+        cat(sprintf("<div class=\"report-image-grid-title\">%s</div>\n", title))
+      }
+      if (!is.na(path) && nzchar(path) && file.exists(path)) {
+        cat(
+          sprintf(
+            "<img src=\"%s\" alt=\"%s\" style=\"max-width:100%%; height:auto; display:block;\" />\n",
+            knitr::image_uri(path),
+            alt
+          )
+        )
+      } else {
+        cat("<div class=\"report-image-grid-missing\">Image not available.</div>\n")
+      }
+      cat("</div>\n")
+    }
+    cat("</div>\n\n")
+  } else {
+    for (i in seq_len(nrow(items))) {
+      rr <- items[i, , drop = FALSE]
+      if (nzchar(as.character(rr$title[[1]]))) {
+        cat("### ", as.character(rr$title[[1]]), "\n\n", sep = "")
+      }
+      emit_report_image(as.character(rr$path[[1]]), alt = as.character(rr$alt[[1]]))
+    }
   }
 
   invisible(TRUE)

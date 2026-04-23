@@ -37,7 +37,9 @@ build_parameter_figure_paths <- function(ctx) {
     runtime = file.path(ctx$figures_dir, "runtime_by_parameter_label.png"),
     xval = file.path(ctx$figures_dir, "xval_by_parameter_label.png"),
     global_diff = file.path(ctx$figures_dir, "global_landscape_and_beneficial_diff.png"),
-    global_state_diff = file.path(ctx$figures_dir, "global_landscape_state_diff.png")
+    global_state_diff = file.path(ctx$figures_dir, "global_landscape_state_diff.png"),
+    retained_landscape_distribution = file.path(ctx$figures_dir, "retained_landscape_distribution_comparison.png"),
+    retained_xval_scatter = file.path(ctx$figures_dir, "retained_xval_validation_scatter.png")
   )
 }
 
@@ -198,11 +200,39 @@ build_benchmark_context <- function(params, repo_dir = resolve_repo_dir()) {
       stop("nn_prior_zero_weight_cap_ratio must be NULL/NA or a finite non-negative number.")
     }
   }
-  nn_prior_zero_birth_fallback_weight_use <- suppressWarnings(as.numeric(params$nn_prior_zero_birth_fallback_weight))
-  if (!is.finite(nn_prior_zero_birth_fallback_weight_use) ||
-      nn_prior_zero_birth_fallback_weight_use < 0 ||
-      nn_prior_zero_birth_fallback_weight_use > 1) {
-    stop("nn_prior_zero_birth_fallback_weight must be a finite number in [0, 1].")
+  nn_prior_zero_birth_fallback_weight_raw <- params$nn_prior_zero_birth_fallback_weight
+  if (is.null(nn_prior_zero_birth_fallback_weight_raw) ||
+      (length(nn_prior_zero_birth_fallback_weight_raw) == 1L && is.na(nn_prior_zero_birth_fallback_weight_raw))) {
+    nn_prior_zero_birth_fallback_weight_use <- NA_real_
+  } else {
+    nn_prior_zero_birth_fallback_weight_use <- suppressWarnings(as.numeric(nn_prior_zero_birth_fallback_weight_raw))
+    if (!is.finite(nn_prior_zero_birth_fallback_weight_use) ||
+        nn_prior_zero_birth_fallback_weight_use < 0 ||
+        nn_prior_zero_birth_fallback_weight_use > 1) {
+      stop("nn_prior_zero_birth_fallback_weight must be NULL/NA or a finite number in [0, 1].")
+    }
+  }
+  nn_prior_zero_birth_child_floor_use <- suppressWarnings(as.numeric(params$nn_prior_zero_birth_child_floor))
+  if (!is.finite(nn_prior_zero_birth_child_floor_use) ||
+      nn_prior_zero_birth_child_floor_use < 0 ||
+      nn_prior_zero_birth_child_floor_use > 1) {
+    stop("nn_prior_zero_birth_child_floor must be a finite number in [0, 1].")
+  }
+  nn_prior_zero_birth_child_shape_use <- suppressWarnings(as.numeric(params$nn_prior_zero_birth_child_shape))
+  if (!is.finite(nn_prior_zero_birth_child_shape_use) ||
+      nn_prior_zero_birth_child_shape_use < 0) {
+    stop("nn_prior_zero_birth_child_shape must be a finite non-negative number.")
+  }
+  nn_prior_zero_birth_replicate_floor_use <- suppressWarnings(as.numeric(params$nn_prior_zero_birth_replicate_floor))
+  if (!is.finite(nn_prior_zero_birth_replicate_floor_use) ||
+      nn_prior_zero_birth_replicate_floor_use < 0 ||
+      nn_prior_zero_birth_replicate_floor_use > 1) {
+    stop("nn_prior_zero_birth_replicate_floor must be a finite number in [0, 1].")
+  }
+  nn_prior_zero_birth_replicate_shape_use <- suppressWarnings(as.numeric(params$nn_prior_zero_birth_replicate_shape))
+  if (!is.finite(nn_prior_zero_birth_replicate_shape_use) ||
+      nn_prior_zero_birth_replicate_shape_use < 0) {
+    stop("nn_prior_zero_birth_replicate_shape must be a finite non-negative number.")
   }
 
   force_refit_use <- isTRUE(params$force_refit)
@@ -261,6 +291,10 @@ build_benchmark_context <- function(params, repo_dir = resolve_repo_dir()) {
     nn_prior_zero_weight_scale_use = nn_prior_zero_weight_scale_use,
     nn_prior_zero_weight_cap_ratio_use = nn_prior_zero_weight_cap_ratio_use,
     nn_prior_zero_birth_fallback_weight_use = nn_prior_zero_birth_fallback_weight_use,
+    nn_prior_zero_birth_child_floor_use = nn_prior_zero_birth_child_floor_use,
+    nn_prior_zero_birth_child_shape_use = nn_prior_zero_birth_child_shape_use,
+    nn_prior_zero_birth_replicate_floor_use = nn_prior_zero_birth_replicate_floor_use,
+    nn_prior_zero_birth_replicate_shape_use = nn_prior_zero_birth_replicate_shape_use,
     force_refit_use = force_refit_use,
     rebuild_inputs_use = rebuild_inputs_use,
     run_benchmark_use = run_benchmark_use,
@@ -347,6 +381,199 @@ save_parameter_figures <- function(ctx,
   }
 
   figure_paths
+}
+
+make_all_sample_umap_plot <- function(plot_tbl,
+                                      value_col,
+                                      title,
+                                      subtitle = NULL,
+                                      scale_mode = c("raw", "reference"),
+                                      raw_limits = NULL) {
+  scale_mode <- match.arg(scale_mode)
+  value_vec <- suppressWarnings(as.numeric(plot_tbl[[value_col]]))
+  plot_tbl <- plot_tbl[order(value_vec, decreasing = FALSE, na.last = TRUE), , drop = FALSE]
+
+  if (scale_mode == "reference") {
+    color_center <- 1
+    color_limits <- c(min(value_vec, na.rm = TRUE), max(value_vec, na.rm = TRUE))
+    color_limits <- ensure_center_in_limits(color_limits, center = color_center)
+    if (!all(is.finite(color_limits)) || diff(color_limits) == 0) {
+      color_limits <- c(color_center - 5e-07, color_center + 5e-07)
+    }
+    color_knots <- c(
+      seq(color_limits[1], color_center, length.out = 6),
+      seq(color_center, color_limits[2], length.out = 6)[-1]
+    )
+    color_breaks <- c(color_limits[1], color_center, color_limits[2])
+    legend_name <- "Relative fitness\n(vs global diploid)"
+  } else {
+    color_limits <- if (!is.null(raw_limits) && length(raw_limits) == 2L && all(is.finite(raw_limits))) {
+      raw_limits
+    } else {
+      c(min(value_vec, na.rm = TRUE), max(value_vec, na.rm = TRUE))
+    }
+    if (!all(is.finite(color_limits)) || diff(color_limits) == 0) {
+      color_limits[2] <- color_limits[1] + 1e-06
+    }
+    color_knots <- seq(color_limits[1], color_limits[2], length.out = 11)
+    color_breaks <- c(color_limits[1], mean(color_limits), color_limits[2])
+    legend_name <- "Raw fitness"
+  }
+
+  color_values <- scales::rescale(color_knots, from = color_limits)
+  ggplot2::ggplot(plot_tbl, ggplot2::aes(x = UMAP1, y = UMAP2, color = .data[[value_col]])) +
+    ggplot2::geom_point(alpha = 0.85, size = 0.9) +
+    ggplot2::scale_color_gradientn(
+      colours = rev(RColorBrewer::brewer.pal(11, "RdYlBu")),
+      values = color_values,
+      limits = color_limits,
+      breaks = color_breaks,
+      labels = signif(color_breaks, 3),
+      oob = scales::squish,
+      name = legend_name
+    ) +
+    ggplot2::labs(
+      title = title,
+      subtitle = subtitle,
+      x = "UMAP1",
+      y = "UMAP2"
+    ) +
+    ggplot2::theme_minimal(base_size = 11)
+}
+
+save_retained_summary_figures <- function(ctx,
+                                          retained_fit_tbl,
+                                          retained_landscape_long_tbl,
+                                          retained_xval_scatter_tbl,
+                                          retained_umap_res) {
+  figure_paths <- build_parameter_figure_paths(ctx)
+
+  umap_artifact_tbl <- tibble::tibble(
+    panel_label = c(ctx$parameter_levels_use, "reference_global_diploid"),
+    title = c(ctx$parameter_levels_use, "reference_global_diploid"),
+    png_path = c(
+      file.path(ctx$figures_dir, paste0("all_sample_umap_", ctx$parameter_levels_use, ".png")),
+      file.path(ctx$figures_dir, "all_sample_umap_reference_global_diploid.png")
+    )
+  )
+
+  if (!ctx$render_figures_use) {
+    return(list(
+      figure_paths = figure_paths,
+      umap_artifact_tbl = umap_artifact_tbl
+    ))
+  }
+
+  if (nrow(retained_landscape_long_tbl)) {
+    sample_stat_tbl <- summarize_selected_landscape_sample_tbl(retained_landscape_long_tbl) %>%
+      dplyr::mutate(parameter_label = factor(parameter_label, levels = ctx$parameter_levels_use))
+
+    raw_hist_tbl <- retained_landscape_long_tbl %>%
+      dplyr::mutate(parameter_label = factor(parameter_label, levels = ctx$parameter_levels_use))
+
+    p_hist <- ggplot2::ggplot(raw_hist_tbl, ggplot2::aes(x = mean, fill = parameter_label, color = parameter_label)) +
+      ggplot2::geom_histogram(ggplot2::aes(y = after_stat(density)), bins = 60, position = "identity", alpha = 0.18) +
+      ggplot2::geom_density(linewidth = 0.7, alpha = 0.8) +
+      ggplot2::labs(
+        title = "Retained-sample fitness landscape distribution comparison",
+        subtitle = "Histogram and density of landscape mean values pooled across retained samples",
+        x = "Landscape mean fitness",
+        y = "Density",
+        fill = "Method",
+        color = "Method"
+      ) +
+      ggplot2::theme_bw(base_size = 11)
+
+    p_mean <- ggplot2::ggplot(sample_stat_tbl, ggplot2::aes(x = parameter_label, y = landscape_mean_mean, fill = parameter_label)) +
+      ggplot2::geom_boxplot(outlier.shape = NA, alpha = 0.8) +
+      ggplot2::geom_jitter(width = 0.12, height = 0, alpha = 0.65, size = 1.8) +
+      ggplot2::labs(
+        title = "Per-sample mean comparison",
+        x = NULL,
+        y = "Mean of landscape mean"
+      ) +
+      ggplot2::theme_bw(base_size = 11) +
+      ggplot2::theme(legend.position = "none", axis.text.x = ggplot2::element_text(angle = 20, hjust = 1))
+
+    p_sd <- ggplot2::ggplot(sample_stat_tbl, ggplot2::aes(x = parameter_label, y = landscape_mean_sd, fill = parameter_label)) +
+      ggplot2::geom_boxplot(outlier.shape = NA, alpha = 0.8) +
+      ggplot2::geom_jitter(width = 0.12, height = 0, alpha = 0.65, size = 1.8) +
+      ggplot2::labs(
+        title = "Per-sample SD comparison",
+        x = NULL,
+        y = "SD of landscape mean"
+      ) +
+      ggplot2::theme_bw(base_size = 11) +
+      ggplot2::theme(legend.position = "none", axis.text.x = ggplot2::element_text(angle = 20, hjust = 1))
+
+    p_landscape_distribution <- patchwork::wrap_plots(
+      p_hist,
+      patchwork::wrap_plots(p_mean, p_sd, nrow = 1),
+      ncol = 1,
+      heights = c(2, 1)
+    )
+    ggplot2::ggsave(figure_paths$retained_landscape_distribution, p_landscape_distribution, width = 12, height = 9, dpi = 150)
+  }
+
+  if (nrow(retained_xval_scatter_tbl)) {
+    x_limits <- range(c(retained_xval_scatter_tbl$observed, retained_xval_scatter_tbl$predicted), na.rm = TRUE)
+    p_xval_scatter <- retained_xval_scatter_tbl %>%
+      dplyr::mutate(
+        parameter_label = factor(parameter_label, levels = ctx$parameter_levels_use),
+        patient_id = factor(patient_id, levels = sort_pid_levels(patient_id))
+      ) %>%
+      ggplot2::ggplot(ggplot2::aes(x = observed, y = predicted, color = parameter_label)) +
+      ggplot2::geom_abline(slope = 1, intercept = 0, linetype = 2, color = "grey45") +
+      ggplot2::geom_point(alpha = 0.45, size = 0.9) +
+      ggplot2::facet_wrap(~ patient_id, ncol = 2, scales = "fixed") +
+      ggplot2::coord_equal(xlim = x_limits, ylim = x_limits) +
+      ggplot2::labs(
+        title = "Cross-validation scatter for retained samples",
+        subtitle = "Observed vs predicted fitness values from the retained best positive-xval fit per method",
+        x = "Observed",
+        y = "Predicted",
+        color = "Method"
+      ) +
+      ggplot2::theme_bw(base_size = 11)
+    ggplot2::ggsave(figure_paths$retained_xval_scatter, p_xval_scatter, width = 12, height = max(6, 3.2 * ceiling(length(unique(retained_xval_scatter_tbl$patient_id)) / 2)), dpi = 150)
+  }
+
+  if (!is.null(retained_umap_res$landscape_with_umap) && nrow(retained_umap_res$landscape_with_umap)) {
+    raw_limits <- range(retained_umap_res$landscape_with_umap$mean, na.rm = TRUE)
+    for (i in seq_along(ctx$parameter_levels_use)) {
+      parameter_label_name <- ctx$parameter_levels_use[[i]]
+      plot_tbl <- retained_umap_res$landscape_with_umap %>%
+        dplyr::filter(parameter_label == parameter_label_name)
+      if (!nrow(plot_tbl)) {
+        next
+      }
+      plot_obj <- make_all_sample_umap_plot(
+        plot_tbl = plot_tbl,
+        value_col = "mean",
+        title = parameter_label_name,
+        subtitle = "All retained samples, raw fitness",
+        scale_mode = "raw",
+        raw_limits = raw_limits
+      )
+      ggplot2::ggsave(umap_artifact_tbl$png_path[i], plot_obj, width = 5.5, height = 5, dpi = 150)
+    }
+
+    if (!is.null(retained_umap_res$reference_umap_tbl) && nrow(retained_umap_res$reference_umap_tbl)) {
+      ref_plot <- make_all_sample_umap_plot(
+        plot_tbl = retained_umap_res$reference_umap_tbl,
+        value_col = "reference_value",
+        title = "reference_global_diploid",
+        subtitle = "Mean fitness across methods, scaled by global diploid mean",
+        scale_mode = "reference"
+      )
+      ggplot2::ggsave(umap_artifact_tbl$png_path[nrow(umap_artifact_tbl)], ref_plot, width = 5.5, height = 5, dpi = 150)
+    }
+  }
+
+  list(
+    figure_paths = figure_paths,
+    umap_artifact_tbl = umap_artifact_tbl
+  )
 }
 
 save_input_overview_figures <- function(ctx,
@@ -480,23 +707,17 @@ save_input_overview_figures <- function(ctx,
   figure_paths
 }
 
-build_focus_outputs <- function(focus_pid, ctx, parameter_results_all_tbl, parameter_pair_results) {
-  focus_fit_index_tbl <- parameter_results_all_tbl %>%
+build_focus_outputs <- function(focus_pid, ctx, parameter_selected_fit_tbl, parameter_pair_results = NULL) {
+  focus_fit_index_tbl <- parameter_selected_fit_tbl %>%
     dplyr::filter(
       patient_id == focus_pid,
-      minobs == ctx$focus_minobs_use,
-      dplyr::near(pm, ctx$focus_pm_use),
       parameter_label %in% ctx$parameter_levels_use
     ) %>%
-    dplyr::distinct(parameter_label, .keep_all = TRUE) %>%
     dplyr::arrange(match(parameter_label, ctx$parameter_levels_use))
   save_table_bundle(focus_fit_index_tbl, focus_table_stem(ctx, focus_pid, "fit_index"))
 
-  focus_parameter_bundles <- build_focus_parameter_bundles(
-    results_tbl = parameter_results_all_tbl,
-    focus_pid = focus_pid,
-    focus_minobs = ctx$focus_minobs_use,
-    focus_pm = ctx$focus_pm_use,
+  focus_parameter_bundles <- build_focus_parameter_bundles_from_selected(
+    selected_fit_tbl = focus_fit_index_tbl,
     beneficial_move_levels = ctx$beneficial_move_levels,
     parameter_levels = ctx$parameter_levels_use
   )
@@ -515,47 +736,13 @@ build_focus_outputs <- function(focus_pid, ctx, parameter_results_all_tbl, param
     value_col = "mean"
   )
 
-  focus_pairwise_component_tbl <- if (nrow(parameter_pair_results$component)) {
-    parameter_pair_results$component %>%
-      dplyr::filter(
-        patient_id == focus_pid,
-        minobs == ctx$focus_minobs_use,
-        dplyr::near(pm, ctx$focus_pm_use),
-        metric %in% c("landscape_mean", "landscape_median", "landscape_sd", "xval_r2", "beneficial_proportion", "beneficial_valid_n")
-      ) %>%
-      dplyr::arrange(match(lhs_label, focus_parameter_levels_available), match(rhs_label, focus_parameter_levels_available), metric)
-  } else {
-    tibble::tibble()
-  }
+  focus_pairwise_component_tbl <- tibble::tibble()
   save_table_bundle(focus_pairwise_component_tbl, focus_table_stem(ctx, focus_pid, "pairwise_component_summary"))
 
-  focus_pairwise_landscape_group_tbl <- if (nrow(parameter_pair_results$landscape_group)) {
-    parameter_pair_results$landscape_group %>%
-      dplyr::filter(
-        patient_id == focus_pid,
-        minobs == ctx$focus_minobs_use,
-        dplyr::near(pm, ctx$focus_pm_use),
-        metric == "landscape_mean"
-      ) %>%
-      dplyr::arrange(match(lhs_label, focus_parameter_levels_available), match(rhs_label, focus_parameter_levels_available), state_group)
-  } else {
-    tibble::tibble()
-  }
+  focus_pairwise_landscape_group_tbl <- tibble::tibble()
   save_table_bundle(focus_pairwise_landscape_group_tbl, focus_table_stem(ctx, focus_pid, "pairwise_landscape_group_summary"))
 
-  focus_top_shift_tbl <- if (nrow(parameter_pair_results$top_shift)) {
-    parameter_pair_results$top_shift %>%
-      dplyr::filter(
-        patient_id == focus_pid,
-        minobs == ctx$focus_minobs_use,
-        dplyr::near(pm, ctx$focus_pm_use)
-      ) %>%
-      dplyr::group_by(lhs_label, rhs_label) %>%
-      dplyr::slice_head(n = min(10L, ctx$top_shift_n_use)) %>%
-      dplyr::ungroup()
-  } else {
-    tibble::tibble()
-  }
+  focus_top_shift_tbl <- tibble::tibble()
   save_table_bundle(focus_top_shift_tbl, focus_table_stem(ctx, focus_pid, "pairwise_top_landscape_shifts"))
 
   focus_beneficial_profiles <- lapply(focus_parameter_levels_available, function(parameter_name) {
@@ -665,7 +852,7 @@ build_focus_outputs <- function(focus_pid, ctx, parameter_results_all_tbl, param
       ggplot2::facet_wrap(~ metric, scales = "free", ncol = 2) +
       ggplot2::labs(
         title = paste0(focus_pid, " landscape distributions by parameter label"),
-        subtitle = paste0("minobs = ", ctx$focus_minobs_use, ", pm = ", pm_to_label(ctx$focus_pm_use)),
+        subtitle = "Retained best positive-xval fit per parameter label",
         x = "Landscape value",
         y = "Density",
         color = "Parameter label",
@@ -707,7 +894,7 @@ build_focus_outputs <- function(focus_pid, ctx, parameter_results_all_tbl, param
       ) +
       ggplot2::labs(
         title = paste0(focus_pid, " beneficial-karyotype proportion by parameter label"),
-        subtitle = paste0("minobs = ", ctx$focus_minobs_use, ", pm = ", pm_to_label(ctx$focus_pm_use)),
+        subtitle = "Retained best positive-xval fit per parameter label",
         x = "Chromosome move",
         y = NULL,
         fill = "Beneficial\nproportion"
@@ -950,6 +1137,10 @@ run_benchmark_pipeline <- function(ctx) {
     nn_prior_zero_weight_scale = ctx$nn_prior_zero_weight_scale_use,
     nn_prior_zero_weight_cap_ratio = ctx$nn_prior_zero_weight_cap_ratio_use,
     nn_prior_zero_birth_fallback_weight = ctx$nn_prior_zero_birth_fallback_weight_use,
+    nn_prior_zero_birth_child_floor = ctx$nn_prior_zero_birth_child_floor_use,
+    nn_prior_zero_birth_child_shape = ctx$nn_prior_zero_birth_child_shape_use,
+    nn_prior_zero_birth_replicate_floor = ctx$nn_prior_zero_birth_replicate_floor_use,
+    nn_prior_zero_birth_replicate_shape = ctx$nn_prior_zero_birth_replicate_shape_use,
     nboot = ctx$nboot_use,
     n0 = ctx$n0_use,
     nb = ctx$nb_use,
@@ -989,11 +1180,53 @@ run_benchmark_pipeline <- function(ctx) {
   parameter_fit_summary_tbl <- summarize_fit_results(parameter_results_all_tbl, group_cols = c("parameter_label"))
   save_table_bundle(parameter_fit_summary_tbl, file.path(ctx$tables_dir, "parameter_fit_summary"))
 
-  parameter_selected_fit_tbl <- select_best_parameter_fit_tbl(
+  parameter_positive_xval_fit_tbl <- select_positive_xval_best_parameter_fit_tbl(
     parameter_results_all_tbl,
     parameter_levels = ctx$parameter_levels_use
   )
+  save_table_bundle(parameter_positive_xval_fit_tbl, file.path(ctx$tables_dir, "parameter_positive_xval_fit_index"))
+
+  retained_patient_ids <- select_common_positive_xval_patients(
+    parameter_positive_xval_fit_tbl,
+    parameter_levels = ctx$parameter_levels_use
+  )
+  retained_patient_tbl <- tibble::tibble(patient_id = retained_patient_ids)
+  save_table_bundle(retained_patient_tbl, file.path(ctx$tables_dir, "retained_patient_index"))
+
+  parameter_selected_fit_tbl <- parameter_positive_xval_fit_tbl %>%
+    dplyr::filter(patient_id %in% retained_patient_ids)
   save_table_bundle(parameter_selected_fit_tbl, file.path(ctx$tables_dir, "parameter_selected_fit_index"))
+
+  retained_landscape_long_tbl <- build_selected_landscape_long_tbl(
+    parameter_selected_fit_tbl,
+    beneficial_move_levels = ctx$beneficial_move_levels,
+    parameter_levels = ctx$parameter_levels_use
+  )
+  retained_landscape_sample_summary_tbl <- summarize_selected_landscape_sample_tbl(retained_landscape_long_tbl)
+  save_table_bundle(retained_landscape_sample_summary_tbl, file.path(ctx$tables_dir, "retained_landscape_sample_summary"))
+
+  retained_xval_scatter_tbl <- build_selected_xval_scatter_tbl(
+    parameter_selected_fit_tbl,
+    beneficial_move_levels = ctx$beneficial_move_levels,
+    benchmark_seed = ctx$benchmark_seed_use,
+    parameter_levels = ctx$parameter_levels_use
+  )
+  save_table_bundle(retained_xval_scatter_tbl, file.path(ctx$tables_dir, "retained_xval_scatter_points"))
+
+  retained_umap_res <- build_selected_umap_long_tbl(
+    landscape_long = retained_landscape_long_tbl,
+    benchmark_seed = ctx$benchmark_seed_use,
+    diploid_state = ctx$diploid_state
+  )
+  all_sample_umap_artifact <- save_retained_summary_figures(
+    ctx = ctx,
+    retained_fit_tbl = parameter_selected_fit_tbl,
+    retained_landscape_long_tbl = retained_landscape_long_tbl,
+    retained_xval_scatter_tbl = retained_xval_scatter_tbl,
+    retained_umap_res = retained_umap_res
+  )
+  all_sample_umap_artifact_tbl <- all_sample_umap_artifact$umap_artifact_tbl
+  save_table_bundle(all_sample_umap_artifact_tbl, file.path(ctx$tables_dir, "all_sample_umap_artifacts"))
 
   parameter_selected_landscapes <- load_selected_landscapes_by_parameter(
     parameter_selected_fit_tbl,
@@ -1090,14 +1323,13 @@ run_benchmark_pipeline <- function(ctx) {
     parameter_global_landscape_state_tbl = parameter_global_landscape_state_tbl
   )
 
-  focus_results <- setNames(lapply(ctx$focus_pids_use, function(focus_pid) {
+  focus_results <- setNames(lapply(retained_patient_ids, function(focus_pid) {
     build_focus_outputs(
       focus_pid = focus_pid,
       ctx = ctx,
-      parameter_results_all_tbl = parameter_results_all_tbl,
-      parameter_pair_results = parameter_pair_results
+      parameter_selected_fit_tbl = parameter_selected_fit_tbl
     )
-  }), ctx$focus_pids_use)
+  }), retained_patient_ids)
 
   artifact_index_tbl <- build_benchmark_artifact_index(ctx, focus_results)
   save_table_bundle(artifact_index_tbl, file.path(ctx$tables_dir, "artifact_index"))
@@ -1112,7 +1344,13 @@ run_benchmark_pipeline <- function(ctx) {
     parameter_tasks_tbl = parameter_tasks_tbl,
     parameter_results_all_tbl = parameter_results_all_tbl,
     parameter_fit_summary_tbl = parameter_fit_summary_tbl,
+    retained_patient_tbl = retained_patient_tbl,
+    parameter_positive_xval_fit_tbl = parameter_positive_xval_fit_tbl,
     parameter_selected_fit_tbl = parameter_selected_fit_tbl,
+    retained_landscape_long_tbl = retained_landscape_long_tbl,
+    retained_landscape_sample_summary_tbl = retained_landscape_sample_summary_tbl,
+    retained_xval_scatter_tbl = retained_xval_scatter_tbl,
+    all_sample_umap_artifact_tbl = all_sample_umap_artifact_tbl,
     parameter_beneficial_artifact_tbl = parameter_beneficial_artifact_tbl,
     parameter_pair_results = parameter_pair_results,
     parameter_pair_overview_tbl = parameter_pair_overview_tbl,

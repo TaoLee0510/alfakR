@@ -158,6 +158,291 @@ select_best_parameter_fit_tbl <- function(fit_tbl, parameter_levels = NULL) {
     dplyr::select(-has_positive_xval, -rank_xval_r2, -rank_xval_cor, -rank_xval_rmse, -rank_xval_mae)
 }
 
+select_positive_xval_best_parameter_fit_tbl <- function(fit_tbl, parameter_levels = NULL) {
+  ranked_tbl <- rank_parameter_fit_tbl(fit_tbl, parameter_levels = parameter_levels)
+  if (!nrow(ranked_tbl)) {
+    return(tibble::tibble())
+  }
+
+  ranked_tbl %>%
+    dplyr::filter(status == "ok", is.finite(xval_r2), xval_r2 > 0) %>%
+    dplyr::group_by(parameter_label, patient_id) %>%
+    dplyr::slice_head(n = 1) %>%
+    dplyr::ungroup() %>%
+    dplyr::select(-has_positive_xval, -rank_xval_r2, -rank_xval_cor, -rank_xval_rmse, -rank_xval_mae)
+}
+
+select_common_positive_xval_patients <- function(selected_fit_tbl, parameter_levels) {
+  if (is.null(selected_fit_tbl) || !nrow(selected_fit_tbl) || !length(parameter_levels)) {
+    return(character(0))
+  }
+
+  selected_fit_tbl %>%
+    dplyr::filter(parameter_label %in% parameter_levels) %>%
+    dplyr::distinct(patient_id, parameter_label) %>%
+    dplyr::count(patient_id, name = "n_parameter_label") %>%
+    dplyr::filter(n_parameter_label == length(parameter_levels)) %>%
+    dplyr::pull(patient_id) %>%
+    sort_pid_levels()
+}
+
+parse_karyotype_matrix_from_strings <- function(k_vec) {
+  k_vec <- as.character(k_vec)
+  if (!length(k_vec)) {
+    return(matrix(numeric(0), nrow = 0, ncol = 22))
+  }
+
+  k_parts <- strsplit(k_vec, ".", fixed = TRUE)
+  part_lengths <- lengths(k_parts)
+  if (any(part_lengths != 22L)) {
+    bad_idx <- which(part_lengths != 22L)[1]
+    stop("Found karyotype with != 22 entries: ", k_vec[bad_idx])
+  }
+  matrix(as.integer(unlist(k_parts, use.names = FALSE)), ncol = 22, byrow = TRUE)
+}
+
+build_selected_landscape_long_tbl <- function(selected_fit_tbl,
+                                              beneficial_move_levels,
+                                              parameter_levels = NULL) {
+  if (is.null(selected_fit_tbl) || !nrow(selected_fit_tbl)) {
+    return(tibble::tibble())
+  }
+
+  if (is.null(parameter_levels) || !length(parameter_levels)) {
+    parameter_levels <- unique(as.character(selected_fit_tbl$parameter_label))
+  }
+
+  dplyr::bind_rows(lapply(seq_len(nrow(selected_fit_tbl)), function(i) {
+    rr <- selected_fit_tbl[i, , drop = FALSE]
+    bundle <- read_fit_bundle(rr$outdir, beneficial_move_levels = beneficial_move_levels)
+    landscape_df <- bundle$landscape
+    if (is.null(landscape_df) || !nrow(landscape_df)) {
+      return(tibble::tibble())
+    }
+
+    tibble::tibble(
+      patient_id = as.character(rr$patient_id),
+      parameter_label = as.character(rr$parameter_label),
+      minobs = as.integer(rr$minobs),
+      pm = as.numeric(rr$pm),
+      k = as.character(landscape_df$k),
+      mean = as.numeric(landscape_df$mean),
+      median = as.numeric(landscape_df$median),
+      sd = as.numeric(landscape_df$sd),
+      fq = as_benchmark_logical_flag(landscape_df$fq),
+      nn = as_benchmark_logical_flag(landscape_df$nn)
+    )
+  })) %>%
+    dplyr::mutate(
+      parameter_label = factor(parameter_label, levels = parameter_levels),
+      patient_id = factor(patient_id, levels = sort_pid_levels(patient_id))
+    )
+}
+
+summarize_selected_landscape_sample_tbl <- function(landscape_long) {
+  if (is.null(landscape_long) || !nrow(landscape_long)) {
+    return(tibble::tibble())
+  }
+
+  landscape_long %>%
+    dplyr::group_by(parameter_label, patient_id) %>%
+    dplyr::summarise(
+      n_karyotypes = dplyr::n(),
+      landscape_mean_mean = mean(mean, na.rm = TRUE),
+      landscape_mean_sd = stats::sd(mean, na.rm = TRUE),
+      landscape_mean_median = stats::median(mean, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+reconstruct_xval_detail_tbl <- function(fq_boot,
+                                        benchmark_seed = NULL,
+                                        seed_offset = 0L,
+                                        krig_bootstrap_mode = c("marginal", "joint")) {
+  krig_bootstrap_mode <- match.arg(krig_bootstrap_mode)
+  if (!is.null(benchmark_seed) && is.finite(benchmark_seed)) {
+    set.seed(as.integer(benchmark_seed) + as.integer(seed_offset))
+  }
+
+  fboot <- cbind(fq_boot$final_fitness, fq_boot$nn_fitness)
+  fq_str <- colnames(fq_boot$final_fitness)
+  nn_str <- colnames(fq_boot$nn_fitness)
+
+  valid_fq_str <- if (is.null(fq_str)) character(0) else fq_str
+  valid_nn_str <- if (is.null(nn_str)) character(0) else nn_str
+  combined_strs <- c(valid_fq_str, valid_nn_str)
+  if (!length(combined_strs) || ncol(fboot) == 0 || nrow(fboot) == 0) {
+    return(tibble::tibble(observed = numeric(0), predicted = numeric(0)))
+  }
+  if (!length(valid_fq_str)) {
+    return(tibble::tibble(observed = numeric(0), predicted = numeric(0)))
+  }
+
+  ktrain <- unname(alfakR:::parse_karyotype_ids(combined_strs))
+  ids <- unlist(lapply(seq_along(valid_fq_str), function(i_xval) {
+    ki_neighbours_matrix <- alfakR:::gen_all_neighbours(valid_fq_str[i_xval])
+    ki_neighbours_str <- character(0)
+    if (nrow(ki_neighbours_matrix) > 0) {
+      ki_neighbours_str <- as.character(apply(ki_neighbours_matrix, 1, paste, collapse = "."))
+    }
+    ki <- c(valid_fq_str[i_xval], ki_neighbours_str)
+    idi <- rep(i_xval, length(ki))
+    names(idi) <- ki
+    idi
+  }))
+  ids <- ids[!duplicated(names(ids))]
+  uids <- unique(ids)
+  ktrain_map <- setNames(seq_len(nrow(ktrain)), combined_strs)
+
+  tmp_list <- lapply(uids, function(id_fold) {
+    fi <- if (krig_bootstrap_mode == "joint") {
+      fboot[sample(seq_len(nrow(fboot)), 1), ]
+    } else {
+      fboot_shuffled <- apply(fboot, 2, sample)
+      fboot_shuffled[1, ]
+    }
+
+    train_k_names <- names(ids)[ids != id_fold]
+    test_k_names <- names(ids)[ids == id_fold]
+    train_k_names_valid <- train_k_names[train_k_names %in% names(ktrain_map)]
+    test_k_names_valid <- test_k_names[test_k_names %in% names(ktrain_map)]
+    if (!length(train_k_names_valid) || !length(test_k_names_valid)) {
+      return(matrix(NA_real_, ncol = 2, dimnames = list(NULL, c("observed", "predicted"))))
+    }
+
+    train_k <- ktrain[ktrain_map[train_k_names_valid], , drop = FALSE]
+    train_f <- fi[train_k_names_valid]
+    test_k <- ktrain[ktrain_map[test_k_names_valid], , drop = FALSE]
+    test_f <- fi[test_k_names_valid]
+
+    valid_train_points <- !is.na(train_f)
+    train_k <- train_k[valid_train_points, , drop = FALSE]
+    train_f <- train_f[valid_train_points]
+
+    if (nrow(train_k) < 2 || nrow(unique(train_k)) < 2 || length(unique(train_f)) < 1) {
+      return(cbind(observed = test_f, predicted = rep(NA_real_, length(test_f))))
+    }
+
+    fit <- suppressWarnings(fields::Krig(
+      train_k,
+      train_f,
+      cov.function = "stationary.cov",
+      cov.args = alfakR:::krig_covariance_args(),
+      nstep.cv = alfakR:::ALFAK_KRIG_NSTEP_CV,
+      give.warnings = TRUE
+    ))
+    pred_f <- suppressWarnings(stats::predict(fit, test_k))
+    cbind(observed = test_f, predicted = pred_f)
+  })
+
+  tmp <- do.call(rbind, tmp_list)
+  tmp <- tmp[stats::complete.cases(tmp), , drop = FALSE]
+  if (!nrow(tmp)) {
+    return(tibble::tibble(observed = numeric(0), predicted = numeric(0)))
+  }
+
+  tibble::tibble(
+    observed = as.numeric(tmp[, 1]),
+    predicted = as.numeric(tmp[, 2])
+  ) %>%
+    dplyr::filter(is.finite(observed), is.finite(predicted))
+}
+
+build_selected_xval_scatter_tbl <- function(selected_fit_tbl,
+                                            beneficial_move_levels,
+                                            benchmark_seed,
+                                            parameter_levels = NULL) {
+  if (is.null(selected_fit_tbl) || !nrow(selected_fit_tbl)) {
+    return(tibble::tibble())
+  }
+
+  if (is.null(parameter_levels) || !length(parameter_levels)) {
+    parameter_levels <- unique(as.character(selected_fit_tbl$parameter_label))
+  }
+
+  dplyr::bind_rows(lapply(seq_len(nrow(selected_fit_tbl)), function(i) {
+    rr <- selected_fit_tbl[i, , drop = FALSE]
+    bundle <- read_fit_bundle(rr$outdir, beneficial_move_levels = beneficial_move_levels)
+    if (is.null(bundle$bootstrap)) {
+      return(tibble::tibble())
+    }
+
+    seed_offset <- i * 1000L
+    xval_tbl <- reconstruct_xval_detail_tbl(
+      fq_boot = bundle$bootstrap,
+      benchmark_seed = benchmark_seed,
+      seed_offset = seed_offset,
+      krig_bootstrap_mode = "marginal"
+    )
+    if (!nrow(xval_tbl)) {
+      return(tibble::tibble())
+    }
+
+    xval_tbl %>%
+      dplyr::mutate(
+        patient_id = as.character(rr$patient_id),
+        parameter_label = as.character(rr$parameter_label),
+        minobs = as.integer(rr$minobs),
+        pm = as.numeric(rr$pm),
+        xval_r2 = as.numeric(rr$xval_r2)
+      )
+  })) %>%
+    dplyr::mutate(
+      parameter_label = factor(parameter_label, levels = parameter_levels),
+      patient_id = factor(patient_id, levels = sort_pid_levels(patient_id))
+    )
+}
+
+build_selected_umap_long_tbl <- function(landscape_long,
+                                         benchmark_seed,
+                                         diploid_state) {
+  if (is.null(landscape_long) || !nrow(landscape_long)) {
+    return(list(
+      landscape_with_umap = tibble::tibble(),
+      reference_umap_tbl = tibble::tibble(),
+      global_diploid_mean = NA_real_
+    ))
+  }
+
+  base_tbl <- landscape_long %>%
+    dplyr::select(patient_id, k) %>%
+    dplyr::distinct()
+  k_mat <- parse_karyotype_matrix_from_strings(base_tbl$k)
+  set.seed(as.integer(benchmark_seed))
+  umap_mat <- uwot::umap2(k_mat, n_components = 2, min_dist = 0.9)
+  umap_tbl <- tibble::tibble(
+    patient_id = base_tbl$patient_id,
+    k = base_tbl$k,
+    UMAP1 = umap_mat[, 1],
+    UMAP2 = umap_mat[, 2]
+  )
+
+  landscape_with_umap_tbl <- landscape_long %>%
+    dplyr::left_join(umap_tbl, by = c("patient_id", "k"))
+
+  diploid_tbl <- landscape_with_umap_tbl %>%
+    dplyr::filter(k == diploid_state) %>%
+    dplyr::group_by(patient_id, parameter_label) %>%
+    dplyr::summarise(diploid_mean = mean(mean, na.rm = TRUE), .groups = "drop")
+  global_diploid_mean <- mean(diploid_tbl$diploid_mean, na.rm = TRUE)
+  if (!is.finite(global_diploid_mean) || global_diploid_mean == 0) {
+    global_diploid_mean <- NA_real_
+  }
+
+  reference_umap_tbl <- landscape_with_umap_tbl %>%
+    dplyr::group_by(patient_id, k, UMAP1, UMAP2) %>%
+    dplyr::summarise(
+      reference_value = mean(mean, na.rm = TRUE) / global_diploid_mean,
+      .groups = "drop"
+    )
+
+  list(
+    landscape_with_umap = landscape_with_umap_tbl,
+    reference_umap_tbl = reference_umap_tbl,
+    global_diploid_mean = global_diploid_mean
+  )
+}
+
 load_selected_landscapes_by_parameter <- function(selected_fit_tbl,
                                                   beneficial_move_levels,
                                                   parameter_levels = NULL) {

@@ -55,8 +55,10 @@
 #'   downweights zero-only latent children, applies child-level and
 #'   replicate-level birth-time fallback burden multipliers for zero-only
 #'   children, optionally screens very low-exposure zeros before fitting the
-#'   prior, and falls back to no prior for a bootstrap replicate when that
-#'   replicate has no observed neighbour children.
+#'   prior, and when a bootstrap replicate has no observed neighbour children
+#'   it first falls back to a weak sample-pooled prior learned from the same
+#'   sample's observed neighbours before using no prior only as a final
+#'   fallback.
 #'   `"none"` disables the latent-neighbour prior contribution.
 #'   `"empirical"` opt-in uses the empirical child-minus-parent prior estimated
 #'   from observed neighbours.
@@ -89,7 +91,8 @@
 #' @param nn_prior_zero_weight_cap_ratio Optional non-negative numeric scalar
 #'   used only in weighted mode. When supplied, the total zero-child weight is
 #'   capped at this ratio times the number of observed neighbour children.
-#'   When `NULL`, a data-adaptive cap is used.
+#'   When `NULL`, a data-adaptive cap is used based on the retained zero-only
+#'   children's effective evidence mass rather than their raw count alone.
 #' @param nn_prior_zero_birth_fallback_weight Optional numeric scalar in
 #'   `[0, 1]` kept as a compatibility alias for
 #'   `nn_prior_zero_birth_child_floor` in weighted mode. When supplied, it
@@ -1123,6 +1126,29 @@ nn_birth_reliability_multiplier <- function(burden, floor, shape) {
   pmin(1, pmax(floor, multiplier))
 }
 
+#' Compute the effective evidence mass contributed by retained zero-only children
+#' @keywords internal
+#' @noRd
+compute_nn_zero_effective_mass <- function(child_exposure, exposure_reference,
+                                           child_birth_multiplier) {
+  n_children <- length(child_exposure)
+  if (n_children == 0) {
+    return(numeric(0))
+  }
+  if (length(child_birth_multiplier) != n_children) {
+    stop("Internal error: malformed child birth multiplier input for effective zero evidence mass.")
+  }
+  if (!is.finite(exposure_reference) || exposure_reference <= 0) {
+    return(rep(NA_real_, n_children))
+  }
+
+  exposure_term <- pmin(1, as.numeric(child_exposure) / exposure_reference)
+  exposure_term[!is.finite(exposure_term)] <- NA_real_
+  effective_mass <- exposure_term * as.numeric(child_birth_multiplier)
+  effective_mass[!is.finite(effective_mass)] <- NA_real_
+  pmax(0, effective_mass)
+}
+
 #' Build child likelihood surfaces for the censored EB nearest-neighbour prior
 #' @keywords internal
 #' @noRd
@@ -1558,6 +1584,299 @@ prepare_nn_child_context <- function(nni_item, boot_data, fpar, birth_times_est,
   )
 }
 
+#' Build a nearest-neighbour optimisation objective factory for one dataset
+#' @keywords internal
+#' @noRd
+make_nn_child_objective_builder <- function(timepoints, ntot_rounded) {
+  function(nni_param, prior_mean_param = NaN, prior_sd_param = NaN,
+           do_prior_param = FALSE,
+           parent_mean_mode = c("pij", "exposure")) {
+    parent_mean_mode <- match.arg(parent_mean_mode)
+    if (length(nni_param$nj) == 0) {
+      return(function(fc_param) 10^9)
+    }
+    parent_fitness_mean <- switch(
+      parent_mean_mode,
+      pij = nni_param$parent_fitness_mean_pij,
+      exposure = nni_param$parent_fitness_mean_exposure
+    )
+
+    function(fc_param) {
+      alfak_neighbor_objective_cpp(
+        fc_param = fc_param,
+        parent_fitness = nni_param$parent_fitness,
+        pij_values = nni_param$pij,
+        parent_birth_times = nni_param$parent_birth_times,
+        timepoints = timepoints,
+        parent_xfit = nni_param$parent_xfit,
+        child_obs = nni_param$child_obs,
+        ntot = ntot_rounded,
+        parent_fitness_mean = parent_fitness_mean,
+        prior_mean = prior_mean_param,
+        prior_sd = prior_sd_param,
+        do_prior = do_prior_param,
+        tol = ALFAK_FEXP_DELTA_TOL
+      )
+    }
+  }
+}
+
+#' Expand a conservative search interval for latent-neighbour optimisation
+#' @keywords internal
+#' @noRd
+expand_nn_fitness_search_interval <- function(fpar) {
+  search_interval <- range(fpar, na.rm = TRUE)
+  interval_range <- diff(search_interval)
+  if (length(search_interval) == 1 || interval_range == 0) {
+    interval_range <- abs(search_interval[1] * 0.5) + 1
+  }
+  search_interval[1] <- search_interval[1] - interval_range
+  search_interval[2] <- search_interval[2] + interval_range
+  if (search_interval[1] == search_interval[2]) {
+    search_interval[1] <- search_interval[1] - 1
+    search_interval[2] <- search_interval[2] + 1
+  }
+  search_interval
+}
+
+#' Resolve which nearest-neighbour children are observed in a count matrix
+#' @keywords internal
+#' @noRd
+resolve_nn_present_mask <- function(nn_child_contexts, count_data) {
+  nn_present <- names(nn_child_contexts) %in% rownames(count_data)
+  if (length(nn_present) > 0 && any(nn_present)) {
+    nn_present_indices <- which(nn_present)
+    nn_present[nn_present_indices] <- nn_present[nn_present_indices] & vapply(
+      names(nn_child_contexts)[nn_present_indices],
+      function(child_name) {
+        sum(count_data[child_name, ]) > 0
+      },
+      logical(1)
+    )
+  }
+  nn_present
+}
+
+#' Prepare one dataset's neighbour contexts for bootstrap or fallback fitting
+#' @keywords internal
+#' @noRd
+prepare_bootstrap_nn_dataset_state <- function(count_data, current_fq, current_timepoints,
+                                               current_epsilon, current_n0, current_nb,
+                                               current_viability, current_nn_info,
+                                               correct_efflux = FALSE,
+                                               context = "bootstrap replicate") {
+  x <- normalize_columns(count_data[current_fq, , drop = FALSE])
+  dx_dt <- compute_dx_dt(x, current_timepoints)
+  x_trim <- x[, -1, drop = FALSE]
+
+  qr_terms <- alfak_qr_accum_cpp(x_trim, dx_dt)
+  Q_accum <- qr_terms$Q_accum
+  r_accum <- qr_terms$r_accum
+  num_species <- length(current_fq)
+  Dmat_boot <- 2 * Q_accum + diag(current_epsilon, num_species)
+  dvec_boot <- 2 * r_accum
+  A_mat <- matrix(1, nrow = num_species, ncol = 1)
+  bvec_val <- 0
+
+  qp_sol <- run_solve_qp_checked(
+    Dmat_boot,
+    dvec_boot,
+    A_mat,
+    bvec_val,
+    meq = 1,
+    context = sprintf("solve.QP %s", context)
+  )
+  f_qp <- qp_sol$solution
+
+  x0_init <- optimize_initial_frequencies(x, f_qp, current_timepoints)
+  opt_res <- joint_optimize(count_data[current_fq, , drop = FALSE], current_timepoints, f_qp, x0_init)
+
+  g0_val <- log(current_nb / current_n0) / diff(current_timepoints)[1]
+
+  if (correct_efflux) {
+    viability_vec <- current_viability[current_fq]
+    sum_weighted_frel <- sum((opt_res$x0 * opt_res$f) / viability_vec)
+    sum_weights <- sum(opt_res$x0 / viability_vec)
+    k_const <- (sum_weighted_frel - g0_val) / sum_weights
+    opt_res$f <- (opt_res$f - k_const) / viability_vec
+  } else {
+    opt_res$f <- opt_res$f + g0_val - sum(opt_res$x0 * opt_res$f)
+  }
+
+  peak_times <- current_timepoints[apply(x, 1, which.max)]
+  birth_times_info <- sanitize_birth_times(
+    find_birth_times(opt_res, time_range = c(-1000, max(current_timepoints)), minF = 1 / current_n0),
+    peak_times = peak_times,
+    timepoints = current_timepoints
+  )
+  birth_times_est <- birth_times_info$birth_times
+  birth_time_fallback_mask <- birth_times_info$fallback_mask
+
+  x0par <- opt_res$x0
+  names(x0par) <- current_fq
+  fpar <- opt_res$f
+  names(fpar) <- current_fq
+  names(birth_times_est) <- current_fq
+  names(birth_time_fallback_mask) <- current_fq
+
+  xfit <- project_forward_log(x0par, fpar, current_timepoints)
+  rownames(xfit) <- current_fq
+  ntot_rounded <- round(colSums(count_data))
+  nn_child_contexts <- lapply(current_nn_info, function(nni_item) {
+    prepare_nn_child_context(
+      nni_item = nni_item,
+      boot_data = count_data,
+      fpar = fpar,
+      birth_times_est = birth_times_est,
+      birth_time_fallback_mask = birth_time_fallback_mask,
+      xfit = xfit,
+      timepoints = current_timepoints,
+      ntot = ntot_rounded
+    )
+  })
+  names(nn_child_contexts) <- names(current_nn_info)
+
+  list(
+    f_initial = f_qp,
+    f_final = opt_res$f,
+    x0_initial = x0_init,
+    x0_final = opt_res$x0,
+    fpar = fpar,
+    x0par = x0par,
+    ntot_rounded = ntot_rounded,
+    nn_child_contexts = nn_child_contexts,
+    search_interval = expand_nn_fitness_search_interval(fpar)
+  )
+}
+
+#' Estimate a sample-pooled weighted nearest-neighbour prior from observed children
+#' @keywords internal
+#' @noRd
+estimate_weighted_sample_pooled_prior <- function(nn_child_contexts, nn_present,
+                                                  fpar, build_opt_fc, search_interval,
+                                                  nn_prior_sd = NULL,
+                                                  nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
+                                                  nn_prior_grid_n = ALFAK_NN_PRIOR_CENSORED_GRID_POINTS,
+                                                  ntot,
+                                                  context = "fit weighted sample-pooled latent-neighbour prior") {
+  observed_mask <- as.logical(nn_present)
+  if (!any(observed_mask)) {
+    return(list(
+      available = FALSE,
+      prior_mean = NA_real_,
+      prior_sd = NA_real_,
+      informative_child_count = NA_integer_,
+      sum_child_weight = 0,
+      effective_mass_reference = 0,
+      exposure_reference = NA_real_
+    ))
+  }
+
+  observed_items <- nn_child_contexts[observed_mask]
+  observed_exposure <- vapply(observed_items, function(item) item$projected_exposure, numeric(1))
+  exposure_reference <- resolve_nn_exposure_reference(
+    observed_exposure = observed_exposure,
+    candidate_exposure = numeric(0),
+    ntot = ntot
+  )
+  observed_effective_mass <- pmin(1, observed_exposure / exposure_reference)
+  observed_effective_mass[!is.finite(observed_effective_mass)] <- 0
+  observed_effective_mass <- pmax(0, observed_effective_mass)
+  effective_mass_reference <- sum(observed_effective_mass)
+  if (!is.finite(effective_mass_reference) || effective_mass_reference <= 0) {
+    effective_mass_reference <- sum(is.finite(observed_exposure) & observed_exposure > 0)
+  }
+
+  prior_fit <- tryCatch(
+    estimate_nn_prior_censored_eb(
+      nn_info_items = observed_items,
+      fpar = fpar,
+      build_opt_fc = build_opt_fc,
+      search_interval = search_interval,
+      nn_prior_sd = nn_prior_sd,
+      nn_prior_sd_floor = nn_prior_sd_floor,
+      nn_prior_grid_n = nn_prior_grid_n,
+      child_weights = rep(1, length(observed_items)),
+      parent_mean_fn = function(item, fpar) item$parent_fitness_mean_exposure,
+      context = context
+    ),
+    error = function(e) NULL
+  )
+
+  if (is.null(prior_fit) ||
+      !is.finite(prior_fit$prior_mean) ||
+      !is.finite(prior_fit$prior_sd) ||
+      prior_fit$prior_sd <= 0) {
+    return(list(
+      available = FALSE,
+      prior_mean = NA_real_,
+      prior_sd = NA_real_,
+      informative_child_count = NA_integer_,
+      sum_child_weight = length(observed_items),
+      effective_mass_reference = effective_mass_reference,
+      exposure_reference = exposure_reference
+    ))
+  }
+
+  list(
+    available = TRUE,
+    prior_mean = prior_fit$prior_mean,
+    prior_sd = prior_fit$prior_sd,
+    informative_child_count = prior_fit$informative_child_count,
+    sum_child_weight = prior_fit$sum_child_weight,
+    effective_mass_reference = effective_mass_reference,
+    exposure_reference = exposure_reference,
+    map_delta_lower_boundary_rate = prior_fit$map_delta_lower_boundary_rate,
+    map_delta_upper_boundary_rate = prior_fit$map_delta_upper_boundary_rate
+  )
+}
+
+#' Resolve a weak sample-pooled fallback prior for a zero-only weighted replicate
+#' @keywords internal
+#' @noRd
+resolve_weighted_sample_pooled_fallback_prior <- function(sample_pooled_prior,
+                                                          weighted_diagnostics) {
+  if (is.null(sample_pooled_prior) || !isTRUE(sample_pooled_prior$available)) {
+    return(list(
+      available = FALSE,
+      prior_mean = NA_real_,
+      prior_sd = NA_real_,
+      alpha = NA_real_
+    ))
+  }
+
+  zero_effective_mass <- weighted_diagnostics$zero_effective_mass_used
+  replicate_birth_multiplier <- weighted_diagnostics$replicate_birth_reliability_multiplier
+  reference_mass <- sample_pooled_prior$effective_mass_reference
+  alpha <- replicate_birth_multiplier * sqrt(pmin(1, zero_effective_mass / max(reference_mass, 1)))
+  if (!is.finite(alpha) || alpha <= sqrt(.Machine$double.eps)) {
+    return(list(
+      available = FALSE,
+      prior_mean = NA_real_,
+      prior_sd = NA_real_,
+      alpha = NA_real_
+    ))
+  }
+
+  alpha <- min(1, alpha)
+  prior_sd <- sample_pooled_prior$prior_sd / alpha
+  if (!is.finite(prior_sd) || prior_sd <= 0) {
+    return(list(
+      available = FALSE,
+      prior_mean = NA_real_,
+      prior_sd = NA_real_,
+      alpha = NA_real_
+    ))
+  }
+
+  list(
+    available = TRUE,
+    prior_mean = sample_pooled_prior$prior_mean,
+    prior_sd = prior_sd,
+    alpha = alpha
+  )
+}
+
 #' Build an empty nearest-neighbour prior diagnostics row
 #' @keywords internal
 #' @noRd
@@ -1566,6 +1885,7 @@ new_nn_prior_diagnostics <- function(nn_prior_mode_requested,
   list(
     nn_prior_mode_requested = nn_prior_mode_requested,
     nn_prior_mode_used = nn_prior_mode_requested,
+    nn_prior_source_used = NA_character_,
     nn_prior_fit_subset_used = nn_prior_fit_subset_used,
     n_observed_children = 0L,
     n_zero_children_total = 0L,
@@ -1575,6 +1895,12 @@ new_nn_prior_diagnostics <- function(nn_prior_mode_requested,
     sum_zero_weight_raw = 0,
     sum_zero_weight_final = 0,
     zero_weight_cap_applied = FALSE,
+    zero_weight_cap_ratio_used = NA_real_,
+    zero_effective_mass_used = 0,
+    zero_effective_mass_mean = 0,
+    zero_effective_mass_median = 0,
+    sum_zero_weight_pre_cap = 0,
+    sum_zero_weight_post_cap = 0,
     exposure_threshold_used = NA_real_,
     exposure_reference_used = NA_real_,
     n_zero_children_with_birth_fallback = 0L,
@@ -1584,11 +1910,18 @@ new_nn_prior_diagnostics <- function(nn_prior_mode_requested,
     mean_zero_birth_reliability_multiplier = 1,
     median_zero_birth_reliability_multiplier = 1,
     replicate_birth_reliability_multiplier = 1,
+    sample_pooled_prior_available = FALSE,
+    sample_pooled_prior_mu = NA_real_,
+    sample_pooled_prior_sigma = NA_real_,
+    sample_pooled_prior_informative_child_count = NA_integer_,
+    sample_pooled_alpha_used = NA_real_,
+    sample_pooled_sigma_used = NA_real_,
     prior_mu_hat = NA_real_,
     prior_sigma_hat = NA_real_,
     informative_child_count = NA_integer_,
     map_delta_lower_boundary_rate = NA_real_,
     map_delta_upper_boundary_rate = NA_real_,
+    used_sample_pooled_fallback_for_this_replicate = FALSE,
     used_no_prior_fallback_for_this_replicate = FALSE
   )
 }
@@ -1630,6 +1963,12 @@ prepare_weighted_nn_prior_fit <- function(nn_child_contexts, nn_present,
     sum_zero_weight_raw = 0,
     sum_zero_weight_final = 0,
     zero_weight_cap_applied = FALSE,
+    zero_weight_cap_ratio_used = NA_real_,
+    zero_effective_mass_used = 0,
+    zero_effective_mass_mean = 0,
+    zero_effective_mass_median = 0,
+    sum_zero_weight_pre_cap = 0,
+    sum_zero_weight_post_cap = 0,
     exposure_threshold_used = NA_real_,
     exposure_reference_used = NA_real_,
     n_zero_children_with_birth_fallback = 0L,
@@ -1639,21 +1978,18 @@ prepare_weighted_nn_prior_fit <- function(nn_child_contexts, nn_present,
     mean_zero_birth_reliability_multiplier = 1,
     median_zero_birth_reliability_multiplier = 1,
     replicate_birth_reliability_multiplier = 1,
+    sample_pooled_prior_available = FALSE,
+    sample_pooled_prior_mu = NA_real_,
+    sample_pooled_prior_sigma = NA_real_,
+    sample_pooled_prior_informative_child_count = NA_integer_,
+    sample_pooled_alpha_used = NA_real_,
+    sample_pooled_sigma_used = NA_real_,
+    used_sample_pooled_fallback_for_this_replicate = FALSE,
     used_no_prior_fallback_for_this_replicate = FALSE
   )
 
   if (!is.null(nn_prior_zero_birth_fallback_weight)) {
     nn_prior_zero_birth_child_floor <- nn_prior_zero_birth_fallback_weight
-  }
-
-  if (n_observed == 0L) {
-    diagnostics$used_no_prior_fallback_for_this_replicate <- TRUE
-    return(list(
-      prior_items = nn_child_contexts[FALSE],
-      child_weights = numeric(0),
-      parent_mean_fn = function(item, fpar) item$parent_fitness_mean_exposure,
-      diagnostics = diagnostics
-    ))
   }
 
   if (nn_prior_fit_subset == "hybrid") {
@@ -1695,6 +2031,7 @@ prepare_weighted_nn_prior_fit <- function(nn_child_contexts, nn_present,
   zero_birth_fallback <- logical(sum(zero_retained_mask))
   child_birth_burden <- numeric(sum(zero_retained_mask))
   child_birth_multiplier <- numeric(sum(zero_retained_mask))
+  zero_effective_mass <- numeric(sum(zero_retained_mask))
   replicate_birth_burden <- 0
   replicate_birth_multiplier <- 1
   if (length(zero_weights_raw)) {
@@ -1723,9 +2060,17 @@ prepare_weighted_nn_prior_fit <- function(nn_child_contexts, nn_present,
       floor = nn_prior_zero_birth_replicate_floor,
       shape = nn_prior_zero_birth_replicate_shape
     )
+    zero_effective_mass <- compute_nn_zero_effective_mass(
+      child_exposure = retained_zero_exposure,
+      exposure_reference = exposure_reference,
+      child_birth_multiplier = child_birth_multiplier
+    )
+    exposure_term <- pmin(1, retained_zero_exposure / exposure_reference)
+    exposure_term[!is.finite(exposure_term)] <- 0
+    exposure_term <- pmax(0, exposure_term)
     birth_reliability_multiplier <- child_birth_multiplier * replicate_birth_multiplier
     zero_weights_raw <- nn_prior_zero_weight_scale *
-      pmin(1, retained_zero_exposure / exposure_reference) *
+      exposure_term *
       birth_reliability_multiplier
     zero_weights_raw[!is.finite(zero_weights_raw)] <- 0
     zero_weights_raw <- pmax(0, zero_weights_raw)
@@ -1739,20 +2084,39 @@ prepare_weighted_nn_prior_fit <- function(nn_child_contexts, nn_present,
   }
 
   diagnostics$sum_zero_weight_raw <- sum(zero_weights_raw)
+  diagnostics$sum_zero_weight_pre_cap <- sum(zero_weights_raw)
   diagnostics$n_zero_children_with_birth_fallback <- as.integer(sum(zero_birth_fallback))
+  finite_zero_effective_mass <- zero_effective_mass[is.finite(zero_effective_mass)]
+  zero_effective_mass_total <- if (length(finite_zero_effective_mass)) sum(finite_zero_effective_mass) else NA_real_
+  if (length(finite_zero_effective_mass)) {
+    diagnostics$zero_effective_mass_used <- zero_effective_mass_total
+    diagnostics$zero_effective_mass_mean <- mean(finite_zero_effective_mass)
+    diagnostics$zero_effective_mass_median <- stats::median(finite_zero_effective_mass)
+  }
 
-  cap_ratio <- if (!is.null(nn_prior_zero_weight_cap_ratio)) {
+  cap_ratio <- if (n_observed == 0L) {
+    1
+  } else if (!is.null(nn_prior_zero_weight_cap_ratio)) {
     nn_prior_zero_weight_cap_ratio
   } else {
-    min(1, sqrt(n_observed / max(sum(zero_retained_mask), 1)))
+    if (!is.finite(zero_effective_mass_total) || zero_effective_mass_total <= 0) {
+      1
+    } else {
+      min(1, sqrt(n_observed / max(zero_effective_mass_total, 1)))
+    }
   }
+  diagnostics$zero_weight_cap_ratio_used <- cap_ratio
   zero_weight_max <- cap_ratio * n_observed
   zero_weights_final <- zero_weights_raw
-  if (sum(zero_weights_raw) > zero_weight_max && sum(zero_weights_raw) > 0) {
-    zero_weights_final <- zero_weights_raw * (zero_weight_max / sum(zero_weights_raw))
+  zero_weight_pre_cap <- sum(zero_weights_raw)
+  if (n_observed > 0 &&
+      zero_weight_pre_cap > 0 &&
+      zero_weight_pre_cap > zero_weight_max * (1 + sqrt(.Machine$double.eps))) {
+    zero_weights_final <- zero_weights_raw * (zero_weight_max / zero_weight_pre_cap)
     diagnostics$zero_weight_cap_applied <- TRUE
   }
   diagnostics$sum_zero_weight_final <- sum(zero_weights_final)
+  diagnostics$sum_zero_weight_post_cap <- sum(zero_weights_final)
 
   full_weights <- numeric(length(nn_child_contexts))
   full_weights[observed_mask] <- 1
@@ -1765,6 +2129,7 @@ prepare_weighted_nn_prior_fit <- function(nn_child_contexts, nn_present,
     prior_items = nn_child_contexts[prior_keep],
     child_weights = full_weights[prior_keep],
     parent_mean_fn = function(item, fpar) item$parent_fitness_mean_exposure,
+    can_fit_replicate_prior = n_observed > 0L,
     diagnostics = diagnostics
   )
 }
@@ -2144,147 +2509,82 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
   timepoints <- resolve_time_axis(data, passage_times)
   num_species <- length(fq)
   num_timepoints <- ncol(data$x)
+  weighted_sample_pooled_prior <- list(
+    available = FALSE,
+    prior_mean = NA_real_,
+    prior_sd = NA_real_,
+    informative_child_count = NA_integer_,
+    sum_child_weight = 0,
+    effective_mass_reference = 0,
+    exposure_reference = NA_real_
+  )
+  if (nn_prior == "empirical_censored_weighted" && length(nn_info_list) > 0) {
+    weighted_sample_pooled_prior <- tryCatch(
+      {
+        sample_state <- prepare_bootstrap_nn_dataset_state(
+          count_data = data$x,
+          current_fq = fq,
+          current_timepoints = timepoints,
+          current_epsilon = epsilon,
+          current_n0 = n0,
+          current_nb = nb,
+          current_viability = viability,
+          current_nn_info = nn_info_list,
+          correct_efflux = correct_efflux,
+          context = "sample-pooled weighted prior reference"
+        )
+        sample_build_opt_fc <- make_nn_child_objective_builder(
+          timepoints = timepoints,
+          ntot_rounded = sample_state$ntot_rounded
+        )
+        sample_nn_present <- resolve_nn_present_mask(sample_state$nn_child_contexts, data$x)
+        estimate_weighted_sample_pooled_prior(
+          nn_child_contexts = sample_state$nn_child_contexts,
+          nn_present = sample_nn_present,
+          fpar = sample_state$fpar,
+          build_opt_fc = sample_build_opt_fc,
+          search_interval = sample_state$search_interval,
+          nn_prior_sd = nn_prior_sd,
+          nn_prior_sd_floor = nn_prior_sd_floor,
+          nn_prior_grid_n = nn_prior_grid_n,
+          ntot = sample_state$ntot_rounded,
+          context = "fit weighted sample-pooled latent-neighbour prior"
+        )
+      },
+      error = function(e) weighted_sample_pooled_prior
+    )
+  }
 
   bootstrap_iter <- function(b_iter_idx, current_data, current_fq, current_timepoints,
                              current_num_species, current_num_timepoints,
                              current_epsilon, current_n0, current_nb,
                              current_viability, current_nn_info) { # Renamed arguments
     boot_data <- bootstrap_counts(current_data$x) # Bootstrap from original full data
-    x <- normalize_columns(boot_data[current_fq, , drop = FALSE])
-    dx_dt <- compute_dx_dt(x, current_timepoints)
-    x_trim <- x[, -1, drop = FALSE] # Use x(t+1) for M_t, as per original logic
-
-    qr_terms <- alfak_qr_accum_cpp(x_trim, dx_dt)
-    Q_accum <- qr_terms$Q_accum
-    r_accum <- qr_terms$r_accum
-    Dmat_boot <- 2 * Q_accum + diag(current_epsilon, current_num_species) # Original epsilon
-    dvec_boot <- 2 * r_accum
-    A_mat <- matrix(1, nrow = current_num_species, ncol = 1) # Renamed A
-    bvec_val <- 0 # Renamed bvec
-
-    qp_sol <- run_solve_qp_checked(Dmat_boot, dvec_boot, A_mat, bvec_val, meq = 1,
-                                   context = sprintf("solve.QP bootstrap replicate %d", b_iter_idx))
-    f_qp <- qp_sol$solution
-
-    x0_init <- optimize_initial_frequencies(x, f_qp, current_timepoints)
-    opt_res <- joint_optimize(boot_data[current_fq, , drop = FALSE], current_timepoints, f_qp, x0_init)
-
-    # g0 still uses the first interval because the passage-level scaling step assumes a single
-    # growth interval, but it now uses the same validated time_axis as every other time-dependent step.
-    g0_val <- log(current_nb / current_n0) / diff(current_timepoints)[1] # Renamed g0
-
-    if (correct_efflux) {
-      viability_vec <- current_viability[current_fq]
-
-      # Term 1: sum(x0 * f_rel / viability)
-      sum_weighted_frel <- sum((opt_res$x0 * opt_res$f) / viability_vec)
-
-      # Term 2: sum(x0 / viability)
-      sum_weights <- sum(opt_res$x0 / viability_vec)
-
-      # Solve for constant k
-      k_const <- (sum_weighted_frel - g0_val) / sum_weights
-
-      # Calculate absolute intrinsic division rates: (f_rel - k) / viability
-      opt_res$f <- (opt_res$f - k_const) / viability_vec
-
-    } else {
-      # Original scaling: shifts mean to match g0
-      opt_res$f <- opt_res$f + g0_val - sum(opt_res$x0 * opt_res$f)
-    }
-
-    peak_times <- current_timepoints[apply(x, 1, which.max)]
-    birth_times_info <- sanitize_birth_times(
-      find_birth_times(opt_res, time_range = c(-1000, max(current_timepoints)), minF = 1 / current_n0),
-      peak_times = peak_times,
-      timepoints = current_timepoints
+    dataset_state <- prepare_bootstrap_nn_dataset_state(
+      count_data = boot_data,
+      current_fq = current_fq,
+      current_timepoints = current_timepoints,
+      current_epsilon = current_epsilon,
+      current_n0 = current_n0,
+      current_nb = current_nb,
+      current_viability = current_viability,
+      current_nn_info = current_nn_info,
+      correct_efflux = correct_efflux,
+      context = sprintf("bootstrap replicate %d", b_iter_idx)
     )
-    # Neighbour estimation relies on finite parent birth times; fall back to peak-aligned
-    # values when root-finding cannot recover them.
-    birth_times_est <- birth_times_info$birth_times
-    birth_time_fallback_mask <- birth_times_info$fallback_mask
-
-    x0par <- opt_res$x0
-    names(x0par) <- current_fq
-    fpar <- opt_res$f
-    names(fpar) <- current_fq
-    names(birth_times_est) <- current_fq
-    names(birth_time_fallback_mask) <- current_fq
-
-    # dfb <- as.matrix(stats::dist(as.numeric(fpar))) # dfb was not used
-    # dfb[upper.tri(dfb)] <- dfb[upper.tri(dfb)] * (-1)
-    f_final <- opt_res$f
-    x0_final <- opt_res$x0
-
-    xfit <- project_forward_log(x0par, fpar, current_timepoints)
-    rownames(xfit) <- current_fq
-    ntot <- colSums(boot_data) # Total counts from bootstrapped data
-    ntot_rounded <- round(ntot)
-    nn_child_contexts <- lapply(current_nn_info, function(nni_item) {
-      prepare_nn_child_context(
-        nni_item = nni_item,
-        boot_data = boot_data,
-        fpar = fpar,
-        birth_times_est = birth_times_est,
-        birth_time_fallback_mask = birth_time_fallback_mask,
-        xfit = xfit,
-        timepoints = current_timepoints,
-        ntot = ntot_rounded
-      )
-    })
-    names(nn_child_contexts) <- names(current_nn_info)
-
-    build_opt_fc <- function(nni_param, prior_mean_param = NaN, prior_sd_param = NaN,
-                             do_prior_param = FALSE,
-                             parent_mean_mode = c("pij", "exposure")) {
-      parent_mean_mode <- match.arg(parent_mean_mode)
-      if (length(nni_param$nj) == 0) {
-        return(function(fc_param) 10^9)
-      }
-      parent_fitness_mean <- switch(
-        parent_mean_mode,
-        pij = nni_param$parent_fitness_mean_pij,
-        exposure = nni_param$parent_fitness_mean_exposure
-      )
-
-      function(fc_param) {
-        alfak_neighbor_objective_cpp(
-          fc_param = fc_param,
-          parent_fitness = nni_param$parent_fitness,
-          pij_values = nni_param$pij,
-          parent_birth_times = nni_param$parent_birth_times,
-          timepoints = current_timepoints,
-          parent_xfit = nni_param$parent_xfit,
-          child_obs = nni_param$child_obs,
-          ntot = ntot_rounded,
-          parent_fitness_mean = parent_fitness_mean,
-          prior_mean = prior_mean_param,
-          prior_sd = prior_sd_param,
-          do_prior = do_prior_param,
-          tol = ALFAK_FEXP_DELTA_TOL
-        )
-      }
-    }
-    search_interval <- range(fpar, na.rm=TRUE) # Added na.rm=TRUE
-    interval_range <- diff(search_interval)
-    if(length(search_interval) == 1 || interval_range == 0) { # Handle if all fpar are same or only one fpar
-      interval_range <- abs(search_interval[1] * 0.5) + 1 # Create a sensible range
-    }
-    search_interval[1] <- search_interval[1] - interval_range
-    search_interval[2] <- search_interval[2] + interval_range
-    if(search_interval[1] == search_interval[2]){ # Final check for interval width
-      search_interval[1] <- search_interval[1] - 1
-      search_interval[2] <- search_interval[2] + 1
-    }
-
-
-    nn_present <- names(nn_child_contexts) %in% rownames(boot_data)
-    if(length(nn_present) > 0 && any(nn_present)){ # Check if nn_present is not empty
-      nn_present_indices <- which(nn_present)
-      nn_present[nn_present_indices] <- nn_present[nn_present_indices] & sapply(names(nn_child_contexts)[nn_present_indices], function(ni_sapply) { #Renamed ni
-        sum(boot_data[ni_sapply, ]) > 0
-      })
-    }
+    f_qp <- dataset_state$f_initial
+    fpar <- dataset_state$fpar
+    f_final <- dataset_state$f_final
+    x0_init <- dataset_state$x0_initial
+    x0_final <- dataset_state$x0_final
+    ntot_rounded <- dataset_state$ntot_rounded
+    nn_child_contexts <- dataset_state$nn_child_contexts
+    build_opt_fc <- make_nn_child_objective_builder(
+      timepoints = current_timepoints,
+      ntot_rounded = ntot_rounded
+    )
+    search_interval <- dataset_state$search_interval
+    nn_present <- resolve_nn_present_mask(nn_child_contexts, boot_data)
 
     fc <- rep(NaN, length(nn_child_contexts))
     names(fc) <- names(nn_child_contexts) # Pre-name fc
@@ -2338,6 +2638,7 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
     use_empirical_censored_prior <- nn_prior == "empirical_censored"
     use_empirical_censored_weighted_prior <- nn_prior == "empirical_censored_weighted"
     weighted_prior_config <- NULL
+    weighted_sample_pooled_prior_use <- NULL
     if (use_empirical_censored_weighted_prior && any(!nn_present)) {
       weighted_prior_config <- prepare_weighted_nn_prior_fit(
         nn_child_contexts = nn_child_contexts,
@@ -2356,6 +2657,31 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
         ntot = ntot_rounded
       )
       nn_prior_diag[names(weighted_prior_config$diagnostics)] <- weighted_prior_config$diagnostics
+      nn_prior_diag$sample_pooled_prior_available <- isTRUE(weighted_sample_pooled_prior$available)
+      if (isTRUE(weighted_sample_pooled_prior$available)) {
+        nn_prior_diag$sample_pooled_prior_mu <- weighted_sample_pooled_prior$prior_mean
+        nn_prior_diag$sample_pooled_prior_sigma <- weighted_sample_pooled_prior$prior_sd
+        nn_prior_diag$sample_pooled_prior_informative_child_count <- weighted_sample_pooled_prior$informative_child_count
+      }
+      if (!isTRUE(weighted_prior_config$can_fit_replicate_prior)) {
+        weighted_sample_pooled_prior_use <- resolve_weighted_sample_pooled_fallback_prior(
+          sample_pooled_prior = weighted_sample_pooled_prior,
+          weighted_diagnostics = weighted_prior_config$diagnostics
+        )
+        if (isTRUE(weighted_sample_pooled_prior_use$available)) {
+          nn_prior_diag$nn_prior_mode_used <- "empirical_censored_weighted"
+          nn_prior_diag$nn_prior_source_used <- "sample_pooled"
+          nn_prior_diag$used_sample_pooled_fallback_for_this_replicate <- TRUE
+          nn_prior_diag$sample_pooled_alpha_used <- weighted_sample_pooled_prior_use$alpha
+          nn_prior_diag$sample_pooled_sigma_used <- weighted_sample_pooled_prior_use$prior_sd
+        } else {
+          nn_prior_diag$nn_prior_mode_used <- "none"
+          nn_prior_diag$nn_prior_source_used <- "none"
+          nn_prior_diag$used_no_prior_fallback_for_this_replicate <- TRUE
+        }
+      } else {
+        nn_prior_diag$nn_prior_source_used <- "observed_replicate"
+      }
       if (isTRUE(weighted_prior_config$diagnostics$used_no_prior_fallback_for_this_replicate)) {
         nn_prior_diag$nn_prior_mode_used <- "none"
       }
@@ -2445,7 +2771,7 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
       }
     } else if (use_empirical_censored_weighted_prior &&
                any(!nn_present) &&
-               !isTRUE(weighted_prior_config$diagnostics$used_no_prior_fallback_for_this_replicate)) {
+               isTRUE(weighted_prior_config$can_fit_replicate_prior)) {
       prior_fit <- estimate_nn_prior_censored_eb(
         nn_info_items = weighted_prior_config$prior_items,
         fpar = fpar,
@@ -2462,6 +2788,7 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
         )
       )
       nn_prior_diag$nn_prior_mode_used <- "empirical_censored_weighted"
+      nn_prior_diag$nn_prior_source_used <- "observed_replicate"
       nn_prior_diag$prior_mu_hat <- prior_fit$prior_mean
       nn_prior_diag$prior_sigma_hat <- prior_fit$prior_sd
       if (!is.null(prior_fit$informative_child_count)) {
@@ -2495,11 +2822,41 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
           }
         }
       }
+    } else if (use_empirical_censored_weighted_prior &&
+               any(!nn_present) &&
+               !is.null(weighted_sample_pooled_prior_use) &&
+               isTRUE(weighted_sample_pooled_prior_use$available)) {
+      nn_prior_diag$nn_prior_mode_used <- "empirical_censored_weighted"
+      nn_prior_diag$nn_prior_source_used <- "sample_pooled"
+      nn_prior_diag$prior_mu_hat <- weighted_sample_pooled_prior_use$prior_mean
+      nn_prior_diag$prior_sigma_hat <- weighted_sample_pooled_prior_use$prior_sd
+      sapply_names_not_present <- names(nn_child_contexts)[!nn_present]
+      if (length(sapply_names_not_present) > 0) {
+        for (child_name in sapply_names_not_present) {
+          objective_fn <- build_opt_fc(
+            nn_child_contexts[[child_name]],
+            prior_mean_param = weighted_sample_pooled_prior_use$prior_mean,
+            prior_sd_param = weighted_sample_pooled_prior_use$prior_sd,
+            do_prior_param = TRUE,
+            parent_mean_mode = "exposure"
+          )
+          res <- run_optimise_strict_checked(
+            objective_fn,
+            interval = search_interval,
+            context = sprintf(
+              "optimise nearest-neighbour fitness with sample-pooled empirical_censored_weighted prior for latent child %s",
+              child_name
+            )
+          )
+          if (!is.null(res)) {
+            fc[child_name] <- res$minimum
+          }
+        }
+      }
     } else if (any(!nn_present)) { # No prior to use
-      if (use_empirical_prior) {
-        nn_prior_diag$nn_prior_mode_used <- "none"
-      } else if (!use_empirical_censored_weighted_prior) {
-        nn_prior_diag$nn_prior_mode_used <- "none"
+      nn_prior_diag$nn_prior_mode_used <- "none"
+      if (use_empirical_censored_weighted_prior) {
+        nn_prior_diag$nn_prior_source_used <- "none"
       }
       sapply_names_not_present <- names(nn_child_contexts)[!nn_present]
       if(length(sapply_names_not_present) > 0) {

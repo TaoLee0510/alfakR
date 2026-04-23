@@ -96,8 +96,10 @@ projected child exposure from the neighbour likelihood ingredients,
 downweights zero-only latent children, applies child-level and
 replicate-level birth-time fallback burden multipliers for zero-only
 children, optionally screens very low-exposure zeros before fitting the
-prior, and falls back to no prior for a bootstrap replicate when that
-replicate has no observed neighbour children.
+prior, and when a bootstrap replicate has no observed neighbour children
+it first falls back to a weak sample-pooled prior learned from the same
+sample's observed neighbours before using no prior only as a final
+fallback.
 \code{"none"} disables the latent-neighbour prior contribution.
 \code{"empirical"} opt-in uses the empirical child-minus-parent prior estimated
 from observed neighbours.
@@ -138,7 +140,8 @@ before the global zero-weight cap.}
 \item{nn_prior_zero_weight_cap_ratio}{Optional non-negative numeric scalar used
 only in weighted mode. When supplied, the total zero-child weight is capped at
 this ratio times the number of observed neighbour children. When \code{NULL},
-a data-adaptive cap is used.}
+a data-adaptive cap is used based on the retained zero-only children's
+effective evidence mass rather than their raw count alone.}
 
 \item{nn_prior_zero_birth_fallback_weight}{Optional numeric scalar in
 \code{[0, 1]} kept as a compatibility alias for
