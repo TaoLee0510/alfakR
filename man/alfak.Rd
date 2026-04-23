@@ -31,6 +31,9 @@ alfak(
   nn_prior_zero_birth_replicate_floor = 0.5,
   nn_prior_zero_birth_replicate_shape = 1,
   nn_prior_hybrid_min_obs = 3L,
+  nn_prior_two_step_support = c("none", "rescue"),
+  nn_prior_two_step_support_min = 0.15,
+  nn_prior_two_step_cap_floor = 0.3,
   krig_bootstrap_mode = c("marginal", "joint")
 )
 }
@@ -99,7 +102,9 @@ children, optionally screens very low-exposure zeros before fitting the
 prior, and when a bootstrap replicate has no observed neighbour children
 it first falls back to a weak sample-pooled prior learned from the same
 sample's observed neighbours before using no prior only as a final
-fallback.
+fallback. Weighted mode can also optionally use observed 2-step
+descendants to rescue otherwise weak zero-only latent children without
+changing the underlying single-step neighbour likelihood.
 \code{"none"} disables the latent-neighbour prior contribution.
 \code{"empirical"} opt-in uses the empirical child-minus-parent prior estimated
 from observed neighbours.
@@ -172,7 +177,27 @@ burden increases.}
 \code{nn_prior_fit_subset = "hybrid"}. When fewer than this many observed
 neighbour children are available, weighted hybrid fitting does not estimate
 a hard observed-based exposure threshold from that small sample and instead
-relies on weighting plus the zero-weight cap.}
+relies on weighting, adaptive capping, and optional 2-step rescue.}
+
+\item{nn_prior_two_step_support}{Character; weighted-mode only control for
+whether observed 2-step descendants can rescue zero-only latent neighbour
+children. \code{"none"} (default) ignores 2-step observed support.
+\code{"rescue"} uses observed descendants one mutation away from a zero-only
+child to soften hybrid screening and strengthen that child's effective
+evidence mass and weight without changing the single-step neighbour
+objective itself.}
+
+\item{nn_prior_two_step_support_min}{Numeric scalar in \code{[0, 1]} used only
+when \code{nn_prior = "empirical_censored_weighted"} and
+\code{nn_prior_two_step_support = "rescue"}. In hybrid fitting, a zero-only
+child is retained if either its projected exposure passes the exposure
+threshold or its 2-step support score reaches this minimum.}
+
+\item{nn_prior_two_step_cap_floor}{Numeric scalar in \code{[0, 1]} used only
+when \code{nn_prior = "empirical_censored_weighted"} and
+\code{nn_prior_two_step_support = "rescue"}. This sets the minimum fraction of
+a fully supported 2-step rescue score that can contribute to the retained
+zero-child support term used in effective-mass and weight calculations.}
 
 \item{krig_bootstrap_mode}{Character; \code{"marginal"} (default) samples
 bootstrap fitness values independently by column, matching the original

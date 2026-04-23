@@ -1569,6 +1569,10 @@ test_that("weighted nearest-neighbour prior mode and controls validate", {
     alfakR:::validate_nn_prior_fit_subset("hybrid"),
     "hybrid"
   )
+  expect_identical(
+    alfakR:::validate_nn_prior_two_step_support("rescue"),
+    "rescue"
+  )
   expect_silent(
     alfakR:::validate_nn_prior_controls(
       nn_prior_sd = NULL,
@@ -1584,7 +1588,10 @@ test_that("weighted nearest-neighbour prior mode and controls validate", {
       nn_prior_zero_birth_child_shape = 1.5,
       nn_prior_zero_birth_replicate_floor = 0.4,
       nn_prior_zero_birth_replicate_shape = 2,
-      nn_prior_hybrid_min_obs = 2L
+      nn_prior_hybrid_min_obs = 2L,
+      nn_prior_two_step_support = "rescue",
+      nn_prior_two_step_support_min = 0.2,
+      nn_prior_two_step_cap_floor = 0.4
     )
   )
 })
@@ -1749,6 +1756,132 @@ test_that("weighted birth fallback burden uses child and replicate burden smooth
   expect_equal(
     weighted_fit$diagnostics$zero_effective_mass_used,
     1.0625,
+    tolerance = 1e-12
+  )
+})
+
+test_that("2-step rescue shares descendant support across competing zero children", {
+  support <- alfakR:::compute_nn_two_step_support(
+    nn_child_contexts = list(
+      zero_a = list(
+        ni = "2.2.1",
+        nj = "2.2.2",
+        projected_exposure = 10
+      ),
+      zero_b = list(
+        ni = "2.3.2",
+        nj = "2.2.2",
+        projected_exposure = 10
+      )
+    ),
+    zero_mask = c(TRUE, TRUE),
+    count_data = make_counts(
+      c(20, 20,
+        2, 2),
+      rownames_vec = c("2.2.2", "2.3.1"),
+      colnames_vec = c("0", "1")
+    ),
+    pm = 1e-4,
+    exposure_reference = 10,
+    child_birth_multiplier = c(1, 1)
+  )
+
+  expect_true(all(support$child_support > 0.39 & support$child_support < 0.394))
+  expect_lt(diff(range(support$child_support)), 1e-04)
+  expect_equal(support$n_children_with_support, 2L, tolerance = 0)
+  expect_equal(support$descendant_exposure_reference, 4, tolerance = 1e-12)
+})
+
+test_that("weighted hybrid rescue retains low-exposure zero children with observed 2-step support", {
+  weighted_fit_none <- alfakR:::prepare_weighted_nn_prior_fit(
+    nn_child_contexts = list(
+      obs = list(
+        ni = "2.2.3",
+        nj = "2.2.2",
+        projected_exposure = 20,
+        parent_birth_fallback = FALSE,
+        parent_opportunity_weights = 1,
+        parent_fitness_mean_exposure = 0
+      ),
+      zero = list(
+        ni = "2.2.1",
+        nj = "2.2.2",
+        projected_exposure = 1,
+        parent_birth_fallback = FALSE,
+        parent_opportunity_weights = 1,
+        parent_fitness_mean_exposure = 0
+      )
+    ),
+    nn_present = c(TRUE, FALSE),
+    nn_prior_fit_subset = "hybrid",
+    nn_prior_zero_exposure_min = 10,
+    nn_prior_zero_weight_scale = 1,
+    nn_prior_zero_weight_cap_ratio = 1,
+    nn_prior_two_step_support = "none",
+    count_data = make_counts(
+      c(40, 40,
+        5, 5,
+        2, 2),
+      rownames_vec = c("2.2.2", "2.2.3", "2.3.1"),
+      colnames_vec = c("0", "1")
+    ),
+    pm = 1e-4,
+    ntot = c(10, 10)
+  )
+
+  weighted_fit_rescue <- alfakR:::prepare_weighted_nn_prior_fit(
+    nn_child_contexts = list(
+      obs = list(
+        ni = "2.2.3",
+        nj = "2.2.2",
+        projected_exposure = 20,
+        parent_birth_fallback = FALSE,
+        parent_opportunity_weights = 1,
+        parent_fitness_mean_exposure = 0
+      ),
+      zero = list(
+        ni = "2.2.1",
+        nj = "2.2.2",
+        projected_exposure = 1,
+        parent_birth_fallback = FALSE,
+        parent_opportunity_weights = 1,
+        parent_fitness_mean_exposure = 0
+      )
+    ),
+    nn_present = c(TRUE, FALSE),
+    nn_prior_fit_subset = "hybrid",
+    nn_prior_zero_exposure_min = 10,
+    nn_prior_zero_weight_scale = 1,
+    nn_prior_zero_weight_cap_ratio = 1,
+    nn_prior_two_step_support = "rescue",
+    nn_prior_two_step_support_min = 0.15,
+    nn_prior_two_step_cap_floor = 0.30,
+    count_data = make_counts(
+      c(40, 40,
+        5, 5,
+        2, 2),
+      rownames_vec = c("2.2.2", "2.2.3", "2.3.1"),
+      colnames_vec = c("0", "1")
+    ),
+    pm = 1e-4,
+    ntot = c(10, 10)
+  )
+
+  expect_equal(weighted_fit_none$diagnostics$n_zero_children_retained, 0L, tolerance = 0)
+  expect_equal(weighted_fit_rescue$diagnostics$n_zero_children_retained, 1L, tolerance = 0)
+  expect_equal(
+    weighted_fit_rescue$diagnostics$max_zero_two_step_support,
+    1 - exp(-1),
+    tolerance = 1e-12
+  )
+  expect_equal(
+    weighted_fit_rescue$diagnostics$zero_effective_mass_used,
+    0.30 * (1 - exp(-1)),
+    tolerance = 1e-12
+  )
+  expect_equal(
+    weighted_fit_rescue$child_weights,
+    c(1, 0.30 * (1 - exp(-1))),
     tolerance = 1e-12
   )
 })
@@ -1930,6 +2063,14 @@ test_that("weighted hybrid prior screens low-exposure zeros and keeps observed c
     "sum_zero_weight_post_cap",
     "exposure_threshold_used",
     "exposure_reference_used",
+    "nn_prior_two_step_support_used",
+    "two_step_support_min_used",
+    "two_step_cap_floor_used",
+    "two_step_descendant_exposure_reference_used",
+    "n_zero_children_with_two_step_support",
+    "mean_zero_two_step_support",
+    "median_zero_two_step_support",
+    "max_zero_two_step_support",
     "n_zero_children_with_birth_fallback",
     "mean_zero_birth_fallback_burden",
     "median_zero_birth_fallback_burden",
@@ -1970,6 +2111,14 @@ test_that("weighted hybrid prior screens low-exposure zeros and keeps observed c
   expect_true(is.finite(diag$sum_zero_weight_post_cap))
   expect_true(is.finite(diag$exposure_threshold_used))
   expect_true(is.finite(diag$exposure_reference_used))
+  expect_true(is.character(diag$nn_prior_two_step_support_used))
+  expect_true(is.finite(diag$two_step_support_min_used))
+  expect_true(is.finite(diag$two_step_cap_floor_used))
+  expect_true(is.finite(diag$two_step_descendant_exposure_reference_used))
+  expect_true(is.finite(diag$n_zero_children_with_two_step_support))
+  expect_true(is.finite(diag$mean_zero_two_step_support))
+  expect_true(is.finite(diag$median_zero_two_step_support))
+  expect_true(is.finite(diag$max_zero_two_step_support))
   expect_true(is.finite(diag$mean_zero_birth_fallback_burden))
   expect_true(is.finite(diag$median_zero_birth_fallback_burden))
   expect_true(is.finite(diag$replicate_birth_fallback_burden))

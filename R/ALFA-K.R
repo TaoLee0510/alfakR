@@ -118,7 +118,23 @@
 #'   `nn_prior_fit_subset = "hybrid"`. When fewer than this many observed
 #'   neighbour children are available, weighted hybrid fitting does not estimate
 #'   a hard observed-based exposure threshold from that small sample and instead
-#'   relies on weighting plus the zero-weight cap.
+#'   relies on weighting, adaptive capping, and optional 2-step rescue.
+#' @param nn_prior_two_step_support Character; weighted-mode only control for
+#'   whether observed 2-step descendants can rescue zero-only latent neighbour
+#'   children. `"none"` (default) ignores 2-step observed support. `"rescue"`
+#'   uses observed descendants one mutation away from a zero-only child to
+#'   soften hybrid screening and strengthen that child's effective evidence mass
+#'   and weight without changing the single-step neighbour objective itself.
+#' @param nn_prior_two_step_support_min Numeric scalar in `[0, 1]` used only
+#'   when `nn_prior = "empirical_censored_weighted"` and
+#'   `nn_prior_two_step_support = "rescue"`. In hybrid fitting, a zero-only
+#'   child is retained if either its projected exposure passes the exposure
+#'   threshold or its 2-step support score reaches this minimum.
+#' @param nn_prior_two_step_cap_floor Numeric scalar in `[0, 1]` used only when
+#'   `nn_prior = "empirical_censored_weighted"` and
+#'   `nn_prior_two_step_support = "rescue"`. This sets the minimum fraction of a
+#'   fully supported 2-step rescue score that can contribute to the retained
+#'   zero-child support term used in effective-mass and weight calculations.
 #' @param krig_bootstrap_mode Character; `"marginal"` (default) samples
 #'   bootstrap fitness values independently by column, matching the original
 #'   ALFA-K Kriging bootstrap and cross-validation behavior. `"joint"` samples
@@ -205,6 +221,9 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
                   nn_prior_zero_birth_replicate_floor = 0.50,
                   nn_prior_zero_birth_replicate_shape = 1,
                   nn_prior_hybrid_min_obs = 3L,
+                  nn_prior_two_step_support = c("none", "rescue"),
+                  nn_prior_two_step_support_min = 0.15,
+                  nn_prior_two_step_cap_floor = 0.30,
                   krig_bootstrap_mode = c("marginal", "joint")) {
 
   # Note: library calls removed, dependencies handled by @importFrom or DESCRIPTION
@@ -219,6 +238,7 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
   validate_scalar_logical(landscape_data_output, "landscape_data_output")
   nn_prior <- validate_nn_prior_mode(nn_prior)
   nn_prior_fit_subset <- validate_nn_prior_fit_subset(nn_prior_fit_subset)
+  nn_prior_two_step_support <- validate_nn_prior_two_step_support(nn_prior_two_step_support)
   krig_bootstrap_mode <- validate_krig_bootstrap_mode(krig_bootstrap_mode)
   validate_nn_prior_controls(
     nn_prior_sd = nn_prior_sd,
@@ -234,7 +254,10 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
     nn_prior_zero_birth_child_shape = nn_prior_zero_birth_child_shape,
     nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
     nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape,
-    nn_prior_hybrid_min_obs = nn_prior_hybrid_min_obs
+    nn_prior_hybrid_min_obs = nn_prior_hybrid_min_obs,
+    nn_prior_two_step_support = nn_prior_two_step_support,
+    nn_prior_two_step_support_min = nn_prior_two_step_support_min,
+    nn_prior_two_step_cap_floor = nn_prior_two_step_cap_floor
   )
   yi$x <- coerce_count_matrix(yi$x, allow_noninteger_counts = allow_noninteger_counts)
   validate_positive_depth(yi$x)
@@ -262,7 +285,10 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
                                      nn_prior_zero_birth_child_shape = nn_prior_zero_birth_child_shape,
                                      nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
                                      nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape,
-                                     nn_prior_hybrid_min_obs = nn_prior_hybrid_min_obs)
+                                     nn_prior_hybrid_min_obs = nn_prior_hybrid_min_obs,
+                                     nn_prior_two_step_support = nn_prior_two_step_support,
+                                     nn_prior_two_step_support_min = nn_prior_two_step_support_min,
+                                     nn_prior_two_step_cap_floor = nn_prior_two_step_cap_floor)
   saveRDS(fq_boot, file = file.path(outdir, "bootstrap_res.Rds"))
 
   landscape_data <- fitKrig(fq_boot, nboot, krig_bootstrap_mode = krig_bootstrap_mode)
@@ -543,6 +569,13 @@ validate_nn_prior_fit_subset <- function(nn_prior_fit_subset) {
   match.arg(nn_prior_fit_subset, c("hybrid", "all"))
 }
 
+#' Validate weighted nearest-neighbour 2-step rescue mode
+#' @keywords internal
+#' @noRd
+validate_nn_prior_two_step_support <- function(nn_prior_two_step_support) {
+  match.arg(nn_prior_two_step_support, c("none", "rescue"))
+}
+
 #' Validate nearest-neighbour prior controls
 #' @keywords internal
 #' @noRd
@@ -559,8 +592,12 @@ validate_nn_prior_controls <- function(nn_prior_sd = NULL,
                                        nn_prior_zero_birth_child_shape = 1,
                                        nn_prior_zero_birth_replicate_floor = 0.50,
                                        nn_prior_zero_birth_replicate_shape = 1,
-                                       nn_prior_hybrid_min_obs = 3L) {
+                                       nn_prior_hybrid_min_obs = 3L,
+                                       nn_prior_two_step_support = c("none", "rescue"),
+                                       nn_prior_two_step_support_min = 0.15,
+                                       nn_prior_two_step_cap_floor = 0.30) {
   nn_prior_fit_subset <- validate_nn_prior_fit_subset(nn_prior_fit_subset)
+  nn_prior_two_step_support <- validate_nn_prior_two_step_support(nn_prior_two_step_support)
   if (!is.null(nn_prior_sd)) {
     validate_positive_finite(nn_prior_sd, "nn_prior_sd")
   }
@@ -585,6 +622,8 @@ validate_nn_prior_controls <- function(nn_prior_sd = NULL,
   validate_probability(nn_prior_zero_birth_replicate_floor, "nn_prior_zero_birth_replicate_floor", upper_inclusive = TRUE)
   validate_nonnegative_finite(nn_prior_zero_birth_replicate_shape, "nn_prior_zero_birth_replicate_shape")
   validate_positive_integer(nn_prior_hybrid_min_obs, "nn_prior_hybrid_min_obs")
+  validate_probability(nn_prior_two_step_support_min, "nn_prior_two_step_support_min", upper_inclusive = TRUE)
+  validate_probability(nn_prior_two_step_cap_floor, "nn_prior_two_step_cap_floor", upper_inclusive = TRUE)
   invisible(NULL)
 }
 
@@ -1145,6 +1184,194 @@ compute_nn_zero_effective_mass <- function(child_exposure, exposure_reference,
   exposure_term <- pmin(1, as.numeric(child_exposure) / exposure_reference)
   exposure_term[!is.finite(exposure_term)] <- NA_real_
   effective_mass <- exposure_term * as.numeric(child_birth_multiplier)
+  effective_mass[!is.finite(effective_mass)] <- NA_real_
+  pmax(0, effective_mass)
+}
+
+#' Compute a single-step transition weight between two karyotype IDs
+#' @keywords internal
+#' @noRd
+compute_nn_transition_probability <- function(parent_id, child_id, pm) {
+  parent_vec <- as.numeric(parse_karyotype_ids(parent_id)[1, ])
+  child_vec <- as.numeric(parse_karyotype_ids(child_id)[1, ])
+  if (length(parent_vec) != length(child_vec)) {
+    stop("Internal error: parent and child karyotypes must have matching dimensions.")
+  }
+  prod(vapply(seq_along(parent_vec), function(k) {
+    pij(parent_vec[k], child_vec[k], pm)
+  }, numeric(1)))
+}
+
+#' Resolve a safe observed-descendant exposure reference for 2-step rescue
+#' @keywords internal
+#' @noRd
+resolve_nn_two_step_support_reference <- function(descendant_exposure, count_data) {
+  ref <- NA_real_
+  positive_descendants <- descendant_exposure[is.finite(descendant_exposure) & descendant_exposure > 0]
+  if (length(positive_descendants)) {
+    ref <- stats::median(positive_descendants, na.rm = TRUE)
+  }
+
+  if ((!is.finite(ref) || ref <= 0) && !is.null(count_data) && nrow(count_data) > 0) {
+    observed_totals <- rowSums(count_data)
+    positive_observed <- observed_totals[is.finite(observed_totals) & observed_totals > 0]
+    if (length(positive_observed)) {
+      ref <- stats::median(positive_observed, na.rm = TRUE)
+    }
+  }
+
+  if (!is.finite(ref) || ref <= 0) {
+    ref <- 1
+  }
+
+  ref
+}
+
+#' Compute 2-step observed support for zero-only nearest-neighbour children
+#' @keywords internal
+#' @noRd
+compute_nn_two_step_support <- function(nn_child_contexts, zero_mask, count_data, pm,
+                                        exposure_reference, child_birth_multiplier) {
+  child_ids <- vapply(nn_child_contexts, function(item) {
+    if (!is.null(item$ni) && nzchar(item$ni)) item$ni else NA_character_
+  }, character(1))
+  if (any(is.na(child_ids)) || any(!nzchar(child_ids))) {
+    child_ids <- names(nn_child_contexts)
+  }
+
+  zero_indices <- which(zero_mask)
+  zero_names <- child_ids[zero_mask]
+  if (!length(zero_names) ||
+      is.null(count_data) ||
+      !is.matrix(count_data) ||
+      is.null(rownames(count_data)) ||
+      !nrow(count_data)) {
+    return(list(
+      child_support = setNames(numeric(length(zero_names)), zero_names),
+      descendant_exposure_reference = 0,
+      n_children_with_support = 0L,
+      mean_support = 0,
+      median_support = 0,
+      max_support = 0
+    ))
+  }
+
+  zero_items <- nn_child_contexts[zero_mask]
+  zero_exposure <- vapply(zero_items, function(item) item$projected_exposure, numeric(1))
+  exposure_term <- pmin(1, as.numeric(zero_exposure) / exposure_reference)
+  exposure_term[!is.finite(exposure_term)] <- 0
+  exposure_term <- pmax(0, exposure_term)
+  q_vec <- exposure_term * as.numeric(child_birth_multiplier)
+  q_vec[!is.finite(q_vec)] <- 0
+  q_vec <- pmax(0, q_vec)
+  names(q_vec) <- zero_names
+
+  observed_totals <- rowSums(count_data)
+  observed_ids <- names(observed_totals)[is.finite(observed_totals) & observed_totals > 0]
+  child_support <- setNames(numeric(length(zero_names)), zero_names)
+  if (!length(observed_ids) || !any(q_vec > 0)) {
+    return(list(
+      child_support = child_support,
+      descendant_exposure_reference = 0,
+      n_children_with_support = 0L,
+      mean_support = 0,
+      median_support = 0,
+      max_support = 0
+    ))
+  }
+
+  descendant_scores <- list()
+  for (idx in seq_along(zero_indices)) {
+    child_idx <- zero_indices[idx]
+    child_name <- zero_names[idx]
+    if (!is.finite(q_vec[child_name]) || q_vec[child_name] <= 0) {
+      next
+    }
+    descendant_matrix <- gen_all_neighbours(child_name)
+    if (!nrow(descendant_matrix)) {
+      next
+    }
+    descendant_ids <- apply(descendant_matrix, 1, paste, collapse = ".")
+    descendant_ids <- intersect(descendant_ids, observed_ids)
+    descendant_ids <- setdiff(descendant_ids, nn_child_contexts[[child_idx]]$nj)
+    if (!length(descendant_ids)) {
+      next
+    }
+
+    transition_weights <- vapply(descendant_ids, function(desc_id) {
+      compute_nn_transition_probability(child_name, desc_id, pm)
+    }, numeric(1))
+    keep <- is.finite(transition_weights) & transition_weights > 0
+    if (!any(keep)) {
+      next
+    }
+    descendant_ids <- descendant_ids[keep]
+    transition_weights <- transition_weights[keep]
+    for (idx in seq_along(descendant_ids)) {
+      desc_id <- descendant_ids[idx]
+      descendant_scores[[desc_id]][child_name] <- q_vec[child_name] * transition_weights[idx]
+    }
+  }
+
+  unique_descendants <- names(descendant_scores)
+  if (!length(unique_descendants)) {
+    return(list(
+      child_support = child_support,
+      descendant_exposure_reference = 0,
+      n_children_with_support = 0L,
+      mean_support = 0,
+      median_support = 0,
+      max_support = 0
+    ))
+  }
+
+  descendant_exposure <- observed_totals[unique_descendants]
+  descendant_reference <- resolve_nn_two_step_support_reference(
+    descendant_exposure = descendant_exposure,
+    count_data = count_data
+  )
+  descendant_term <- pmin(1, as.numeric(descendant_exposure) / descendant_reference)
+  descendant_term[!is.finite(descendant_term)] <- 0
+  descendant_term <- pmax(0, descendant_term)
+  names(descendant_term) <- unique_descendants
+
+  for (desc_id in unique_descendants) {
+    desc_scores <- descendant_scores[[desc_id]]
+    if (is.null(desc_scores)) {
+      next
+    }
+    desc_scores <- unlist(desc_scores, use.names = TRUE)
+    denom <- sum(desc_scores)
+    if (!is.finite(denom) || denom <= 0) {
+      next
+    }
+    child_support[names(desc_scores)] <- child_support[names(desc_scores)] +
+      descendant_term[desc_id] * (desc_scores / denom)
+  }
+
+  child_support <- 1 - exp(-child_support)
+  child_support[!is.finite(child_support)] <- 0
+  child_support <- pmin(1, pmax(0, child_support))
+
+  list(
+    child_support = child_support,
+    descendant_exposure_reference = descendant_reference,
+    n_children_with_support = as.integer(sum(child_support > sqrt(.Machine$double.eps))),
+    mean_support = if (length(child_support)) mean(child_support) else 0,
+    median_support = if (length(child_support)) stats::median(child_support) else 0,
+    max_support = if (length(child_support)) max(child_support) else 0
+  )
+}
+
+#' Compute effective zero evidence mass from support and reliability terms
+#' @keywords internal
+#' @noRd
+compute_nn_zero_effective_mass_from_support <- function(base_support_term,
+                                                        child_reliability_multiplier) {
+  if (length(base_support_term) != length(child_reliability_multiplier)) {
+    stop("Internal error: malformed zero-child support or reliability input for effective evidence mass.")
+  }
+  effective_mass <- as.numeric(base_support_term) * as.numeric(child_reliability_multiplier)
   effective_mass[!is.finite(effective_mass)] <- NA_real_
   pmax(0, effective_mass)
 }
@@ -1903,6 +2130,14 @@ new_nn_prior_diagnostics <- function(nn_prior_mode_requested,
     sum_zero_weight_post_cap = 0,
     exposure_threshold_used = NA_real_,
     exposure_reference_used = NA_real_,
+    nn_prior_two_step_support_used = NA_character_,
+    two_step_support_min_used = 0,
+    two_step_cap_floor_used = 0,
+    two_step_descendant_exposure_reference_used = 0,
+    n_zero_children_with_two_step_support = 0L,
+    mean_zero_two_step_support = 0,
+    median_zero_two_step_support = 0,
+    max_zero_two_step_support = 0,
     n_zero_children_with_birth_fallback = 0L,
     mean_zero_birth_fallback_burden = 0,
     median_zero_birth_fallback_burden = 0,
@@ -1941,8 +2176,14 @@ prepare_weighted_nn_prior_fit <- function(nn_child_contexts, nn_present,
                                           nn_prior_zero_birth_replicate_floor = 0.50,
                                           nn_prior_zero_birth_replicate_shape = 1,
                                           nn_prior_hybrid_min_obs = 3L,
+                                          nn_prior_two_step_support = c("none", "rescue"),
+                                          nn_prior_two_step_support_min = 0.15,
+                                          nn_prior_two_step_cap_floor = 0.30,
+                                          count_data = NULL,
+                                          pm = 0.00005,
                                           ntot) {
   nn_prior_fit_subset <- validate_nn_prior_fit_subset(nn_prior_fit_subset)
+  nn_prior_two_step_support <- validate_nn_prior_two_step_support(nn_prior_two_step_support)
   child_names <- names(nn_child_contexts)
   if (is.null(child_names)) {
     child_names <- vapply(nn_child_contexts, function(item) item$ni, character(1))
@@ -1971,6 +2212,14 @@ prepare_weighted_nn_prior_fit <- function(nn_child_contexts, nn_present,
     sum_zero_weight_post_cap = 0,
     exposure_threshold_used = NA_real_,
     exposure_reference_used = NA_real_,
+    nn_prior_two_step_support_used = nn_prior_two_step_support,
+    two_step_support_min_used = nn_prior_two_step_support_min,
+    two_step_cap_floor_used = nn_prior_two_step_cap_floor,
+    two_step_descendant_exposure_reference_used = 0,
+    n_zero_children_with_two_step_support = 0L,
+    mean_zero_two_step_support = 0,
+    median_zero_two_step_support = 0,
+    max_zero_two_step_support = 0,
     n_zero_children_with_birth_fallback = 0L,
     mean_zero_birth_fallback_burden = 0,
     median_zero_birth_fallback_burden = 0,
@@ -1992,6 +2241,57 @@ prepare_weighted_nn_prior_fit <- function(nn_child_contexts, nn_present,
     nn_prior_zero_birth_child_floor <- nn_prior_zero_birth_fallback_weight
   }
 
+  exposure_reference <- resolve_nn_exposure_reference(
+    observed_exposure = projected_exposure[observed_mask],
+    candidate_exposure = projected_exposure[zero_mask],
+    ntot = ntot
+  )
+  diagnostics$exposure_reference_used <- exposure_reference
+
+  zero_child_burden_all <- numeric(sum(zero_mask))
+  zero_child_multiplier_all <- numeric(sum(zero_mask))
+  zero_birth_fallback_all <- logical(sum(zero_mask))
+  zero_two_step_support_all <- numeric(sum(zero_mask))
+  zero_two_step_support_full <- numeric(length(nn_child_contexts))
+  if (sum(zero_mask) > 0) {
+    zero_items_all <- nn_child_contexts[zero_mask]
+    zero_child_burden_all <- vapply(zero_items_all, function(item) {
+      compute_nn_child_birth_fallback_burden(
+        parent_birth_fallback = item$parent_birth_fallback,
+        parent_opportunity_weights = item$parent_opportunity_weights
+      )
+    }, numeric(1))
+    zero_child_multiplier_all <- nn_birth_reliability_multiplier(
+      burden = zero_child_burden_all,
+      floor = nn_prior_zero_birth_child_floor,
+      shape = nn_prior_zero_birth_child_shape
+    )
+    zero_birth_fallback_all <- vapply(zero_items_all, function(item) {
+      any(item$parent_birth_fallback)
+    }, logical(1))
+    diagnostics$n_zero_children_with_birth_fallback <- as.integer(sum(zero_birth_fallback_all))
+    diagnostics$mean_zero_birth_fallback_burden <- mean(zero_child_burden_all)
+    diagnostics$median_zero_birth_fallback_burden <- stats::median(zero_child_burden_all)
+
+    if (nn_prior_two_step_support == "rescue") {
+      two_step_support <- compute_nn_two_step_support(
+        nn_child_contexts = nn_child_contexts,
+        zero_mask = zero_mask,
+        count_data = count_data,
+        pm = pm,
+        exposure_reference = exposure_reference,
+        child_birth_multiplier = zero_child_multiplier_all
+      )
+      zero_two_step_support_all <- two_step_support$child_support
+      zero_two_step_support_full[zero_mask] <- zero_two_step_support_all
+      diagnostics$two_step_descendant_exposure_reference_used <- two_step_support$descendant_exposure_reference
+      diagnostics$n_zero_children_with_two_step_support <- two_step_support$n_children_with_support
+      diagnostics$mean_zero_two_step_support <- two_step_support$mean_support
+      diagnostics$median_zero_two_step_support <- two_step_support$median_support
+      diagnostics$max_zero_two_step_support <- two_step_support$max_support
+    }
+  }
+
   if (nn_prior_fit_subset == "hybrid") {
     if (!is.null(nn_prior_zero_exposure_min)) {
       exposure_threshold <- nn_prior_zero_exposure_min
@@ -2011,46 +2311,36 @@ prepare_weighted_nn_prior_fit <- function(nn_child_contexts, nn_present,
     } else {
       exposure_threshold <- 0
     }
-    zero_retained_mask <- zero_mask & is.finite(projected_exposure) & projected_exposure >= exposure_threshold
+    zero_retained_mask <- zero_mask & (
+      (is.finite(projected_exposure) & projected_exposure >= exposure_threshold) |
+        (nn_prior_two_step_support == "rescue" & zero_two_step_support_full >= nn_prior_two_step_support_min)
+    )
     diagnostics$exposure_threshold_used <- exposure_threshold
   } else {
-    zero_retained_mask <- zero_mask & is.finite(projected_exposure)
+    zero_retained_mask <- zero_mask & (
+      is.finite(projected_exposure) |
+        (nn_prior_two_step_support == "rescue" & zero_two_step_support_full > 0)
+    )
   }
 
   diagnostics$n_zero_children_retained <- as.integer(sum(zero_retained_mask))
   diagnostics$n_zero_children_screened <- as.integer(n_zero_total - sum(zero_retained_mask))
 
-  exposure_reference <- resolve_nn_exposure_reference(
-    observed_exposure = projected_exposure[observed_mask],
-    candidate_exposure = projected_exposure[zero_mask],
-    ntot = ntot
-  )
-  diagnostics$exposure_reference_used <- exposure_reference
-
   zero_weights_raw <- numeric(sum(zero_retained_mask))
-  zero_birth_fallback <- logical(sum(zero_retained_mask))
   child_birth_burden <- numeric(sum(zero_retained_mask))
   child_birth_multiplier <- numeric(sum(zero_retained_mask))
+  child_two_step_support <- numeric(sum(zero_retained_mask))
+  zero_support_term <- numeric(sum(zero_retained_mask))
+  child_reliability_multiplier <- numeric(sum(zero_retained_mask))
   zero_effective_mass <- numeric(sum(zero_retained_mask))
   replicate_birth_burden <- 0
   replicate_birth_multiplier <- 1
   if (length(zero_weights_raw)) {
     retained_zero_items <- nn_child_contexts[zero_retained_mask]
     retained_zero_exposure <- projected_exposure[zero_retained_mask]
-    zero_birth_fallback <- vapply(retained_zero_items, function(item) {
-      any(item$parent_birth_fallback)
-    }, logical(1))
-    child_birth_burden <- vapply(retained_zero_items, function(item) {
-      compute_nn_child_birth_fallback_burden(
-        parent_birth_fallback = item$parent_birth_fallback,
-        parent_opportunity_weights = item$parent_opportunity_weights
-      )
-    }, numeric(1))
-    child_birth_multiplier <- nn_birth_reliability_multiplier(
-      burden = child_birth_burden,
-      floor = nn_prior_zero_birth_child_floor,
-      shape = nn_prior_zero_birth_child_shape
-    )
+    child_birth_burden <- zero_child_burden_all[zero_retained_mask[zero_mask]]
+    child_birth_multiplier <- zero_child_multiplier_all[zero_retained_mask[zero_mask]]
+    child_two_step_support <- zero_two_step_support_all[zero_retained_mask[zero_mask]]
     replicate_birth_burden <- compute_nn_replicate_birth_fallback_burden(
       child_burdens = child_birth_burden,
       child_exposure = retained_zero_exposure
@@ -2060,23 +2350,34 @@ prepare_weighted_nn_prior_fit <- function(nn_child_contexts, nn_present,
       floor = nn_prior_zero_birth_replicate_floor,
       shape = nn_prior_zero_birth_replicate_shape
     )
-    zero_effective_mass <- compute_nn_zero_effective_mass(
-      child_exposure = retained_zero_exposure,
-      exposure_reference = exposure_reference,
-      child_birth_multiplier = child_birth_multiplier
-    )
     exposure_term <- pmin(1, retained_zero_exposure / exposure_reference)
     exposure_term[!is.finite(exposure_term)] <- 0
     exposure_term <- pmax(0, exposure_term)
-    birth_reliability_multiplier <- child_birth_multiplier * replicate_birth_multiplier
+    zero_support_term <- if (nn_prior_two_step_support == "rescue") {
+      pmax(exposure_term, nn_prior_two_step_cap_floor * child_two_step_support)
+    } else {
+      exposure_term
+    }
+    zero_support_term[!is.finite(zero_support_term)] <- 0
+    zero_support_term <- pmax(0, zero_support_term)
+    child_reliability_multiplier <- if (nn_prior_two_step_support == "rescue") {
+      child_birth_multiplier + (1 - child_birth_multiplier) * child_two_step_support
+    } else {
+      child_birth_multiplier
+    }
+    child_reliability_multiplier[!is.finite(child_reliability_multiplier)] <- 0
+    child_reliability_multiplier <- pmin(1, pmax(0, child_reliability_multiplier))
+    zero_effective_mass <- compute_nn_zero_effective_mass_from_support(
+      base_support_term = zero_support_term,
+      child_reliability_multiplier = child_reliability_multiplier
+    )
+    birth_reliability_multiplier <- child_reliability_multiplier * replicate_birth_multiplier
     zero_weights_raw <- nn_prior_zero_weight_scale *
-      exposure_term *
+      zero_support_term *
       birth_reliability_multiplier
     zero_weights_raw[!is.finite(zero_weights_raw)] <- 0
     zero_weights_raw <- pmax(0, zero_weights_raw)
 
-    diagnostics$mean_zero_birth_fallback_burden <- mean(child_birth_burden)
-    diagnostics$median_zero_birth_fallback_burden <- stats::median(child_birth_burden)
     diagnostics$replicate_birth_fallback_burden <- replicate_birth_burden
     diagnostics$mean_zero_birth_reliability_multiplier <- mean(birth_reliability_multiplier)
     diagnostics$median_zero_birth_reliability_multiplier <- stats::median(birth_reliability_multiplier)
@@ -2085,7 +2386,6 @@ prepare_weighted_nn_prior_fit <- function(nn_child_contexts, nn_present,
 
   diagnostics$sum_zero_weight_raw <- sum(zero_weights_raw)
   diagnostics$sum_zero_weight_pre_cap <- sum(zero_weights_raw)
-  diagnostics$n_zero_children_with_birth_fallback <- as.integer(sum(zero_birth_fallback))
   finite_zero_effective_mass <- zero_effective_mass[is.finite(zero_effective_mass)]
   zero_effective_mass_total <- if (length(finite_zero_effective_mass)) sum(finite_zero_effective_mass) else NA_real_
   if (length(finite_zero_effective_mass)) {
@@ -2464,7 +2764,10 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
                                     nn_prior_zero_birth_child_shape = 1,
                                     nn_prior_zero_birth_replicate_floor = 0.50,
                                     nn_prior_zero_birth_replicate_shape = 1,
-                                    nn_prior_hybrid_min_obs = 3L) {
+                                    nn_prior_hybrid_min_obs = 3L,
+                                    nn_prior_two_step_support = c("none", "rescue"),
+                                    nn_prior_two_step_support_min = 0.15,
+                                    nn_prior_two_step_cap_floor = 0.30) {
   data$x <- coerce_count_matrix(data$x, allow_noninteger_counts = allow_noninteger_counts)
   validate_positive_depth(data$x)
   validate_positive_integer(nboot, "nboot")
@@ -2475,6 +2778,7 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
   validate_scalar_logical(correct_efflux, "correct_efflux")
   nn_prior <- validate_nn_prior_mode(nn_prior)
   nn_prior_fit_subset <- validate_nn_prior_fit_subset(nn_prior_fit_subset)
+  nn_prior_two_step_support <- validate_nn_prior_two_step_support(nn_prior_two_step_support)
   validate_nn_prior_controls(
     nn_prior_sd = nn_prior_sd,
     nn_prior_sd_floor = nn_prior_sd_floor,
@@ -2489,7 +2793,10 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
     nn_prior_zero_birth_child_shape = nn_prior_zero_birth_child_shape,
     nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
     nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape,
-    nn_prior_hybrid_min_obs = nn_prior_hybrid_min_obs
+    nn_prior_hybrid_min_obs = nn_prior_hybrid_min_obs,
+    nn_prior_two_step_support = nn_prior_two_step_support,
+    nn_prior_two_step_support_min = nn_prior_two_step_support_min,
+    nn_prior_two_step_cap_floor = nn_prior_two_step_cap_floor
   )
   fq <- get_frequent_karyotypes(data$x, minobs)
   nn_info_list <- gen_nn_info(fq, pm) # Renamed 'nn' to 'nn_info_list' for clarity
@@ -2654,6 +2961,11 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
         nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
         nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape,
         nn_prior_hybrid_min_obs = nn_prior_hybrid_min_obs,
+        nn_prior_two_step_support = nn_prior_two_step_support,
+        nn_prior_two_step_support_min = nn_prior_two_step_support_min,
+        nn_prior_two_step_cap_floor = nn_prior_two_step_cap_floor,
+        count_data = boot_data,
+        pm = pm,
         ntot = ntot_rounded
       )
       nn_prior_diag[names(weighted_prior_config$diagnostics)] <- weighted_prior_config$diagnostics
