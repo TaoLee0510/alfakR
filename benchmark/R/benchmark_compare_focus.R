@@ -328,6 +328,271 @@ summarize_beneficial_by_parameter <- function(beneficial_long) {
     )
 }
 
+as_benchmark_logical_flag <- function(x) {
+  if (is.logical(x)) {
+    return(x)
+  }
+  as.character(x) %in% c("TRUE", "T", "true", "1")
+}
+
+focus_state_class_levels <- function() {
+  c("fq", "observed_nn", "latent_nn")
+}
+
+focus_edge_class_levels <- function() {
+  c("all_valid_moves", "fq_target", "observed_nn", "latent_nn")
+}
+
+build_focus_state_change_index <- function(landscape_df, x) {
+  state_change_tbl <- build_state_change_tbl(as.character(landscape_df$k), x)
+  state_change_tbl[match(as.character(landscape_df$k), state_change_tbl$k), , drop = FALSE]
+}
+
+build_focus_edge_long_tbl <- function(landscape_df, x, parameter_label, beneficial_move_levels) {
+  if (is.null(landscape_df) || !nrow(landscape_df)) {
+    return(tibble::tibble())
+  }
+
+  fq_flag <- as_benchmark_logical_flag(landscape_df$fq)
+  k_vec <- as.character(landscape_df$k)
+  starts <- which(fq_flag %in% TRUE)
+  if (!length(starts)) {
+    return(tibble::tibble())
+  }
+
+  k_parts <- strsplit(k_vec, ".", fixed = TRUE)
+  k_mat <- matrix(as.integer(unlist(k_parts, use.names = FALSE)), ncol = 22, byrow = TRUE)
+  fitness_vec <- as.numeric(landscape_df$mean)
+  state_change_tbl <- build_focus_state_change_index(landscape_df, x)
+
+  edge_rows <- vector("list", length(starts))
+  edge_idx <- 0L
+  for (from in starts) {
+    v <- k_mat[from, ]
+    neigh_mat <- matrix(rep(v, each = length(beneficial_move_levels)), nrow = length(beneficial_move_levels), ncol = 22)
+    for (chr in seq_len(22)) {
+      plus_row <- 2L * chr - 1L
+      minus_row <- 2L * chr
+      neigh_mat[plus_row, chr] <- neigh_mat[plus_row, chr] + 1L
+      neigh_mat[minus_row, chr] <- neigh_mat[minus_row, chr] - 1L
+    }
+
+    neigh_str <- do.call(paste, c(as.data.frame(neigh_mat), sep = "."))
+    to <- match(neigh_str, k_vec)
+    valid_cn <- apply(neigh_mat, 1, function(row) all(row >= 1L))
+    valid <- valid_cn & !is.na(to)
+    if (!any(valid)) {
+      next
+    }
+
+    to_valid <- to[valid]
+    child_fq <- fq_flag[to_valid] %in% TRUE
+    child_observed <- state_change_tbl$observed[to_valid] %in% TRUE
+    child_state_class <- dplyr::case_when(
+      child_fq ~ "fq_target",
+      child_observed ~ "observed_nn",
+      TRUE ~ "latent_nn"
+    )
+    delta <- fitness_vec[to_valid] - fitness_vec[from]
+    edge_valid <- is.finite(delta)
+
+    edge_idx <- edge_idx + 1L
+    edge_rows[[edge_idx]] <- tibble::tibble(
+      parameter_label = parameter_label,
+      parent_k = k_vec[from],
+      child_k = k_vec[to_valid],
+      move = beneficial_move_levels[valid],
+      edge_valid = edge_valid,
+      beneficial = ifelse(edge_valid, delta > 0, NA),
+      delta = as.numeric(delta),
+      parent_fitness = as.numeric(fitness_vec[from]),
+      child_fitness = as.numeric(fitness_vec[to_valid]),
+      parent_count_t1 = as.numeric(state_change_tbl$count_t1[from]),
+      parent_count_t2 = as.numeric(state_change_tbl$count_t2[from]),
+      parent_count_up = state_change_tbl$count_up[from] %in% TRUE,
+      parent_prop_direction = factor(
+        as.character(state_change_tbl$prop_direction[from]),
+        levels = c("up", "down", "flat")
+      ),
+      child_observed = child_observed,
+      child_count_t1 = as.numeric(state_change_tbl$count_t1[to_valid]),
+      child_count_t2 = as.numeric(state_change_tbl$count_t2[to_valid]),
+      child_count_up = state_change_tbl$count_up[to_valid] %in% TRUE,
+      child_prop_direction = factor(
+        as.character(state_change_tbl$prop_direction[to_valid]),
+        levels = c("up", "down", "flat")
+      ),
+      child_state_class = factor(child_state_class, levels = focus_edge_class_levels()[-1])
+    )
+  }
+
+  if (!edge_idx) {
+    return(tibble::tibble())
+  }
+
+  dplyr::bind_rows(edge_rows[seq_len(edge_idx)])
+}
+
+build_focus_state_long_tbl <- function(landscape_df, edge_long_tbl, x, parameter_label) {
+  if (is.null(landscape_df) || !nrow(landscape_df) || is.null(edge_long_tbl) || !nrow(edge_long_tbl)) {
+    return(tibble::tibble())
+  }
+
+  k_vec <- as.character(landscape_df$k)
+  state_ids <- unique(c(as.character(edge_long_tbl$parent_k), as.character(edge_long_tbl$child_k)))
+  state_idx <- match(state_ids, k_vec)
+  state_change_tbl <- build_state_change_tbl(state_ids, x)
+  fq_states <- unique(as.character(edge_long_tbl$parent_k))
+  state_class <- dplyr::case_when(
+    state_ids %in% fq_states ~ "fq",
+    state_change_tbl$observed %in% TRUE ~ "observed_nn",
+    TRUE ~ "latent_nn"
+  )
+
+  tibble::tibble(
+    parameter_label = parameter_label,
+    k = state_ids,
+    state_class = factor(state_class, levels = focus_state_class_levels()),
+    observed = state_change_tbl$observed %in% TRUE,
+    count_t1 = as.numeric(state_change_tbl$count_t1),
+    count_t2 = as.numeric(state_change_tbl$count_t2),
+    count_up = state_change_tbl$count_up %in% TRUE,
+    prop_direction = factor(as.character(state_change_tbl$prop_direction), levels = c("up", "down", "flat")),
+    landscape_mean = as.numeric(landscape_df$mean[state_idx]),
+    landscape_median = as.numeric(landscape_df$median[state_idx]),
+    landscape_sd = as.numeric(landscape_df$sd[state_idx])
+  )
+}
+
+build_focus_observed_latent_decomposition <- function(bundle_list,
+                                                      input_rds,
+                                                      diploid_state,
+                                                      beneficial_move_levels,
+                                                      parameter_levels) {
+  if (!length(bundle_list) || is.null(input_rds) || !nzchar(input_rds) || !file.exists(input_rds)) {
+    return(list(
+      state_long = tibble::tibble(),
+      state_summary = tibble::tibble(),
+      edge_long = tibble::tibble(),
+      edge_summary = tibble::tibble(),
+      nn_prior_diag_summary = tibble::tibble()
+    ))
+  }
+
+  x <- prepare_input_count_matrix(input_rds, diploid_state = diploid_state)
+
+  edge_long_tbl <- dplyr::bind_rows(lapply(parameter_levels, function(parameter_label_name) {
+    landscape_df <- bundle_list[[parameter_label_name]]$landscape
+    build_focus_edge_long_tbl(
+      landscape_df = landscape_df,
+      x = x,
+      parameter_label = parameter_label_name,
+      beneficial_move_levels = beneficial_move_levels
+    )
+  }))
+
+  state_long_tbl <- dplyr::bind_rows(lapply(parameter_levels, function(parameter_label_name) {
+    landscape_df <- bundle_list[[parameter_label_name]]$landscape
+    edge_sub_tbl <- edge_long_tbl %>%
+      dplyr::filter(parameter_label == parameter_label_name)
+    build_focus_state_long_tbl(
+      landscape_df = landscape_df,
+      edge_long_tbl = edge_sub_tbl,
+      x = x,
+      parameter_label = parameter_label_name
+    )
+  }))
+
+  state_summary_tbl <- if (nrow(state_long_tbl)) {
+    state_long_tbl %>%
+      dplyr::group_by(parameter_label, state_class) %>%
+      dplyr::summarise(
+        n_states = dplyr::n(),
+        n_observed_states = sum(observed %in% TRUE, na.rm = TRUE),
+        prop_observed = safe_fraction(sum(observed %in% TRUE, na.rm = TRUE), dplyr::n()),
+        mean_landscape_mean = mean(landscape_mean, na.rm = TRUE),
+        median_landscape_mean = stats::median(landscape_mean, na.rm = TRUE),
+        mean_landscape_sd = mean(landscape_sd, na.rm = TRUE),
+        prop_count_up_observed = safe_fraction(sum(count_up %in% TRUE & observed %in% TRUE, na.rm = TRUE), sum(observed %in% TRUE, na.rm = TRUE)),
+        prop_prop_up_observed = safe_fraction(sum(prop_direction == "up" & observed %in% TRUE, na.rm = TRUE), sum(observed %in% TRUE, na.rm = TRUE)),
+        prop_prop_down_observed = safe_fraction(sum(prop_direction == "down" & observed %in% TRUE, na.rm = TRUE), sum(observed %in% TRUE, na.rm = TRUE)),
+        .groups = "drop"
+      ) %>%
+      dplyr::arrange(match(parameter_label, parameter_levels), match(state_class, focus_state_class_levels()))
+  } else {
+    tibble::tibble()
+  }
+
+  edge_summary_tbl <- if (nrow(edge_long_tbl)) {
+    dplyr::bind_rows(
+      edge_long_tbl %>%
+        dplyr::mutate(edge_class = factor("all_valid_moves", levels = focus_edge_class_levels())),
+      edge_long_tbl %>%
+        dplyr::mutate(edge_class = factor(as.character(child_state_class), levels = focus_edge_class_levels()))
+    ) %>%
+      dplyr::group_by(parameter_label, edge_class) %>%
+      dplyr::summarise(
+        n_edges = dplyr::n(),
+        n_unique_parents = dplyr::n_distinct(parent_k),
+        n_unique_children = dplyr::n_distinct(child_k),
+        n_beneficial = sum(beneficial %in% TRUE, na.rm = TRUE),
+        beneficial_proportion = safe_fraction(sum(beneficial %in% TRUE, na.rm = TRUE), sum(edge_valid %in% TRUE, na.rm = TRUE)),
+        mean_delta = mean(delta[edge_valid %in% TRUE], na.rm = TRUE),
+        median_delta = stats::median(delta[edge_valid %in% TRUE], na.rm = TRUE),
+        mean_abs_delta = mean(abs(delta[edge_valid %in% TRUE]), na.rm = TRUE),
+        positive_delta_n = sum(delta > 0, na.rm = TRUE),
+        negative_delta_n = sum(delta < 0, na.rm = TRUE),
+        prop_child_observed = safe_fraction(sum(child_observed %in% TRUE, na.rm = TRUE), dplyr::n()),
+        prop_child_count_up_observed = safe_fraction(sum(child_count_up %in% TRUE & child_observed %in% TRUE, na.rm = TRUE), sum(child_observed %in% TRUE, na.rm = TRUE)),
+        .groups = "drop"
+      ) %>%
+      dplyr::arrange(match(parameter_label, parameter_levels), match(edge_class, focus_edge_class_levels()))
+  } else {
+    tibble::tibble()
+  }
+
+  nn_prior_diag_summary_tbl <- dplyr::bind_rows(lapply(parameter_levels, function(parameter_label_name) {
+    boot_obj <- bundle_list[[parameter_label_name]]$bootstrap
+    diag_tbl <- boot_obj$nn_prior_diagnostics
+
+    if (is.null(diag_tbl) || !nrow(diag_tbl)) {
+      return(tibble::tibble(
+        parameter_label = parameter_label_name,
+        has_nn_prior_diagnostics = FALSE,
+        n_boot = NA_integer_,
+        nn_prior_mode_used = NA_character_,
+        prior_mu_hat_mean = NA_real_,
+        prior_sigma_hat_mean = NA_real_,
+        n_observed_children_mean = NA_real_,
+        n_zero_children_total_mean = NA_real_,
+        informative_child_count_mean = NA_real_
+      ))
+    }
+
+    diag_tbl <- tibble::as_tibble(diag_tbl)
+    tibble::tibble(
+      parameter_label = parameter_label_name,
+      has_nn_prior_diagnostics = TRUE,
+      n_boot = nrow(diag_tbl),
+      nn_prior_mode_used = paste(sort(unique(stats::na.omit(as.character(diag_tbl$nn_prior_mode_used)))), collapse = ", "),
+      prior_mu_hat_mean = mean(suppressWarnings(as.numeric(diag_tbl$prior_mu_hat)), na.rm = TRUE),
+      prior_sigma_hat_mean = mean(suppressWarnings(as.numeric(diag_tbl$prior_sigma_hat)), na.rm = TRUE),
+      n_observed_children_mean = mean(suppressWarnings(as.numeric(diag_tbl$n_observed_children)), na.rm = TRUE),
+      n_zero_children_total_mean = mean(suppressWarnings(as.numeric(diag_tbl$n_zero_children_total)), na.rm = TRUE),
+      informative_child_count_mean = mean(suppressWarnings(as.numeric(diag_tbl$informative_child_count)), na.rm = TRUE)
+    )
+  })) %>%
+    dplyr::arrange(match(parameter_label, parameter_levels))
+
+  list(
+    state_long = state_long_tbl,
+    state_summary = state_summary_tbl,
+    edge_long = edge_long_tbl,
+    edge_summary = edge_summary_tbl,
+    nn_prior_diag_summary = nn_prior_diag_summary_tbl
+  )
+}
+
 build_focus_beneficial_shift_tbl <- function(beneficial_long, parameter_levels, top_n = 15L) {
   if (!nrow(beneficial_long) || length(parameter_levels) < 2L) {
     return(tibble::tibble())

@@ -191,3 +191,175 @@ build_benchmark_inputs <- function(meta_tbl,
   dplyr::bind_rows(rows) %>%
     dplyr::arrange(factor(patient_id, levels = sort_pid_levels(patient_id)))
 }
+
+prepare_input_count_matrix <- function(input_rds, diploid_state) {
+  yi <- readRDS(input_rds)
+  x <- as.matrix(yi$x)
+  storage.mode(x) <- "numeric"
+
+  if (diploid_state %in% rownames(x)) {
+    x <- x[rownames(x) != diploid_state, , drop = FALSE]
+  }
+  if (!nrow(x)) {
+    stop("No non-diploid karyotypes remain after filtering: ", input_rds)
+  }
+  if (ncol(x) < 2L) {
+    stop("Expected at least two timepoints in benchmark input: ", input_rds)
+  }
+  if (ncol(x) > 2L) {
+    x <- x[, seq_len(2L), drop = FALSE]
+  }
+
+  x
+}
+
+safe_fraction <- function(num, den) {
+  if (!length(den) || is.na(den) || !is.finite(den) || den <= 0) {
+    return(NA_real_)
+  }
+  as.numeric(num) / as.numeric(den)
+}
+
+select_frequent_karyotypes_minobs <- function(x, minobs) {
+  rownames(x)[rowSums(x, na.rm = TRUE) >= as.numeric(minobs)]
+}
+
+neighbor_strings_from_karyotypes <- function(karyotypes) {
+  karyotypes <- unique(as.character(karyotypes))
+  karyotypes <- karyotypes[nzchar(karyotypes)]
+  if (!length(karyotypes)) {
+    return(character(0))
+  }
+
+  nn_mat <- alfakR:::gen_all_neighbours(karyotypes)
+  if (!nrow(nn_mat)) {
+    return(character(0))
+  }
+
+  unique(apply(nn_mat, 1, paste, collapse = "."))
+}
+
+build_state_change_tbl <- function(state_ids, x) {
+  state_ids <- unique(as.character(state_ids))
+  state_ids <- state_ids[nzchar(state_ids)]
+  if (!length(state_ids)) {
+    return(tibble::tibble(
+      k = character(0),
+      observed = logical(0),
+      count_t1 = numeric(0),
+      count_t2 = numeric(0),
+      prop_t1 = numeric(0),
+      prop_t2 = numeric(0),
+      count_up = logical(0),
+      prop_direction = factor(character(0), levels = c("up", "down", "flat"))
+    ))
+  }
+
+  x <- as.matrix(x)
+  storage.mode(x) <- "numeric"
+  x2 <- x[, seq_len(2L), drop = FALSE]
+
+  count_mat <- matrix(0, nrow = length(state_ids), ncol = 2L, dimnames = list(state_ids, colnames(x2)))
+  matched <- match(state_ids, rownames(x2))
+  present <- !is.na(matched)
+  if (any(present)) {
+    count_mat[present, ] <- x2[matched[present], , drop = FALSE]
+  }
+
+  totals <- colSums(x2, na.rm = TRUE)
+  prop_t1 <- if (totals[1] > 0) count_mat[, 1] / totals[1] else rep(NA_real_, length(state_ids))
+  prop_t2 <- if (totals[2] > 0) count_mat[, 2] / totals[2] else rep(NA_real_, length(state_ids))
+  prop_direction <- ifelse(prop_t2 > prop_t1, "up", ifelse(prop_t2 < prop_t1, "down", "flat"))
+
+  tibble::tibble(
+    k = state_ids,
+    observed = present,
+    count_t1 = as.numeric(count_mat[, 1]),
+    count_t2 = as.numeric(count_mat[, 2]),
+    prop_t1 = as.numeric(prop_t1),
+    prop_t2 = as.numeric(prop_t2),
+    count_up = as.numeric(count_mat[, 2]) > as.numeric(count_mat[, 1]),
+    prop_direction = factor(prop_direction, levels = c("up", "down", "flat"))
+  )
+}
+
+summarize_input_fq_nn_overview <- function(input_index_tbl, minobs_values, diploid_state) {
+  if (is.null(input_index_tbl) || !nrow(input_index_tbl)) {
+    return(list(
+      input_fq_nn_summary_tbl = tibble::tibble(),
+      input_fq_group_nn_summary_tbl = tibble::tibble()
+    ))
+  }
+
+  overview_rows <- vector("list", nrow(input_index_tbl) * length(minobs_values))
+  group_rows <- vector("list", nrow(input_index_tbl) * length(minobs_values) * 2L)
+  overview_idx <- 0L
+  group_idx <- 0L
+
+  for (i in seq_len(nrow(input_index_tbl))) {
+    rr <- input_index_tbl[i, , drop = FALSE]
+    x <- prepare_input_count_matrix(rr$input_rds, diploid_state = diploid_state)
+    time_labels <- colnames(x)[seq_len(2L)]
+
+    for (minobs in minobs_values) {
+      fq <- select_frequent_karyotypes_minobs(x, minobs)
+      nn <- setdiff(neighbor_strings_from_karyotypes(fq), fq)
+
+      fq_change_tbl <- build_state_change_tbl(fq, x)
+      nn_change_tbl <- build_state_change_tbl(nn, x)
+
+      overview_idx <- overview_idx + 1L
+      overview_rows[[overview_idx]] <- tibble::tibble(
+        patient_id = as.character(rr$patient_id),
+        minobs = as.integer(minobs),
+        time1_label = as.character(time_labels[1]),
+        time2_label = as.character(time_labels[2]),
+        n_non_diploid_karyotypes = nrow(x),
+        n_fq = length(fq),
+        n_nn = length(nn),
+        n_nn_observed = sum(nn_change_tbl$observed %in% TRUE, na.rm = TRUE),
+        prop_nn_observed = safe_fraction(sum(nn_change_tbl$observed %in% TRUE, na.rm = TRUE), nrow(nn_change_tbl)),
+        n_fq_count_up = sum(fq_change_tbl$count_up %in% TRUE, na.rm = TRUE),
+        prop_fq_count_up = safe_fraction(sum(fq_change_tbl$count_up %in% TRUE, na.rm = TRUE), nrow(fq_change_tbl)),
+        n_nn_count_up = sum(nn_change_tbl$count_up %in% TRUE, na.rm = TRUE),
+        prop_nn_count_up = safe_fraction(sum(nn_change_tbl$count_up %in% TRUE, na.rm = TRUE), nrow(nn_change_tbl)),
+        n_fq_prop_up = sum(as.character(fq_change_tbl$prop_direction) == "up", na.rm = TRUE),
+        n_fq_prop_down = sum(as.character(fq_change_tbl$prop_direction) == "down", na.rm = TRUE),
+        n_fq_prop_flat = sum(as.character(fq_change_tbl$prop_direction) == "flat", na.rm = TRUE)
+      )
+
+      for (fq_prop_direction in c("up", "down")) {
+        fq_group <- fq_change_tbl$k[as.character(fq_change_tbl$prop_direction) == fq_prop_direction]
+        group_nn <- if (length(fq_group)) {
+          setdiff(neighbor_strings_from_karyotypes(fq_group), fq)
+        } else {
+          character(0)
+        }
+        group_nn_change_tbl <- build_state_change_tbl(group_nn, x)
+
+        group_idx <- group_idx + 1L
+        group_rows[[group_idx]] <- tibble::tibble(
+          patient_id = as.character(rr$patient_id),
+          minobs = as.integer(minobs),
+          fq_prop_direction = factor(fq_prop_direction, levels = c("up", "down")),
+          n_fq_in_group = length(fq_group),
+          n_group_nn = length(group_nn),
+          n_group_nn_observed = sum(group_nn_change_tbl$observed %in% TRUE, na.rm = TRUE),
+          n_group_nn_count_up = sum(group_nn_change_tbl$count_up %in% TRUE, na.rm = TRUE),
+          prop_group_nn_count_up = safe_fraction(sum(group_nn_change_tbl$count_up %in% TRUE, na.rm = TRUE), nrow(group_nn_change_tbl))
+        )
+      }
+    }
+  }
+
+  input_fq_nn_summary_tbl <- dplyr::bind_rows(overview_rows[seq_len(overview_idx)]) %>%
+    dplyr::arrange(factor(patient_id, levels = sort_pid_levels(patient_id)), minobs)
+
+  input_fq_group_nn_summary_tbl <- dplyr::bind_rows(group_rows[seq_len(group_idx)]) %>%
+    dplyr::arrange(factor(patient_id, levels = sort_pid_levels(patient_id)), minobs, fq_prop_direction)
+
+  list(
+    input_fq_nn_summary_tbl = input_fq_nn_summary_tbl,
+    input_fq_group_nn_summary_tbl = input_fq_group_nn_summary_tbl
+  )
+}

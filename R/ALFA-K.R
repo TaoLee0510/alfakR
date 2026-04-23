@@ -52,9 +52,11 @@
 #'   `"empirical_censored_weighted"` fits the same single-Gaussian censored
 #'   empirical-Bayes prior, but only in the bootstrap pathway it computes
 #'   projected child exposure from the neighbour likelihood ingredients,
-#'   downweights zero-only latent children, optionally screens very low-exposure
-#'   zeros before fitting the prior, and falls back to no prior for a bootstrap
-#'   replicate when that replicate has no observed neighbour children.
+#'   downweights zero-only latent children, applies child-level and
+#'   replicate-level birth-time fallback burden multipliers for zero-only
+#'   children, optionally screens very low-exposure zeros before fitting the
+#'   prior, and falls back to no prior for a bootstrap replicate when that
+#'   replicate has no observed neighbour children.
 #'   `"none"` disables the latent-neighbour prior contribution.
 #'   `"empirical"` opt-in uses the empirical child-minus-parent prior estimated
 #'   from observed neighbours.
@@ -88,10 +90,26 @@
 #'   used only in weighted mode. When supplied, the total zero-child weight is
 #'   capped at this ratio times the number of observed neighbour children.
 #'   When `NULL`, a data-adaptive cap is used.
-#' @param nn_prior_zero_birth_fallback_weight Numeric scalar in `[0, 1]` used
-#'   only in weighted mode. If any parent birth time for a zero-only child was
-#'   imputed by the finite fallback logic, that zero child's raw weight is
-#'   multiplied by this value.
+#' @param nn_prior_zero_birth_fallback_weight Optional numeric scalar in
+#'   `[0, 1]` kept as a compatibility alias for
+#'   `nn_prior_zero_birth_child_floor` in weighted mode. When supplied, it
+#'   overrides `nn_prior_zero_birth_child_floor`.
+#' @param nn_prior_zero_birth_child_floor Numeric scalar in `[0, 1]` used only
+#'   in weighted mode. This is the minimum child-level birth-reliability
+#'   multiplier applied when a zero-only child's parent support is entirely
+#'   driven by fallback-imputed birth times.
+#' @param nn_prior_zero_birth_child_shape Non-negative numeric scalar used only
+#'   in weighted mode. Larger values make the child-level birth-reliability
+#'   multiplier decay more sharply as fallback burden increases.
+#' @param nn_prior_zero_birth_replicate_floor Numeric scalar in `[0, 1]` used
+#'   only in weighted mode. This is the minimum replicate-level
+#'   birth-reliability multiplier when the retained zero-only children in a
+#'   bootstrap replicate are collectively dominated by fallback-imputed parent
+#'   birth times.
+#' @param nn_prior_zero_birth_replicate_shape Non-negative numeric scalar used
+#'   only in weighted mode. Larger values make the replicate-level
+#'   birth-reliability multiplier decay more sharply as the replicate-wide
+#'   fallback burden increases.
 #' @param nn_prior_hybrid_min_obs Positive integer used only when
 #'   `nn_prior = "empirical_censored_weighted"` and
 #'   `nn_prior_fit_subset = "hybrid"`. When fewer than this many observed
@@ -178,7 +196,11 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
                   nn_prior_zero_exposure_quantile = 0.10,
                   nn_prior_zero_weight_scale = 0.50,
                   nn_prior_zero_weight_cap_ratio = NULL,
-                  nn_prior_zero_birth_fallback_weight = 0.50,
+                  nn_prior_zero_birth_fallback_weight = NULL,
+                  nn_prior_zero_birth_child_floor = 0.25,
+                  nn_prior_zero_birth_child_shape = 1,
+                  nn_prior_zero_birth_replicate_floor = 0.50,
+                  nn_prior_zero_birth_replicate_shape = 1,
                   nn_prior_hybrid_min_obs = 3L,
                   krig_bootstrap_mode = c("marginal", "joint")) {
 
@@ -205,6 +227,10 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
     nn_prior_zero_weight_scale = nn_prior_zero_weight_scale,
     nn_prior_zero_weight_cap_ratio = nn_prior_zero_weight_cap_ratio,
     nn_prior_zero_birth_fallback_weight = nn_prior_zero_birth_fallback_weight,
+    nn_prior_zero_birth_child_floor = nn_prior_zero_birth_child_floor,
+    nn_prior_zero_birth_child_shape = nn_prior_zero_birth_child_shape,
+    nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
+    nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape,
     nn_prior_hybrid_min_obs = nn_prior_hybrid_min_obs
   )
   yi$x <- coerce_count_matrix(yi$x, allow_noninteger_counts = allow_noninteger_counts)
@@ -229,6 +255,10 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
                                      nn_prior_zero_weight_scale = nn_prior_zero_weight_scale,
                                      nn_prior_zero_weight_cap_ratio = nn_prior_zero_weight_cap_ratio,
                                      nn_prior_zero_birth_fallback_weight = nn_prior_zero_birth_fallback_weight,
+                                     nn_prior_zero_birth_child_floor = nn_prior_zero_birth_child_floor,
+                                     nn_prior_zero_birth_child_shape = nn_prior_zero_birth_child_shape,
+                                     nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
+                                     nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape,
                                      nn_prior_hybrid_min_obs = nn_prior_hybrid_min_obs)
   saveRDS(fq_boot, file = file.path(outdir, "bootstrap_res.Rds"))
 
@@ -521,7 +551,11 @@ validate_nn_prior_controls <- function(nn_prior_sd = NULL,
                                        nn_prior_zero_exposure_quantile = 0.10,
                                        nn_prior_zero_weight_scale = 0.50,
                                        nn_prior_zero_weight_cap_ratio = NULL,
-                                       nn_prior_zero_birth_fallback_weight = 0.50,
+                                       nn_prior_zero_birth_fallback_weight = NULL,
+                                       nn_prior_zero_birth_child_floor = 0.25,
+                                       nn_prior_zero_birth_child_shape = 1,
+                                       nn_prior_zero_birth_replicate_floor = 0.50,
+                                       nn_prior_zero_birth_replicate_shape = 1,
                                        nn_prior_hybrid_min_obs = 3L) {
   nn_prior_fit_subset <- validate_nn_prior_fit_subset(nn_prior_fit_subset)
   if (!is.null(nn_prior_sd)) {
@@ -540,7 +574,13 @@ validate_nn_prior_controls <- function(nn_prior_sd = NULL,
   if (!is.null(nn_prior_zero_weight_cap_ratio)) {
     validate_nonnegative_finite(nn_prior_zero_weight_cap_ratio, "nn_prior_zero_weight_cap_ratio")
   }
-  validate_probability(nn_prior_zero_birth_fallback_weight, "nn_prior_zero_birth_fallback_weight", upper_inclusive = TRUE)
+  if (!is.null(nn_prior_zero_birth_fallback_weight)) {
+    validate_probability(nn_prior_zero_birth_fallback_weight, "nn_prior_zero_birth_fallback_weight", upper_inclusive = TRUE)
+  }
+  validate_probability(nn_prior_zero_birth_child_floor, "nn_prior_zero_birth_child_floor", upper_inclusive = TRUE)
+  validate_nonnegative_finite(nn_prior_zero_birth_child_shape, "nn_prior_zero_birth_child_shape")
+  validate_probability(nn_prior_zero_birth_replicate_floor, "nn_prior_zero_birth_replicate_floor", upper_inclusive = TRUE)
+  validate_nonnegative_finite(nn_prior_zero_birth_replicate_shape, "nn_prior_zero_birth_replicate_shape")
   validate_positive_integer(nn_prior_hybrid_min_obs, "nn_prior_hybrid_min_obs")
   invisible(NULL)
 }
@@ -961,20 +1001,19 @@ weighted_parent_fitness <- function(nni_item, fpar) {
   mean(parent_fitness, na.rm = TRUE)
 }
 
-#' Exposure-weighted parent fitness for weighted nearest-neighbour priors
+#' Resolve parent opportunity weights for weighted nearest-neighbour priors
 #' @keywords internal
 #' @noRd
-weighted_parent_fitness_exposure <- function(parent_fitness, pij_values, parent_birth_times,
-                                             timepoints, parent_xfit, ntot,
-                                             fallback_mean) {
-  n_parents <- length(parent_fitness)
-  if (n_parents == 0) {
-    return(fallback_mean)
-  }
-  if (length(pij_values) != n_parents || length(parent_birth_times) != n_parents ||
+resolve_nn_parent_opportunity_weights <- function(pij_values, parent_birth_times,
+                                                  timepoints, parent_xfit, ntot) {
+  n_parents <- length(pij_values)
+  if (length(parent_birth_times) != n_parents ||
       !is.matrix(parent_xfit) || nrow(parent_xfit) != n_parents ||
       ncol(parent_xfit) != length(timepoints) || length(ntot) != length(timepoints)) {
-    stop("Internal error: malformed parent inputs for exposure-weighted nearest-neighbour prior centering.")
+    stop("Internal error: malformed parent inputs for weighted nearest-neighbour opportunity weights.")
+  }
+  if (n_parents == 0) {
+    return(numeric(0))
   }
 
   parent_weights <- numeric(n_parents)
@@ -986,10 +1025,102 @@ weighted_parent_fitness_exposure <- function(parent_fitness, pij_values, parent_
   if (all(is.finite(parent_weights)) &&
       all(parent_weights >= 0) &&
       sum(parent_weights) > 0) {
-    return(stats::weighted.mean(parent_fitness, w = parent_weights))
+    return(parent_weights)
+  }
+
+  if (all(is.finite(pij_values)) &&
+      all(pij_values >= 0) &&
+      sum(pij_values) > 0) {
+    return(as.numeric(pij_values))
+  }
+
+  rep(1, n_parents)
+}
+
+#' Exposure-weighted parent fitness for weighted nearest-neighbour priors
+#' @keywords internal
+#' @noRd
+weighted_parent_fitness_exposure <- function(parent_fitness, parent_opportunity_weights,
+                                             fallback_mean) {
+  n_parents <- length(parent_fitness)
+  if (n_parents == 0) {
+    return(fallback_mean)
+  }
+  if (length(parent_opportunity_weights) != n_parents) {
+    stop("Internal error: malformed parent inputs for exposure-weighted nearest-neighbour prior centering.")
+  }
+
+  if (all(is.finite(parent_opportunity_weights)) &&
+      all(parent_opportunity_weights >= 0) &&
+      sum(parent_opportunity_weights) > 0) {
+    return(stats::weighted.mean(parent_fitness, w = parent_opportunity_weights))
   }
 
   fallback_mean
+}
+
+#' Compute a child-level birth fallback burden from parent opportunity weights
+#' @keywords internal
+#' @noRd
+compute_nn_child_birth_fallback_burden <- function(parent_birth_fallback,
+                                                   parent_opportunity_weights) {
+  n_parents <- length(parent_birth_fallback)
+  if (n_parents == 0) {
+    return(0)
+  }
+  if (length(parent_opportunity_weights) != n_parents) {
+    stop("Internal error: malformed parent opportunity weights for child birth fallback burden.")
+  }
+
+  fallback_indicator <- as.numeric(parent_birth_fallback)
+  burden <- if (all(is.finite(parent_opportunity_weights)) &&
+                all(parent_opportunity_weights >= 0) &&
+                sum(parent_opportunity_weights) > 0) {
+    stats::weighted.mean(fallback_indicator, w = parent_opportunity_weights)
+  } else {
+    mean(fallback_indicator, na.rm = TRUE)
+  }
+  burden <- as.numeric(burden)
+  if (!is.finite(burden)) {
+    burden <- 1
+  }
+  pmin(1, pmax(0, burden))
+}
+
+#' Compute a replicate-level birth fallback burden from retained zero children
+#' @keywords internal
+#' @noRd
+compute_nn_replicate_birth_fallback_burden <- function(child_burdens, child_exposure) {
+  if (!length(child_burdens)) {
+    return(0)
+  }
+  if (length(child_exposure) != length(child_burdens)) {
+    stop("Internal error: malformed retained zero-child exposure input for replicate birth fallback burden.")
+  }
+
+  bounded_burdens <- pmin(1, pmax(0, as.numeric(child_burdens)))
+  bounded_burdens[!is.finite(bounded_burdens)] <- 1
+  replicate_burden <- if (all(is.finite(child_exposure)) &&
+                          all(child_exposure >= 0) &&
+                          sum(child_exposure) > 0) {
+    stats::weighted.mean(bounded_burdens, w = child_exposure)
+  } else {
+    mean(bounded_burdens, na.rm = TRUE)
+  }
+  if (!is.finite(replicate_burden)) {
+    replicate_burden <- 1
+  }
+  pmin(1, pmax(0, as.numeric(replicate_burden)))
+}
+
+#' Convert a fallback burden into a birth-reliability multiplier
+#' @keywords internal
+#' @noRd
+nn_birth_reliability_multiplier <- function(burden, floor, shape) {
+  bounded_burden <- pmin(1, pmax(0, as.numeric(burden)))
+  bounded_burden[!is.finite(bounded_burden)] <- 1
+  multiplier <- floor + (1 - floor) * ((1 - bounded_burden)^shape)
+  pmin(1, pmax(floor, multiplier))
 }
 
 #' Build child likelihood surfaces for the censored EB nearest-neighbour prior
@@ -1362,6 +1493,7 @@ prepare_nn_child_context <- function(nni_item, boot_data, fpar, birth_times_est,
       parent_fitness = numeric(0),
       parent_birth_times = numeric(0),
       parent_birth_fallback = logical(0),
+      parent_opportunity_weights = numeric(0),
       parent_xfit = matrix(numeric(0), nrow = 0, ncol = length(timepoints)),
       child_obs = child_obs,
       ntot = as.numeric(ntot),
@@ -1377,6 +1509,13 @@ prepare_nn_child_context <- function(nni_item, boot_data, fpar, birth_times_est,
   parent_birth_times <- unname(birth_times_est[valid_parents])
   parent_birth_fallback <- as.logical(unname(birth_time_fallback_mask[valid_parents]))
   parent_xfit <- xfit[valid_parents, , drop = FALSE]
+  parent_opportunity_weights <- resolve_nn_parent_opportunity_weights(
+    pij_values = pij_values,
+    parent_birth_times = parent_birth_times,
+    timepoints = timepoints,
+    parent_xfit = parent_xfit,
+    ntot = ntot
+  )
 
   parent_fitness_mean_pij <- weighted_parent_fitness(
     list(nj = valid_parents, pij = pij_values),
@@ -1384,11 +1523,7 @@ prepare_nn_child_context <- function(nni_item, boot_data, fpar, birth_times_est,
   )
   parent_fitness_mean_exposure <- weighted_parent_fitness_exposure(
     parent_fitness = parent_fitness,
-    pij_values = pij_values,
-    parent_birth_times = parent_birth_times,
-    timepoints = timepoints,
-    parent_xfit = parent_xfit,
-    ntot = ntot,
+    parent_opportunity_weights = parent_opportunity_weights,
     fallback_mean = parent_fitness_mean_pij
   )
   projected_exposure <- if (is.finite(parent_fitness_mean_exposure)) {
@@ -1413,6 +1548,7 @@ prepare_nn_child_context <- function(nni_item, boot_data, fpar, birth_times_est,
     parent_fitness = parent_fitness,
     parent_birth_times = parent_birth_times,
     parent_birth_fallback = parent_birth_fallback,
+    parent_opportunity_weights = parent_opportunity_weights,
     parent_xfit = parent_xfit,
     child_obs = child_obs,
     ntot = as.numeric(ntot),
@@ -1442,6 +1578,12 @@ new_nn_prior_diagnostics <- function(nn_prior_mode_requested,
     exposure_threshold_used = NA_real_,
     exposure_reference_used = NA_real_,
     n_zero_children_with_birth_fallback = 0L,
+    mean_zero_birth_fallback_burden = 0,
+    median_zero_birth_fallback_burden = 0,
+    replicate_birth_fallback_burden = 0,
+    mean_zero_birth_reliability_multiplier = 1,
+    median_zero_birth_reliability_multiplier = 1,
+    replicate_birth_reliability_multiplier = 1,
     prior_mu_hat = NA_real_,
     prior_sigma_hat = NA_real_,
     informative_child_count = NA_integer_,
@@ -1460,7 +1602,11 @@ prepare_weighted_nn_prior_fit <- function(nn_child_contexts, nn_present,
                                           nn_prior_zero_exposure_quantile = 0.10,
                                           nn_prior_zero_weight_scale = 0.50,
                                           nn_prior_zero_weight_cap_ratio = NULL,
-                                          nn_prior_zero_birth_fallback_weight = 0.50,
+                                          nn_prior_zero_birth_fallback_weight = NULL,
+                                          nn_prior_zero_birth_child_floor = 0.25,
+                                          nn_prior_zero_birth_child_shape = 1,
+                                          nn_prior_zero_birth_replicate_floor = 0.50,
+                                          nn_prior_zero_birth_replicate_shape = 1,
                                           nn_prior_hybrid_min_obs = 3L,
                                           ntot) {
   nn_prior_fit_subset <- validate_nn_prior_fit_subset(nn_prior_fit_subset)
@@ -1487,8 +1633,18 @@ prepare_weighted_nn_prior_fit <- function(nn_child_contexts, nn_present,
     exposure_threshold_used = NA_real_,
     exposure_reference_used = NA_real_,
     n_zero_children_with_birth_fallback = 0L,
+    mean_zero_birth_fallback_burden = 0,
+    median_zero_birth_fallback_burden = 0,
+    replicate_birth_fallback_burden = 0,
+    mean_zero_birth_reliability_multiplier = 1,
+    median_zero_birth_reliability_multiplier = 1,
+    replicate_birth_reliability_multiplier = 1,
     used_no_prior_fallback_for_this_replicate = FALSE
   )
+
+  if (!is.null(nn_prior_zero_birth_fallback_weight)) {
+    nn_prior_zero_birth_child_floor <- nn_prior_zero_birth_fallback_weight
+  }
 
   if (n_observed == 0L) {
     diagnostics$used_no_prior_fallback_for_this_replicate <- TRUE
@@ -1537,22 +1693,49 @@ prepare_weighted_nn_prior_fit <- function(nn_child_contexts, nn_present,
 
   zero_weights_raw <- numeric(sum(zero_retained_mask))
   zero_birth_fallback <- logical(sum(zero_retained_mask))
+  child_birth_burden <- numeric(sum(zero_retained_mask))
+  child_birth_multiplier <- numeric(sum(zero_retained_mask))
+  replicate_birth_burden <- 0
+  replicate_birth_multiplier <- 1
   if (length(zero_weights_raw)) {
     retained_zero_items <- nn_child_contexts[zero_retained_mask]
     retained_zero_exposure <- projected_exposure[zero_retained_mask]
     zero_birth_fallback <- vapply(retained_zero_items, function(item) {
       any(item$parent_birth_fallback)
     }, logical(1))
-    birth_reliability_multiplier <- ifelse(
-      zero_birth_fallback,
-      nn_prior_zero_birth_fallback_weight,
-      1
+    child_birth_burden <- vapply(retained_zero_items, function(item) {
+      compute_nn_child_birth_fallback_burden(
+        parent_birth_fallback = item$parent_birth_fallback,
+        parent_opportunity_weights = item$parent_opportunity_weights
+      )
+    }, numeric(1))
+    child_birth_multiplier <- nn_birth_reliability_multiplier(
+      burden = child_birth_burden,
+      floor = nn_prior_zero_birth_child_floor,
+      shape = nn_prior_zero_birth_child_shape
     )
+    replicate_birth_burden <- compute_nn_replicate_birth_fallback_burden(
+      child_burdens = child_birth_burden,
+      child_exposure = retained_zero_exposure
+    )
+    replicate_birth_multiplier <- nn_birth_reliability_multiplier(
+      burden = replicate_birth_burden,
+      floor = nn_prior_zero_birth_replicate_floor,
+      shape = nn_prior_zero_birth_replicate_shape
+    )
+    birth_reliability_multiplier <- child_birth_multiplier * replicate_birth_multiplier
     zero_weights_raw <- nn_prior_zero_weight_scale *
       pmin(1, retained_zero_exposure / exposure_reference) *
       birth_reliability_multiplier
     zero_weights_raw[!is.finite(zero_weights_raw)] <- 0
     zero_weights_raw <- pmax(0, zero_weights_raw)
+
+    diagnostics$mean_zero_birth_fallback_burden <- mean(child_birth_burden)
+    diagnostics$median_zero_birth_fallback_burden <- stats::median(child_birth_burden)
+    diagnostics$replicate_birth_fallback_burden <- replicate_birth_burden
+    diagnostics$mean_zero_birth_reliability_multiplier <- mean(birth_reliability_multiplier)
+    diagnostics$median_zero_birth_reliability_multiplier <- stats::median(birth_reliability_multiplier)
+    diagnostics$replicate_birth_reliability_multiplier <- replicate_birth_multiplier
   }
 
   diagnostics$sum_zero_weight_raw <- sum(zero_weights_raw)
@@ -1911,7 +2094,11 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
                                     nn_prior_zero_exposure_quantile = 0.10,
                                     nn_prior_zero_weight_scale = 0.50,
                                     nn_prior_zero_weight_cap_ratio = NULL,
-                                    nn_prior_zero_birth_fallback_weight = 0.50,
+                                    nn_prior_zero_birth_fallback_weight = NULL,
+                                    nn_prior_zero_birth_child_floor = 0.25,
+                                    nn_prior_zero_birth_child_shape = 1,
+                                    nn_prior_zero_birth_replicate_floor = 0.50,
+                                    nn_prior_zero_birth_replicate_shape = 1,
                                     nn_prior_hybrid_min_obs = 3L) {
   data$x <- coerce_count_matrix(data$x, allow_noninteger_counts = allow_noninteger_counts)
   validate_positive_depth(data$x)
@@ -1933,6 +2120,10 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
     nn_prior_zero_weight_scale = nn_prior_zero_weight_scale,
     nn_prior_zero_weight_cap_ratio = nn_prior_zero_weight_cap_ratio,
     nn_prior_zero_birth_fallback_weight = nn_prior_zero_birth_fallback_weight,
+    nn_prior_zero_birth_child_floor = nn_prior_zero_birth_child_floor,
+    nn_prior_zero_birth_child_shape = nn_prior_zero_birth_child_shape,
+    nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
+    nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape,
     nn_prior_hybrid_min_obs = nn_prior_hybrid_min_obs
   )
   fq <- get_frequent_karyotypes(data$x, minobs)
@@ -2157,6 +2348,10 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
         nn_prior_zero_weight_scale = nn_prior_zero_weight_scale,
         nn_prior_zero_weight_cap_ratio = nn_prior_zero_weight_cap_ratio,
         nn_prior_zero_birth_fallback_weight = nn_prior_zero_birth_fallback_weight,
+        nn_prior_zero_birth_child_floor = nn_prior_zero_birth_child_floor,
+        nn_prior_zero_birth_child_shape = nn_prior_zero_birth_child_shape,
+        nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
+        nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape,
         nn_prior_hybrid_min_obs = nn_prior_hybrid_min_obs,
         ntot = ntot_rounded
       )

@@ -196,6 +196,15 @@ save_beneficial_heatmap_png <- function(beneficial_mat, png_path) {
   }
 
   panel_d_mat <- beneficial_mat
+  move_tbl <- tibble::tibble(move = colnames(panel_d_mat)) %>%
+    dplyr::mutate(
+      chr = suppressWarnings(as.integer(gsub("[+-]$", "", move))),
+      sign = sub("^[0-9]+", "", move),
+      sign_rank = ifelse(sign == "+", 0L, 1L)
+    ) %>%
+    dplyr::arrange(chr, sign_rank, move)
+  ordered_moves <- move_tbl$move
+  panel_d_mat <- panel_d_mat[, ordered_moves, drop = FALSE]
   panel_d_mat[!is.finite(panel_d_mat)] <- 0
   col_fun_d <- circlize::colorRamp2(c(0, 0.5, 1), c("blue", "#EEEEEE", "red"))
 
@@ -204,7 +213,7 @@ save_beneficial_heatmap_png <- function(beneficial_mat, png_path) {
     name = "Beneficial\nkaryotypes\nproportion",
     col = col_fun_d,
     cluster_rows = nrow(panel_d_mat) > 1,
-    cluster_columns = ncol(panel_d_mat) > 1,
+    cluster_columns = FALSE,
     na_col = "#BDBDBD",
     show_row_names = TRUE,
     show_column_names = TRUE,
@@ -249,6 +258,16 @@ build_parameter_beneficial_artifacts <- function(selected_landscapes_by_paramete
     beneficial_mat <- beneficial_mat[sort_pid_levels(rownames(beneficial_mat)), , drop = FALSE]
     beneficial_valid_n_mat <- do.call(rbind, beneficial_valid_n_list)
     beneficial_valid_n_mat <- beneficial_valid_n_mat[sort_pid_levels(rownames(beneficial_valid_n_mat)), , drop = FALSE]
+    move_tbl <- tibble::tibble(move = colnames(beneficial_mat)) %>%
+      dplyr::mutate(
+        chr = suppressWarnings(as.integer(gsub("[+-]$", "", move))),
+        sign = sub("^[0-9]+", "", move),
+        sign_rank = ifelse(sign == "+", 0L, 1L)
+      ) %>%
+      dplyr::arrange(chr, sign_rank, move)
+    ordered_moves <- move_tbl$move
+    beneficial_mat <- beneficial_mat[, ordered_moves, drop = FALSE]
+    beneficial_valid_n_mat <- beneficial_valid_n_mat[, ordered_moves, drop = FALSE]
 
     proportion_stem <- file.path(tables_dir, paste0("parameter_", parameter_label_name, "_beneficial_proportion_matrix"))
     valid_n_stem <- file.path(tables_dir, paste0("parameter_", parameter_label_name, "_beneficial_valid_n_matrix"))

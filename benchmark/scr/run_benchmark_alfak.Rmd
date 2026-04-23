@@ -33,7 +33,7 @@ params:
   rebuild_inputs: false
   run_benchmark: true
   render_figures: true
-  focus_pids: ["P2"]
+  focus_pids: ["P2", "P8"]
   focus_pid: ""
   focus_minobs: 20
   focus_pm: 5e-05
@@ -130,6 +130,112 @@ print(
     caption = "Benchmark input summary"
   )
 )
+```
+
+## Input FQ and One-Step-Neighbour Overview
+
+```{r input-fq-nn-summary}
+input_fq_nn_summary_tbl <- benchmark_run$input_fq_nn_summary_tbl
+input_fq_nn_render_tbl <- if (nrow(input_fq_nn_summary_tbl)) {
+  input_fq_nn_summary_tbl %>%
+    dplyr::select(
+      patient_id,
+      minobs,
+      n_non_diploid_karyotypes,
+      n_fq,
+      n_nn,
+      n_nn_observed,
+      prop_nn_observed,
+      n_fq_count_up,
+      prop_fq_count_up,
+      n_nn_count_up,
+      prop_nn_count_up,
+      n_fq_prop_up,
+      n_fq_prop_down,
+      n_fq_prop_flat
+    )
+} else {
+  tibble::tibble()
+}
+
+if (nrow(input_fq_nn_render_tbl)) {
+  print(
+    render_tbl(
+      input_fq_nn_render_tbl,
+      caption = "Input overview by sample and minobs: fq, one-step neighbours, observed-neighbour coverage, and timepoint-2 count-up proportions"
+    )
+  )
+} else {
+  print(
+    render_tbl(
+      empty_note_tbl("No input fq / neighbour overview is available yet."),
+      caption = "Input fq and one-step-neighbour overview"
+    )
+  )
+}
+```
+
+```{r input-fq-group-summary}
+input_fq_group_nn_summary_tbl <- benchmark_run$input_fq_group_nn_summary_tbl
+input_fq_group_render_tbl <- if (nrow(input_fq_group_nn_summary_tbl)) {
+  input_fq_group_nn_summary_tbl %>%
+    dplyr::select(
+      patient_id,
+      minobs,
+      fq_prop_direction,
+      n_fq_in_group,
+      n_group_nn,
+      n_group_nn_observed,
+      n_group_nn_count_up,
+      prop_group_nn_count_up
+    )
+} else {
+  tibble::tibble()
+}
+
+if (nrow(input_fq_group_render_tbl)) {
+  print(
+    render_tbl(
+      input_fq_group_render_tbl,
+      caption = "Input overview by fq proportion direction: one-step-neighbour count-up proportions"
+    )
+  )
+} else {
+  print(
+    render_tbl(
+      empty_note_tbl("No fq proportion-direction neighbour summary is available yet."),
+      caption = "Input fq direction-specific neighbour overview"
+    )
+  )
+}
+```
+
+```{r input-overview-figures, results='asis'}
+input_figure_paths <- benchmark_run$input_figure_paths
+
+if (!is.null(input_figure_paths$fq_nn_counts) && file.exists(input_figure_paths$fq_nn_counts)) {
+  cat("### fq / Neighbour Counts\n\n")
+  emit_report_image(
+    input_figure_paths$fq_nn_counts,
+    alt = "Input fq and one-step-neighbour counts by sample and minobs"
+  )
+}
+
+if (!is.null(input_figure_paths$fq_nn_up_prop) && file.exists(input_figure_paths$fq_nn_up_prop)) {
+  cat("### Count-Up Proportions\n\n")
+  emit_report_image(
+    input_figure_paths$fq_nn_up_prop,
+    alt = "Input fq and one-step-neighbour count-up proportions by sample and minobs"
+  )
+}
+
+if (!is.null(input_figure_paths$fq_group_nn_up_prop) && file.exists(input_figure_paths$fq_group_nn_up_prop)) {
+  cat("### Neighbour Count-Up Proportion Split by fq Direction\n\n")
+  emit_report_image(
+    input_figure_paths$fq_group_nn_up_prop,
+    alt = "Neighbour count-up proportion split by fq proportion direction"
+  )
+}
 ```
 
 ## Parameter Benchmark
@@ -376,10 +482,32 @@ if (!length(focus_results)) {
       print(render_tbl(empty_note_tbl("No focus-patient beneficial-proportion shift table is available yet."), caption = paste("Focus beneficial-proportion shifts:", focus_pid)))
     }
 
+    cat("#### Observed-vs-Latent Neighbour Decomposition\n\n")
+    if (nrow(focus_res$focus_state_fitness_summary_tbl)) {
+      print(render_tbl(focus_res$focus_state_fitness_summary_tbl, caption = paste("Focus fq / observed-nn / latent-nn state summary:", focus_pid)))
+    } else {
+      print(render_tbl(empty_note_tbl("No focus-patient state decomposition summary is available yet."), caption = paste("Focus state decomposition summary:", focus_pid)))
+    }
+
+    if (nrow(focus_res$focus_edge_decomposition_summary_tbl)) {
+      print(render_tbl(focus_res$focus_edge_decomposition_summary_tbl, caption = paste("Focus edge-level beneficial and delta decomposition:", focus_pid)))
+    } else {
+      print(render_tbl(empty_note_tbl("No focus-patient edge decomposition summary is available yet."), caption = paste("Focus edge decomposition summary:", focus_pid)))
+    }
+
+    if (nrow(focus_res$focus_nn_prior_diag_summary_tbl) && any(focus_res$focus_nn_prior_diag_summary_tbl$has_nn_prior_diagnostics %in% TRUE, na.rm = TRUE)) {
+      print(render_tbl(focus_res$focus_nn_prior_diag_summary_tbl, caption = paste("Focus nearest-neighbour prior diagnostics summary:", focus_pid)))
+    } else {
+      print(render_tbl(empty_note_tbl("No nearest-neighbour prior diagnostics are available in the saved bootstrap results for this focus patient yet."), caption = paste("Focus nearest-neighbour prior diagnostics:", focus_pid)))
+    }
+
     cat("#### Focus Figures\n\n")
     emit_report_image(focus_res$focus_figure_paths$density, alt = paste("Focus landscape density for", focus_pid))
     emit_report_image(focus_res$focus_figure_paths$parity, alt = paste("Focus parity plot for", focus_pid))
     emit_report_image(focus_res$focus_figure_paths$beneficial_heatmap, alt = paste("Focus beneficial heatmap for", focus_pid))
+    emit_report_image(focus_res$focus_figure_paths$state_fitness, alt = paste("Focus state fitness decomposition for", focus_pid))
+    emit_report_image(focus_res$focus_figure_paths$edge_delta, alt = paste("Focus edge delta decomposition for", focus_pid))
+    emit_report_image(focus_res$focus_figure_paths$edge_beneficial, alt = paste("Focus edge beneficial decomposition for", focus_pid))
   }
 }
 ```

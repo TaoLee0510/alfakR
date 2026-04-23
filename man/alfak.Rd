@@ -25,7 +25,11 @@ alfak(
   nn_prior_zero_exposure_quantile = 0.1,
   nn_prior_zero_weight_scale = 0.5,
   nn_prior_zero_weight_cap_ratio = NULL,
-  nn_prior_zero_birth_fallback_weight = 0.5,
+  nn_prior_zero_birth_fallback_weight = NULL,
+  nn_prior_zero_birth_child_floor = 0.25,
+  nn_prior_zero_birth_child_shape = 1,
+  nn_prior_zero_birth_replicate_floor = 0.5,
+  nn_prior_zero_birth_replicate_shape = 1,
   nn_prior_hybrid_min_obs = 3L,
   krig_bootstrap_mode = c("marginal", "joint")
 )
@@ -89,9 +93,11 @@ default.
 \code{"empirical_censored_weighted"} fits the same single-Gaussian censored
 empirical-Bayes prior, but only in the bootstrap pathway it computes
 projected child exposure from the neighbour likelihood ingredients,
-downweights zero-only latent children, optionally screens very low-exposure
-zeros before fitting the prior, and falls back to no prior for a bootstrap
-replicate when that replicate has no observed neighbour children.
+downweights zero-only latent children, applies child-level and
+replicate-level birth-time fallback burden multipliers for zero-only
+children, optionally screens very low-exposure zeros before fitting the
+prior, and falls back to no prior for a bootstrap replicate when that
+replicate has no observed neighbour children.
 \code{"none"} disables the latent-neighbour prior contribution.
 \code{"empirical"} opt-in uses the empirical child-minus-parent prior estimated
 from observed neighbours.
@@ -134,10 +140,29 @@ only in weighted mode. When supplied, the total zero-child weight is capped at
 this ratio times the number of observed neighbour children. When \code{NULL},
 a data-adaptive cap is used.}
 
-\item{nn_prior_zero_birth_fallback_weight}{Numeric scalar in \code{[0, 1]} used
-only in weighted mode. If any parent birth time for a zero-only child was
-imputed by the finite fallback logic, that zero child's raw weight is
-multiplied by this value.}
+\item{nn_prior_zero_birth_fallback_weight}{Optional numeric scalar in
+\code{[0, 1]} kept as a compatibility alias for
+\code{nn_prior_zero_birth_child_floor} in weighted mode. When supplied, it
+overrides \code{nn_prior_zero_birth_child_floor}.}
+
+\item{nn_prior_zero_birth_child_floor}{Numeric scalar in \code{[0, 1]} used
+only in weighted mode. This is the minimum child-level birth-reliability
+multiplier applied when a zero-only child's parent support is entirely driven
+by fallback-imputed birth times.}
+
+\item{nn_prior_zero_birth_child_shape}{Non-negative numeric scalar used only in
+weighted mode. Larger values make the child-level birth-reliability
+multiplier decay more sharply as fallback burden increases.}
+
+\item{nn_prior_zero_birth_replicate_floor}{Numeric scalar in \code{[0, 1]} used
+only in weighted mode. This is the minimum replicate-level birth-reliability
+multiplier when the retained zero-only children in a bootstrap replicate are
+collectively dominated by fallback-imputed parent birth times.}
+
+\item{nn_prior_zero_birth_replicate_shape}{Non-negative numeric scalar used
+only in weighted mode. Larger values make the replicate-level
+birth-reliability multiplier decay more sharply as the replicate-wide fallback
+burden increases.}
 
 \item{nn_prior_hybrid_min_obs}{Positive integer used only when
 \code{nn_prior = "empirical_censored_weighted"} and

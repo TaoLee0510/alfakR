@@ -1580,6 +1580,10 @@ test_that("weighted nearest-neighbour prior mode and controls validate", {
       nn_prior_zero_weight_scale = 0.5,
       nn_prior_zero_weight_cap_ratio = 0.75,
       nn_prior_zero_birth_fallback_weight = 0.25,
+      nn_prior_zero_birth_child_floor = 0.2,
+      nn_prior_zero_birth_child_shape = 1.5,
+      nn_prior_zero_birth_replicate_floor = 0.4,
+      nn_prior_zero_birth_replicate_shape = 2,
       nn_prior_hybrid_min_obs = 2L
     )
   )
@@ -1648,36 +1652,98 @@ test_that("weighted parent centering uses exposure opportunity weights and falls
   )
   ntot <- c(10, 10, 10)
   fallback_mean <- stats::weighted.mean(parent_fitness, w = pij_values)
-  expected_weights <- c(
+  opportunity_weights <- c(
     0.5 * sum(ntot * c(1, 1, 1) * parent_xfit[1, ]),
     0.5 * sum(ntot * c(0, 1, 1) * parent_xfit[2, ])
   )
 
   expect_equal(
-    alfakR:::weighted_parent_fitness_exposure(
-      parent_fitness = parent_fitness,
+    alfakR:::resolve_nn_parent_opportunity_weights(
       pij_values = pij_values,
       parent_birth_times = parent_birth_times,
       timepoints = timepoints,
       parent_xfit = parent_xfit,
-      ntot = ntot,
-      fallback_mean = fallback_mean
+      ntot = ntot
     ),
-    stats::weighted.mean(parent_fitness, w = expected_weights),
+    opportunity_weights,
     tolerance = 1e-12
   )
 
   expect_equal(
     alfakR:::weighted_parent_fitness_exposure(
       parent_fitness = parent_fitness,
-      pij_values = pij_values,
-      parent_birth_times = parent_birth_times,
-      timepoints = timepoints,
-      parent_xfit = matrix(0, nrow = 2, ncol = 3),
-      ntot = ntot,
+      parent_opportunity_weights = opportunity_weights,
+      fallback_mean = fallback_mean
+    ),
+    stats::weighted.mean(parent_fitness, w = opportunity_weights),
+    tolerance = 1e-12
+  )
+
+  expect_equal(
+    alfakR:::weighted_parent_fitness_exposure(
+      parent_fitness = parent_fitness,
+      parent_opportunity_weights = c(0, 0),
       fallback_mean = fallback_mean
     ),
     fallback_mean,
+    tolerance = 1e-12
+  )
+})
+
+test_that("weighted birth fallback burden uses child and replicate burden smoothly", {
+  weighted_fit <- alfakR:::prepare_weighted_nn_prior_fit(
+    nn_child_contexts = list(
+      obs = list(
+        ni = "obs",
+        projected_exposure = 10,
+        parent_birth_fallback = FALSE,
+        parent_opportunity_weights = 1,
+        parent_fitness_mean_exposure = 0
+      ),
+      zero_partial = list(
+        ni = "zero_partial",
+        projected_exposure = 10,
+        parent_birth_fallback = c(FALSE, TRUE),
+        parent_opportunity_weights = c(3, 1),
+        parent_fitness_mean_exposure = 0
+      ),
+      zero_full = list(
+        ni = "zero_full",
+        projected_exposure = 10,
+        parent_birth_fallback = c(TRUE, TRUE),
+        parent_opportunity_weights = c(1, 1),
+        parent_fitness_mean_exposure = 0
+      )
+    ),
+    nn_present = c(TRUE, FALSE, FALSE),
+    nn_prior_fit_subset = "all",
+    nn_prior_zero_weight_scale = 1,
+    nn_prior_zero_weight_cap_ratio = 1,
+    nn_prior_zero_birth_child_floor = 0.25,
+    nn_prior_zero_birth_child_shape = 1,
+    nn_prior_zero_birth_replicate_floor = 0.50,
+    nn_prior_zero_birth_replicate_shape = 1,
+    ntot = c(10, 10)
+  )
+
+  expect_equal(
+    weighted_fit$child_weights,
+    c(1, 0.55859375, 0.171875),
+    tolerance = 1e-12
+  )
+  expect_equal(
+    weighted_fit$diagnostics$mean_zero_birth_fallback_burden,
+    mean(c(0.25, 1)),
+    tolerance = 1e-12
+  )
+  expect_equal(
+    weighted_fit$diagnostics$replicate_birth_fallback_burden,
+    0.625,
+    tolerance = 1e-12
+  )
+  expect_equal(
+    weighted_fit$diagnostics$replicate_birth_reliability_multiplier,
+    0.6875,
     tolerance = 1e-12
   )
 })
@@ -1774,6 +1840,12 @@ test_that("weighted hybrid prior screens low-exposure zeros and keeps observed c
     "exposure_threshold_used",
     "exposure_reference_used",
     "n_zero_children_with_birth_fallback",
+    "mean_zero_birth_fallback_burden",
+    "median_zero_birth_fallback_burden",
+    "replicate_birth_fallback_burden",
+    "mean_zero_birth_reliability_multiplier",
+    "median_zero_birth_reliability_multiplier",
+    "replicate_birth_reliability_multiplier",
     "prior_mu_hat",
     "prior_sigma_hat",
     "informative_child_count",
@@ -1793,6 +1865,12 @@ test_that("weighted hybrid prior screens low-exposure zeros and keeps observed c
   expect_true(is.finite(diag$sum_zero_weight_final))
   expect_true(is.finite(diag$exposure_threshold_used))
   expect_true(is.finite(diag$exposure_reference_used))
+  expect_true(is.finite(diag$mean_zero_birth_fallback_burden))
+  expect_true(is.finite(diag$median_zero_birth_fallback_burden))
+  expect_true(is.finite(diag$replicate_birth_fallback_burden))
+  expect_true(is.finite(diag$mean_zero_birth_reliability_multiplier))
+  expect_true(is.finite(diag$median_zero_birth_reliability_multiplier))
+  expect_true(is.finite(diag$replicate_birth_reliability_multiplier))
 })
 
 test_that("weighted prior downweights zero children when birth times were filled by fallback", {
@@ -1819,7 +1897,8 @@ test_that("weighted prior downweights zero children when birth times were filled
         nn_prior = "empirical_censored_weighted",
         nn_prior_zero_weight_scale = 1,
         nn_prior_zero_weight_cap_ratio = 1,
-        nn_prior_zero_birth_fallback_weight = 0.25
+        nn_prior_zero_birth_child_floor = 0.25,
+        nn_prior_zero_birth_replicate_floor = 0.50
       )
     },
     bootstrap_counts = function(x) x,
@@ -1866,8 +1945,10 @@ test_that("weighted prior downweights zero children when birth times were filled
     .package = "alfakR"
   )
 
-  expect_equal(seen$child_weights, c(1, 0.25), tolerance = 1e-12)
+  expect_equal(seen$child_weights, c(1, 0.125), tolerance = 1e-12)
   expect_equal(res$nn_prior_diagnostics$n_zero_children_with_birth_fallback[1], 1L, tolerance = 0)
+  expect_equal(res$nn_prior_diagnostics$replicate_birth_fallback_burden[1], 1, tolerance = 1e-12)
+  expect_equal(res$nn_prior_diagnostics$replicate_birth_reliability_multiplier[1], 0.5, tolerance = 1e-12)
 })
 
 test_that("weighted prior applies the zero-weight cap by common rescaling", {
