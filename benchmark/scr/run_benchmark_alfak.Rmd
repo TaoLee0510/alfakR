@@ -31,8 +31,22 @@ params:
   nn_prior_zero_birth_child_shape: 1
   nn_prior_zero_birth_replicate_floor: 0.50
   nn_prior_zero_birth_replicate_shape: 1
+  nn_prior_two_step_support: "rescue"
+  nn_prior_two_step_support_min: 0.15
+  nn_prior_two_step_cap_floor: 0.30
   include_posterior_comparison: true
   top_shift_n: 15
+  run_nn_identifiability: true
+  run_nn_stability: true
+  run_nn_holdout: false
+  nn_holdout_repeats: 5
+  nn_holdout_fraction: 0.25
+  nn_holdout_min_count: 2
+  nn_holdout_seed: 271828
+  run_nn_simulation: false
+  nn_simulation_n: 50
+  nn_simulation_seed: 161803
+  nn_simulation_scenarios: ["sparse_zero_heavy", "moderate_observed", "two_step_supported"]
   force_refit: false
   rebuild_inputs: false
   run_benchmark: true
@@ -136,55 +150,194 @@ if (knitr::is_html_output()) {
 }
 ```
 
-## Retained Samples
+## Selection Summary
 
 ```{r retained-sample-tables, results='asis'}
-retained_patient_tbl <- benchmark_run$retained_patient_tbl
-if (nrow(retained_patient_tbl)) {
-  print(render_tbl(retained_patient_tbl, caption = "Samples retained by all four methods (`xval_r2 > 0`, best `minobs` per method)"))
+all_sample_fit_index_tbl <- benchmark_run$parameter_results_all_tbl
+if (nrow(all_sample_fit_index_tbl)) {
+  for (parameter_label_name in ctx$parameter_levels_use) {
+    sub_tbl <- all_sample_fit_index_tbl %>%
+      dplyr::filter(parameter_label == parameter_label_name) %>%
+      dplyr::mutate(
+        patient_id = as.character(patient_id),
+        patient_sort_num = suppressWarnings(as.integer(gsub("^\\D+", "", patient_id)))
+      ) %>%
+      dplyr::arrange(
+        dplyr::if_else(is.na(patient_sort_num), Inf, patient_sort_num),
+        patient_id,
+        minobs,
+        pm
+      ) %>%
+      dplyr::transmute(
+        patient_id,
+        minobs,
+        pm = format(pm, scientific = TRUE, trim = TRUE),
+        nn_prior,
+        status,
+        cached,
+        xval_r2,
+        xval_cor,
+        xval_rmse,
+        xval_mae,
+        n_xval,
+        warning_count,
+        elapsed_sec,
+        error_message
+      )
+    emit_report_table(
+      sub_tbl,
+      caption = paste("Per-method full fit index (all samples and all minobs):", parameter_label_name)
+    )
+  }
 } else {
-  print(render_tbl(empty_note_tbl("No common retained samples are available yet."), caption = "Samples retained by all four methods"))
+  emit_report_table(empty_note_tbl("No fit results are available yet."), caption = "Per-method full fit index")
 }
 
-retained_fit_index_tbl <- benchmark_run$parameter_selected_fit_tbl
-if (nrow(retained_fit_index_tbl)) {
-  print(
-    render_tbl(
-      retained_fit_index_tbl %>%
-        dplyr::transmute(
-          parameter_label,
-          patient_id,
-          minobs,
-          pm,
-          nn_prior,
-          xval_r2,
-          elapsed_sec,
-          cached
-        ),
-      caption = "Retained fit index used for all downstream figures"
-    )
+retained_patient_tbl <- benchmark_run$retained_patient_tbl
+if (nrow(retained_patient_tbl)) {
+  emit_report_table(retained_patient_tbl, caption = "Common samples retained by all four methods; only these are shown in Samplewise Results")
+} else {
+  emit_report_table(empty_note_tbl("No common retained samples are available yet."), caption = "Common samples retained by all four methods")
+}
+```
+
+## NN Identifiability
+
+```{r nn-identifiability, results='asis'}
+nn_identifiability_summary_tbl <- benchmark_run$nn_identifiability_summary_tbl
+if (nrow(nn_identifiability_summary_tbl)) {
+  emit_report_table(
+    nn_identifiability_summary_tbl %>%
+      dplyr::mutate(pm = format(pm, scientific = TRUE, trim = TRUE)) %>%
+      dplyr::select(
+        parameter_label,
+        patient_id,
+        minobs,
+        pm,
+        nn_identifiability_class,
+        observed_anchor_rate,
+        median_n_observed_children,
+        median_zero_weight_ratio,
+        median_zero_effective_mass,
+        prior_source_observed_replicate_frac,
+        prior_source_sample_pooled_frac,
+        prior_source_none_frac,
+        median_n_zero_children_with_two_step_support,
+        median_map_delta_lower_boundary_rate
+      ),
+    caption = "NN identifiability summary"
   )
 } else {
-  print(render_tbl(empty_note_tbl("No retained fits are available yet."), caption = "Retained fit index"))
+  emit_report_table(empty_note_tbl("No NN identifiability diagnostics are available."), caption = "NN identifiability summary")
+}
+
+nn_diagnostic_figure_artifact_tbl <- benchmark_run$nn_diagnostic_figure_artifact_tbl
+if (nrow(nn_diagnostic_figure_artifact_tbl)) {
+  emit_report_image_grid(
+    nn_diagnostic_figure_artifact_tbl %>%
+      dplyr::filter(artifact %in% c("nn_identifiability_class", "nn_prior_source_fraction")) %>%
+      dplyr::transmute(
+        title = title,
+        path = png_path,
+        alt = title
+      ),
+    cols = 1L
+  )
+}
+```
+
+## NN Bootstrap Stability
+
+```{r nn-stability, results='asis'}
+nn_stability_case_tbl <- benchmark_run$nn_stability_case_tbl
+if (nrow(nn_stability_case_tbl)) {
+  emit_report_table(
+    nn_stability_case_tbl %>%
+      dplyr::mutate(pm = format(pm, scientific = TRUE, trim = TRUE)) %>%
+      dplyr::select(
+        parameter_label,
+        patient_id,
+        minobs,
+        pm,
+        n_nn_children,
+        median_finite_fraction,
+        median_nn_bootstrap_sd,
+        median_nn_bootstrap_iqr
+      ),
+    caption = "NN bootstrap stability by case"
+  )
+} else {
+  emit_report_table(empty_note_tbl("No NN bootstrap stability diagnostics are available."), caption = "NN bootstrap stability by case")
+}
+
+if (nrow(nn_diagnostic_figure_artifact_tbl)) {
+  emit_report_image_grid(
+    nn_diagnostic_figure_artifact_tbl %>%
+      dplyr::filter(artifact %in% c("nn_stability_by_method", "weighted_empirical_nn_sd_ratio")) %>%
+      dplyr::transmute(
+        title = title,
+        path = png_path,
+        alt = title
+      ),
+    cols = 2L
+  )
+}
+```
+
+## NN Holdout And Simulation
+
+```{r nn-holdout-simulation, results='asis'}
+nn_holdout_summary_tbl <- benchmark_run$nn_holdout_summary_tbl
+if (nrow(nn_holdout_summary_tbl)) {
+  emit_report_table(nn_holdout_summary_tbl, caption = "Observed-NN holdout summary")
+} else {
+  emit_report_table(empty_note_tbl("Observed-NN holdout was not run or produced no predictions."), caption = "Observed-NN holdout summary")
+}
+
+nn_simulation_summary_tbl <- benchmark_run$nn_simulation_summary_tbl
+if (nrow(nn_simulation_summary_tbl)) {
+  emit_report_table(nn_simulation_summary_tbl, caption = "NN simulation truth-calibration summary")
+} else {
+  emit_report_table(empty_note_tbl("NN simulation calibration was not run or produced no estimates."), caption = "NN simulation truth-calibration summary")
 }
 ```
 
 ## All-Sample Landscape Comparison
 
 ```{r retained-landscape-comparison, results='asis'}
-emit_report_image(
-  benchmark_run$parameter_figure_paths$retained_landscape_distribution,
-  alt = "Retained-sample fitness landscape distribution comparison"
-)
+all_sample_landscape_artifact_tbl <- benchmark_run$all_sample_landscape_artifact_tbl
+if (nrow(all_sample_landscape_artifact_tbl)) {
+  emit_report_image_grid(
+    all_sample_landscape_artifact_tbl %>%
+      dplyr::transmute(
+        title = title,
+        path = png_path,
+        alt = paste("All-sample landscape distribution for", title)
+      ),
+    cols = 2L
+  )
+} else {
+  cat("No all-sample landscape distribution plots are available yet.\n")
+}
 ```
 
 ## All-Sample Cross-Validation
 
 ```{r retained-xval-scatter, results='asis'}
-emit_report_image(
-  benchmark_run$parameter_figure_paths$retained_xval_scatter,
-  alt = "Observed versus predicted cross-validation scatter for retained samples"
-)
+all_sample_xval_artifact_tbl <- benchmark_run$all_sample_xval_artifact_tbl
+if (nrow(all_sample_xval_artifact_tbl)) {
+  emit_report_image_grid(
+    all_sample_xval_artifact_tbl %>%
+      dplyr::transmute(
+        title = title,
+        path = png_path,
+        alt = paste("All-sample cross-validation for", title)
+      ),
+    cols = 1L
+  )
+} else {
+  cat("No all-sample cross-validation plots are available yet.\n")
+}
 ```
 
 ## All-Sample UMAP
@@ -199,7 +352,7 @@ if (nrow(all_sample_umap_artifact_tbl)) {
         path = png_path,
         alt = paste("All-sample UMAP for", title)
       ),
-    cols = 3L
+    cols = 4L
   )
 } else {
   cat("No all-sample UMAP plots are available yet.\n")
@@ -211,12 +364,10 @@ if (nrow(all_sample_umap_artifact_tbl)) {
 ```{r parameter-beneficial-artifacts-render, results='asis'}
 parameter_beneficial_artifact_tbl <- benchmark_run$parameter_beneficial_artifact_tbl
 if (nrow(parameter_beneficial_artifact_tbl)) {
-  print(
-    render_tbl(
-      parameter_beneficial_artifact_tbl %>%
-        dplyr::select(parameter_label, n_patients),
-      caption = "Retained-sample beneficial-heatmap coverage by parameter label"
-    )
+  emit_report_table(
+    parameter_beneficial_artifact_tbl %>%
+      dplyr::select(parameter_label, n_patients),
+    caption = "All-sample beneficial-heatmap coverage by parameter label"
   )
   emit_report_image_grid(
     parameter_beneficial_artifact_tbl %>%
@@ -228,7 +379,7 @@ if (nrow(parameter_beneficial_artifact_tbl)) {
     cols = 2L
   )
 } else {
-  print(render_tbl(empty_note_tbl("No retained-sample beneficial heatmaps are available yet."), caption = "Retained-sample beneficial-heatmap coverage"))
+  emit_report_table(empty_note_tbl("No all-sample beneficial heatmaps are available yet."), caption = "All-sample beneficial-heatmap coverage")
 }
 ```
 
@@ -243,30 +394,28 @@ if (!length(focus_results)) {
     cat("### ", focus_pid, "\n\n", sep = "")
 
     if (nrow(focus_res$focus_fit_index_tbl)) {
-      print(
-        render_tbl(
-          focus_res$focus_fit_index_tbl %>%
-            dplyr::transmute(
-              parameter_label,
-              minobs,
-              pm,
-              nn_prior,
-              status,
-              xval_r2,
-              elapsed_sec,
-              cached
-            ),
-          caption = paste("Retained fit index:", focus_pid)
-        )
+      emit_report_table(
+        focus_res$focus_fit_index_tbl %>%
+          dplyr::transmute(
+            parameter_label,
+            minobs,
+            pm,
+            nn_prior,
+            status,
+            xval_r2,
+            elapsed_sec,
+            cached
+          ),
+        caption = paste("Retained fit index:", focus_pid)
       )
     } else {
-      print(render_tbl(empty_note_tbl("No retained fit index is available for this sample."), caption = paste("Retained fit index:", focus_pid)))
+      emit_report_table(empty_note_tbl("No retained fit index is available for this sample."), caption = paste("Retained fit index:", focus_pid))
     }
 
     if (nrow(focus_res$focus_landscape_summary_tbl)) {
-      print(render_tbl(focus_res$focus_landscape_summary_tbl, caption = paste("Landscape summary:", focus_pid)))
+      emit_report_table(focus_res$focus_landscape_summary_tbl, caption = paste("Landscape summary:", focus_pid))
     } else {
-      print(render_tbl(empty_note_tbl("No landscape summary is available for this sample."), caption = paste("Landscape summary:", focus_pid)))
+      emit_report_table(empty_note_tbl("No landscape summary is available for this sample."), caption = paste("Landscape summary:", focus_pid))
     }
 
     if (nrow(focus_res$focus_umap_artifact_tbl)) {
@@ -281,7 +430,17 @@ if (!length(focus_results)) {
       )
     }
 
-    emit_report_image(focus_res$focus_figure_paths$density, alt = paste("Landscape density for", focus_pid))
+    if (nrow(focus_res$focus_density_artifact_tbl)) {
+      emit_report_image_grid(
+        focus_res$focus_density_artifact_tbl %>%
+          dplyr::transmute(
+            title = parameter_label,
+            path = png_path,
+            alt = paste("Landscape density for", focus_pid, parameter_label)
+          ),
+        cols = 2L
+      )
+    }
     emit_report_image(focus_res$focus_figure_paths$parity, alt = paste("Landscape parity for", focus_pid))
     emit_report_image(focus_res$focus_figure_paths$beneficial_heatmap, alt = paste("Beneficial heatmap for", focus_pid))
     emit_report_image(focus_res$focus_figure_paths$state_fitness, alt = paste("State fitness decomposition for", focus_pid))

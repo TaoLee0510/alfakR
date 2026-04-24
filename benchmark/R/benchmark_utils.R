@@ -63,14 +63,13 @@ load_saved_table <- function(stem) {
 
 render_tbl <- function(x, caption = NULL, digits = 4) {
   if (knitr::is_html_output()) {
-    tbl_html <- knitr::kable(
+    return(knitr::kable(
       x,
       format = "html",
       digits = digits,
       caption = caption,
       table.attr = 'class="three-line-table"'
-    )
-    return(knitr::asis_output(tbl_html))
+    ))
   }
 
   knitr::kable(
@@ -81,6 +80,16 @@ render_tbl <- function(x, caption = NULL, digits = 4) {
     booktabs = TRUE,
     longtable = TRUE
   )
+}
+
+emit_report_table <- function(x, caption = NULL, digits = 4) {
+  tbl <- render_tbl(x, caption = caption, digits = digits)
+  if (knitr::is_html_output()) {
+    cat(as.character(tbl), "\n\n", sep = "")
+  } else {
+    print(tbl)
+  }
+  invisible(TRUE)
 }
 
 html_escape_attr <- function(x) {

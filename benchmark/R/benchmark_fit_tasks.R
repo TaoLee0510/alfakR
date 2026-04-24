@@ -36,7 +36,10 @@ weighted_prior_cache_matches <- function(cached,
                                          nn_prior_zero_birth_child_floor,
                                          nn_prior_zero_birth_child_shape,
                                          nn_prior_zero_birth_replicate_floor,
-                                         nn_prior_zero_birth_replicate_shape) {
+                                         nn_prior_zero_birth_replicate_shape,
+                                         nn_prior_two_step_support,
+                                         nn_prior_two_step_support_min,
+                                         nn_prior_two_step_cap_floor) {
   if (identical(nn_prior, "empirical_censored") &&
       !same_optional_numeric(cached$nn_prior_grid_n, nn_prior_grid_n)) {
     return(FALSE)
@@ -55,7 +58,10 @@ weighted_prior_cache_matches <- function(cached,
     same_optional_numeric(cached$nn_prior_zero_birth_child_floor, nn_prior_zero_birth_child_floor) &&
     same_optional_numeric(cached$nn_prior_zero_birth_child_shape, nn_prior_zero_birth_child_shape) &&
     same_optional_numeric(cached$nn_prior_zero_birth_replicate_floor, nn_prior_zero_birth_replicate_floor) &&
-    same_optional_numeric(cached$nn_prior_zero_birth_replicate_shape, nn_prior_zero_birth_replicate_shape)
+    same_optional_numeric(cached$nn_prior_zero_birth_replicate_shape, nn_prior_zero_birth_replicate_shape) &&
+    identical(as.character(cached$nn_prior_two_step_support), nn_prior_two_step_support) &&
+    same_optional_numeric(cached$nn_prior_two_step_support_min, nn_prior_two_step_support_min) &&
+    same_optional_numeric(cached$nn_prior_two_step_cap_floor, nn_prior_two_step_cap_floor)
 }
 
 extract_xval_metrics <- function(xv) {
@@ -131,6 +137,9 @@ refresh_cached_fit_row <- function(cached,
                                    nn_prior_zero_birth_child_shape,
                                    nn_prior_zero_birth_replicate_floor,
                                    nn_prior_zero_birth_replicate_shape,
+                                   nn_prior_two_step_support,
+                                   nn_prior_two_step_support_min,
+                                   nn_prior_two_step_cap_floor,
                                    warning_log_path,
                                    landscape_path,
                                    bootstrap_path,
@@ -159,6 +168,9 @@ refresh_cached_fit_row <- function(cached,
   cached$nn_prior_zero_birth_child_shape <- nn_prior_zero_birth_child_shape
   cached$nn_prior_zero_birth_replicate_floor <- nn_prior_zero_birth_replicate_floor
   cached$nn_prior_zero_birth_replicate_shape <- nn_prior_zero_birth_replicate_shape
+  cached$nn_prior_two_step_support <- nn_prior_two_step_support
+  cached$nn_prior_two_step_support_min <- nn_prior_two_step_support_min
+  cached$nn_prior_two_step_cap_floor <- nn_prior_two_step_cap_floor
   cached$cached <- TRUE
   cached$warning_count <- length(warning_lines)
   cached$lambda_endpoint_warning_count <- sum(grepl("^Grid searches over lambda", warning_lines))
@@ -271,6 +283,9 @@ run_alfak_fit <- function(patient_id,
                           nn_prior_zero_birth_child_shape = 1,
                           nn_prior_zero_birth_replicate_floor = 0.50,
                           nn_prior_zero_birth_replicate_shape = 1,
+                          nn_prior_two_step_support = "none",
+                          nn_prior_two_step_support_min = 0.15,
+                          nn_prior_two_step_cap_floor = 0.30,
                           force_refit = FALSE) {
   landscape_path <- file.path(outdir, "landscape.Rds")
   bootstrap_path <- file.path(outdir, "bootstrap_res.Rds")
@@ -297,7 +312,10 @@ run_alfak_fit <- function(patient_id,
       " | zero_birth_child_floor=", signif(nn_prior_zero_birth_child_floor, 4),
       " | zero_birth_child_shape=", signif(nn_prior_zero_birth_child_shape, 4),
       " | zero_birth_replicate_floor=", signif(nn_prior_zero_birth_replicate_floor, 4),
-      " | zero_birth_replicate_shape=", signif(nn_prior_zero_birth_replicate_shape, 4)
+      " | zero_birth_replicate_shape=", signif(nn_prior_zero_birth_replicate_shape, 4),
+      " | two_step_support=", nn_prior_two_step_support,
+      " | two_step_support_min=", signif(nn_prior_two_step_support_min, 4),
+      " | two_step_cap_floor=", signif(nn_prior_two_step_cap_floor, 4)
     ) else ""
   )
 
@@ -318,7 +336,10 @@ run_alfak_fit <- function(patient_id,
           nn_prior_zero_birth_child_floor = nn_prior_zero_birth_child_floor,
           nn_prior_zero_birth_child_shape = nn_prior_zero_birth_child_shape,
           nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
-          nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape
+          nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape,
+          nn_prior_two_step_support = nn_prior_two_step_support,
+          nn_prior_two_step_support_min = nn_prior_two_step_support_min,
+          nn_prior_two_step_cap_floor = nn_prior_two_step_cap_floor
         )) {
       cached <- refresh_cached_fit_row(
         cached = cached,
@@ -339,6 +360,9 @@ run_alfak_fit <- function(patient_id,
         nn_prior_zero_birth_child_shape = nn_prior_zero_birth_child_shape,
         nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
         nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape,
+        nn_prior_two_step_support = nn_prior_two_step_support,
+        nn_prior_two_step_support_min = nn_prior_two_step_support_min,
+        nn_prior_two_step_cap_floor = nn_prior_two_step_cap_floor,
         warning_log_path = warning_log_path,
         landscape_path = landscape_path,
         bootstrap_path = bootstrap_path,
@@ -392,7 +416,10 @@ run_alfak_fit <- function(patient_id,
         nn_prior_zero_birth_child_floor = nn_prior_zero_birth_child_floor,
         nn_prior_zero_birth_child_shape = nn_prior_zero_birth_child_shape,
         nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
-        nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape
+        nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape,
+        nn_prior_two_step_support = nn_prior_two_step_support,
+        nn_prior_two_step_support_min = nn_prior_two_step_support_min,
+        nn_prior_two_step_cap_floor = nn_prior_two_step_cap_floor
       )
     }, warning = function(w) {
       warning_messages <<- c(warning_messages, conditionMessage(w))
@@ -426,6 +453,9 @@ run_alfak_fit <- function(patient_id,
         nn_prior_zero_birth_child_shape = nn_prior_zero_birth_child_shape,
         nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
         nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape,
+        nn_prior_two_step_support = nn_prior_two_step_support,
+        nn_prior_two_step_support_min = nn_prior_two_step_support_min,
+        nn_prior_two_step_cap_floor = nn_prior_two_step_cap_floor,
         status = "ok",
         cached = FALSE,
         error_message = NA_character_,
@@ -467,6 +497,9 @@ run_alfak_fit <- function(patient_id,
       nn_prior_zero_birth_child_shape = nn_prior_zero_birth_child_shape,
       nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
       nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape,
+      nn_prior_two_step_support = nn_prior_two_step_support,
+      nn_prior_two_step_support_min = nn_prior_two_step_support_min,
+      nn_prior_two_step_cap_floor = nn_prior_two_step_cap_floor,
       status = "error",
       cached = FALSE,
       error_message = conditionMessage(e),
@@ -520,6 +553,9 @@ build_parameter_tasks <- function(input_index_tbl,
                                   nn_prior_zero_birth_child_shape,
                                   nn_prior_zero_birth_replicate_floor,
                                   nn_prior_zero_birth_replicate_shape,
+                                  nn_prior_two_step_support,
+                                  nn_prior_two_step_support_min,
+                                  nn_prior_two_step_cap_floor,
                                   nboot,
                                   n0,
                                   nb,
@@ -547,6 +583,9 @@ build_parameter_tasks <- function(input_index_tbl,
       nn_prior_zero_birth_child_shape = nn_prior_zero_birth_child_shape,
       nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
       nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape,
+      nn_prior_two_step_support = nn_prior_two_step_support,
+      nn_prior_two_step_support_min = nn_prior_two_step_support_min,
+      nn_prior_two_step_cap_floor = nn_prior_two_step_cap_floor,
       outdir = purrr::pmap_chr(
         list(patient_id, minobs, pm, parameter_label),
         ~ task_outdir_parameter(fit_root, ..1, ..2, ..3, ..4)
@@ -602,6 +641,9 @@ run_task_table_parallel <- function(task_tbl, n_cores, diploid_state) {
           nn_prior_zero_birth_child_shape = rr$nn_prior_zero_birth_child_shape,
           nn_prior_zero_birth_replicate_floor = rr$nn_prior_zero_birth_replicate_floor,
           nn_prior_zero_birth_replicate_shape = rr$nn_prior_zero_birth_replicate_shape,
+          nn_prior_two_step_support = rr$nn_prior_two_step_support,
+          nn_prior_two_step_support_min = rr$nn_prior_two_step_support_min,
+          nn_prior_two_step_cap_floor = rr$nn_prior_two_step_cap_floor,
           force_refit = rr$force_refit
         )
       },
@@ -636,6 +678,9 @@ run_task_table_parallel <- function(task_tbl, n_cores, diploid_state) {
         nn_prior_zero_birth_child_shape = rr$nn_prior_zero_birth_child_shape,
         nn_prior_zero_birth_replicate_floor = rr$nn_prior_zero_birth_replicate_floor,
         nn_prior_zero_birth_replicate_shape = rr$nn_prior_zero_birth_replicate_shape,
+        nn_prior_two_step_support = rr$nn_prior_two_step_support,
+        nn_prior_two_step_support_min = rr$nn_prior_two_step_support_min,
+        nn_prior_two_step_cap_floor = rr$nn_prior_two_step_cap_floor,
         force_refit = rr$force_refit
       )
     })

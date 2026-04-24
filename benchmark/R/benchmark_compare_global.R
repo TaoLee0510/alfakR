@@ -272,10 +272,10 @@ reconstruct_xval_detail_tbl <- function(fq_boot,
   valid_nn_str <- if (is.null(nn_str)) character(0) else nn_str
   combined_strs <- c(valid_fq_str, valid_nn_str)
   if (!length(combined_strs) || ncol(fboot) == 0 || nrow(fboot) == 0) {
-    return(tibble::tibble(observed = numeric(0), predicted = numeric(0)))
+    return(tibble::tibble(k = character(0), state_class = character(0), validation = numeric(0), estimate = numeric(0)))
   }
   if (!length(valid_fq_str)) {
-    return(tibble::tibble(observed = numeric(0), predicted = numeric(0)))
+    return(tibble::tibble(k = character(0), state_class = character(0), validation = numeric(0), estimate = numeric(0)))
   }
 
   ktrain <- unname(alfakR:::parse_karyotype_ids(combined_strs))
@@ -307,20 +307,26 @@ reconstruct_xval_detail_tbl <- function(fq_boot,
     train_k_names_valid <- train_k_names[train_k_names %in% names(ktrain_map)]
     test_k_names_valid <- test_k_names[test_k_names %in% names(ktrain_map)]
     if (!length(train_k_names_valid) || !length(test_k_names_valid)) {
-      return(matrix(NA_real_, ncol = 2, dimnames = list(NULL, c("observed", "predicted"))))
+      return(tibble::tibble(k = character(0), state_class = character(0), validation = numeric(0), estimate = numeric(0)))
     }
 
     train_k <- ktrain[ktrain_map[train_k_names_valid], , drop = FALSE]
     train_f <- fi[train_k_names_valid]
     test_k <- ktrain[ktrain_map[test_k_names_valid], , drop = FALSE]
     test_f <- fi[test_k_names_valid]
+    test_state_class <- ifelse(test_k_names_valid %in% valid_fq_str, "fq", "nn")
 
     valid_train_points <- !is.na(train_f)
     train_k <- train_k[valid_train_points, , drop = FALSE]
     train_f <- train_f[valid_train_points]
 
     if (nrow(train_k) < 2 || nrow(unique(train_k)) < 2 || length(unique(train_f)) < 1) {
-      return(cbind(observed = test_f, predicted = rep(NA_real_, length(test_f))))
+      return(tibble::tibble(
+        k = test_k_names_valid,
+        state_class = test_state_class,
+        validation = as.numeric(test_f),
+        estimate = rep(NA_real_, length(test_f))
+      ))
     }
 
     fit <- suppressWarnings(fields::Krig(
@@ -332,20 +338,28 @@ reconstruct_xval_detail_tbl <- function(fq_boot,
       give.warnings = TRUE
     ))
     pred_f <- suppressWarnings(stats::predict(fit, test_k))
-    cbind(observed = test_f, predicted = pred_f)
+    tibble::tibble(
+      k = test_k_names_valid,
+      state_class = test_state_class,
+      validation = as.numeric(test_f),
+      estimate = as.numeric(pred_f)
+    )
   })
 
   tmp <- do.call(rbind, tmp_list)
-  tmp <- tmp[stats::complete.cases(tmp), , drop = FALSE]
+  tmp <- as.data.frame(tmp)
+  tmp <- tmp[stats::complete.cases(tmp[, c("validation", "estimate"), drop = FALSE]), , drop = FALSE]
   if (!nrow(tmp)) {
-    return(tibble::tibble(observed = numeric(0), predicted = numeric(0)))
+    return(tibble::tibble(k = character(0), state_class = character(0), validation = numeric(0), estimate = numeric(0)))
   }
 
   tibble::tibble(
-    observed = as.numeric(tmp[, 1]),
-    predicted = as.numeric(tmp[, 2])
+    k = as.character(tmp$k),
+    state_class = as.character(tmp$state_class),
+    validation = as.numeric(tmp$validation),
+    estimate = as.numeric(tmp$estimate)
   ) %>%
-    dplyr::filter(is.finite(observed), is.finite(predicted))
+    dplyr::filter(is.finite(validation), is.finite(estimate))
 }
 
 build_selected_xval_scatter_tbl <- function(selected_fit_tbl,
@@ -379,6 +393,7 @@ build_selected_xval_scatter_tbl <- function(selected_fit_tbl,
     }
 
     xval_tbl %>%
+      dplyr::filter(state_class == "fq") %>%
       dplyr::mutate(
         patient_id = as.character(rr$patient_id),
         parameter_label = as.character(rr$parameter_label),
@@ -400,46 +415,65 @@ build_selected_umap_long_tbl <- function(landscape_long,
     return(list(
       landscape_with_umap = tibble::tibble(),
       reference_umap_tbl = tibble::tibble(),
-      global_diploid_mean = NA_real_
+      global_diploid_mean_tbl = tibble::tibble()
     ))
   }
 
-  base_tbl <- landscape_long %>%
-    dplyr::select(patient_id, k) %>%
-    dplyr::distinct()
-  k_mat <- parse_karyotype_matrix_from_strings(base_tbl$k)
-  set.seed(as.integer(benchmark_seed))
-  umap_mat <- uwot::umap2(k_mat, n_components = 2, min_dist = 0.9)
-  umap_tbl <- tibble::tibble(
-    patient_id = base_tbl$patient_id,
-    k = base_tbl$k,
-    UMAP1 = umap_mat[, 1],
-    UMAP2 = umap_mat[, 2]
-  )
+  parameter_levels <- unique(as.character(landscape_long$parameter_label))
+  landscape_with_umap_tbl <- dplyr::bind_rows(lapply(seq_along(parameter_levels), function(i) {
+    parameter_label_name <- parameter_levels[[i]]
+    sub_long <- landscape_long %>%
+      dplyr::mutate(parameter_label = as.character(parameter_label)) %>%
+      dplyr::filter(parameter_label == parameter_label_name)
+    if (!nrow(sub_long)) {
+      return(tibble::tibble())
+    }
 
-  landscape_with_umap_tbl <- landscape_long %>%
-    dplyr::left_join(umap_tbl, by = c("patient_id", "k"))
+    base_tbl <- sub_long %>%
+      dplyr::select(patient_id, parameter_label, k) %>%
+      dplyr::distinct()
+    k_mat <- parse_karyotype_matrix_from_strings(base_tbl$k)
+    set.seed(as.integer(benchmark_seed) + i * 1000L)
+    umap_mat <- uwot::umap2(k_mat, n_components = 2, min_dist = 0.9)
+    umap_tbl <- tibble::tibble(
+      patient_id = base_tbl$patient_id,
+      parameter_label = base_tbl$parameter_label,
+      k = base_tbl$k,
+      UMAP1 = umap_mat[, 1],
+      UMAP2 = umap_mat[, 2]
+    )
+
+    sub_long %>%
+      dplyr::left_join(umap_tbl, by = c("patient_id", "parameter_label", "k"))
+  })) %>%
+    dplyr::mutate(
+      parameter_label = factor(parameter_label, levels = parameter_levels),
+      patient_id = factor(patient_id, levels = sort_pid_levels(patient_id))
+    )
 
   diploid_tbl <- landscape_with_umap_tbl %>%
     dplyr::filter(k == diploid_state) %>%
     dplyr::group_by(patient_id, parameter_label) %>%
     dplyr::summarise(diploid_mean = mean(mean, na.rm = TRUE), .groups = "drop")
-  global_diploid_mean <- mean(diploid_tbl$diploid_mean, na.rm = TRUE)
-  if (!is.finite(global_diploid_mean) || global_diploid_mean == 0) {
-    global_diploid_mean <- NA_real_
-  }
+  global_diploid_mean_tbl <- diploid_tbl %>%
+    dplyr::group_by(parameter_label) %>%
+    dplyr::summarise(global_diploid_mean = mean(diploid_mean, na.rm = TRUE), .groups = "drop") %>%
+    dplyr::mutate(
+      global_diploid_mean = dplyr::if_else(
+        is.finite(global_diploid_mean) & global_diploid_mean != 0,
+        global_diploid_mean,
+        NA_real_
+      )
+    )
 
   reference_umap_tbl <- landscape_with_umap_tbl %>%
-    dplyr::group_by(patient_id, k, UMAP1, UMAP2) %>%
-    dplyr::summarise(
-      reference_value = mean(mean, na.rm = TRUE) / global_diploid_mean,
-      .groups = "drop"
-    )
+    dplyr::left_join(global_diploid_mean_tbl, by = "parameter_label") %>%
+    dplyr::mutate(reference_value = mean / global_diploid_mean)
 
   list(
     landscape_with_umap = landscape_with_umap_tbl,
     reference_umap_tbl = reference_umap_tbl,
-    global_diploid_mean = global_diploid_mean
+    global_diploid_mean_tbl = global_diploid_mean_tbl
   )
 }
 

@@ -21,6 +21,7 @@ source_benchmark_modules <- function(repo_dir, envir = parent.frame()) {
       "benchmark_fit_tasks.R",
       "benchmark_compare_global.R",
       "benchmark_compare_focus.R",
+      "benchmark_nn_diagnostics.R",
       "benchmark_pipeline.R"
     )
   )
