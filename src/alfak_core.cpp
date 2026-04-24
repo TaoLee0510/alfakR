@@ -252,6 +252,136 @@ double alfak_neighbor_objective_cpp(double fc_param,
 }
 
 // [[Rcpp::export]]
+double alfak_neighbor_two_shell_objective_cpp(double fc_param,
+                                              Rcpp::NumericVector parent_fitness,
+                                              Rcpp::NumericVector pij_values,
+                                              Rcpp::NumericVector parent_birth_times,
+                                              Rcpp::NumericVector timepoints,
+                                              Rcpp::NumericMatrix parent_xfit,
+                                              Rcpp::NumericVector child_obs,
+                                              Rcpp::NumericVector ntot,
+                                              double inward_prior_mean,
+                                              double inward_prior_sd,
+                                              Rcpp::NumericVector inward_prior_weights,
+                                              bool do_inward_prior,
+                                              Rcpp::NumericVector outward_fitness,
+                                              double outward_prior_mean,
+                                              Rcpp::NumericVector outward_prior_sd,
+                                              Rcpp::NumericVector outward_prior_weights,
+                                              double outward_lambda,
+                                              double tol) {
+  const int n_parents = parent_fitness.size();
+  const int n_time = timepoints.size();
+  const int n_outward = outward_fitness.size();
+  if (n_parents == 0) {
+    return 1e9;
+  }
+  if (!R_finite(fc_param) || !R_finite(tol) || tol <= 0.0) {
+    Rcpp::stop("`fc_param` must be finite and `tol` must be a positive finite value.");
+  }
+  if (pij_values.size() != n_parents || parent_birth_times.size() != n_parents ||
+      parent_xfit.nrow() != n_parents) {
+    Rcpp::stop("Parent inputs must have matching lengths/rows.");
+  }
+  if (parent_xfit.ncol() != n_time) {
+    Rcpp::stop("`parent_xfit` must have ncol equal to length(timepoints).");
+  }
+  if (child_obs.size() != n_time || ntot.size() != n_time) {
+    Rcpp::stop("`child_obs`, `ntot`, and `timepoints` must have matching lengths.");
+  }
+  if (do_inward_prior) {
+    if (inward_prior_weights.size() != n_parents) {
+      Rcpp::stop("`inward_prior_weights` must have one entry per parent.");
+    }
+    if (!R_finite(inward_prior_mean) || !R_finite(inward_prior_sd) || inward_prior_sd <= 0.0) {
+      Rcpp::stop("Inward prior parameters must be finite and `inward_prior_sd` must be positive.");
+    }
+  }
+  if (outward_prior_sd.size() != n_outward || outward_prior_weights.size() != n_outward) {
+    Rcpp::stop("Outward prior inputs must have matching lengths.");
+  }
+  if (!R_finite(outward_lambda) || outward_lambda < 0.0) {
+    Rcpp::stop("`outward_lambda` must be a finite non-negative value.");
+  }
+  if (n_outward > 0 && !R_finite(outward_prior_mean)) {
+    Rcpp::stop("`outward_prior_mean` must be finite when outward prior terms are supplied.");
+  }
+
+  double loglik = 0.0;
+  for (int t = 0; t < n_time; ++t) {
+    if (!R_finite(timepoints[t])) {
+      Rcpp::stop("`timepoints` must contain only finite values.");
+    }
+    if (!R_finite(child_obs[t]) || child_obs[t] < 0.0 || !is_integer_valued_scalar(child_obs[t])) {
+      Rcpp::stop("`child_obs` must contain only finite non-negative integer-valued counts.");
+    }
+    if (!R_finite(ntot[t]) || ntot[t] < 0.0 || !is_integer_valued_scalar(ntot[t])) {
+      Rcpp::stop("`ntot` must contain only finite non-negative integer-valued counts.");
+    }
+    if (child_obs[t] > ntot[t]) {
+      Rcpp::stop("`child_obs` must not exceed `ntot` at any timepoint.");
+    }
+    double xc_est = 0.0;
+    for (int p = 0; p < n_parents; ++p) {
+      if (!R_finite(parent_fitness[p]) || !R_finite(pij_values[p]) || pij_values[p] < 0.0 ||
+          !R_finite(parent_birth_times[p]) || !R_finite(parent_xfit(p, t))) {
+        Rcpp::stop("Parent fitness, transition probabilities, birth times, and parent_xfit must be finite; pij values must be non-negative.");
+      }
+      double tt = std::max(0.0, timepoints[t] - parent_birth_times[p]);
+      xc_est += fexp_stable_cpp(fc_param, parent_fitness[p], pij_values[p], tt, tol) * parent_xfit(p, t);
+    }
+
+    if (!R_finite(xc_est)) {
+      loglik += -1e9;
+      continue;
+    }
+
+    xc_est = std::max(0.0, std::min(1.0, xc_est));
+    double ll = R::dbinom(child_obs[t], ntot[t], xc_est, true);
+    if (!R_finite(ll)) {
+      ll = -1e9;
+    }
+    loglik += ll;
+  }
+
+  if (do_inward_prior) {
+    for (int p = 0; p < n_parents; ++p) {
+      if (!R_finite(inward_prior_weights[p]) || inward_prior_weights[p] < 0.0) {
+        Rcpp::stop("`inward_prior_weights` must contain finite non-negative values.");
+      }
+      if (inward_prior_weights[p] == 0.0) {
+        continue;
+      }
+      double prior_ll = R::dnorm(fc_param - parent_fitness[p], inward_prior_mean, inward_prior_sd, true);
+      if (!R_finite(prior_ll)) {
+        prior_ll = -1e9;
+      }
+      loglik += inward_prior_weights[p] * prior_ll;
+    }
+  }
+
+  if (n_outward > 0 && outward_lambda > 0.0) {
+    for (int k = 0; k < n_outward; ++k) {
+      if (!R_finite(outward_fitness[k]) ||
+          !R_finite(outward_prior_sd[k]) || outward_prior_sd[k] <= 0.0 ||
+          !R_finite(outward_prior_weights[k]) || outward_prior_weights[k] < 0.0) {
+        Rcpp::stop("Outward prior fitness, standard deviations, and weights must be finite; standard deviations must be positive and weights non-negative.");
+      }
+      if (outward_prior_weights[k] == 0.0) {
+        continue;
+      }
+      double prior_ll = R::dnorm(outward_fitness[k] - fc_param, outward_prior_mean, outward_prior_sd[k], true);
+      if (!R_finite(prior_ll)) {
+        prior_ll = -1e9;
+      }
+      loglik += outward_lambda * outward_prior_weights[k] * prior_ll;
+    }
+  }
+
+  return -loglik;
+}
+
+// [[Rcpp::export]]
 Rcpp::List alfak_qr_accum_cpp(Rcpp::NumericMatrix x_trim,
                               Rcpp::NumericMatrix dx_dt) {
   const int K = x_trim.nrow();

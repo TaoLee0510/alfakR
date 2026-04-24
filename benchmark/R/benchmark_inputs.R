@@ -318,11 +318,11 @@ summarize_input_fq_nn_overview <- function(input_index_tbl, minobs_values, diplo
         n_fq = length(fq),
         n_nn = length(nn),
         n_nn_observed = sum(nn_change_tbl$observed %in% TRUE, na.rm = TRUE),
-        prop_nn_observed = safe_fraction(sum(nn_change_tbl$observed %in% TRUE, na.rm = TRUE), nrow(nn_change_tbl)),
+        prop_nn_observed = safe_divide(sum(nn_change_tbl$observed %in% TRUE, na.rm = TRUE), nrow(nn_change_tbl)),
         n_fq_count_up = sum(fq_change_tbl$count_up %in% TRUE, na.rm = TRUE),
-        prop_fq_count_up = safe_fraction(sum(fq_change_tbl$count_up %in% TRUE, na.rm = TRUE), nrow(fq_change_tbl)),
+        prop_fq_count_up = safe_divide(sum(fq_change_tbl$count_up %in% TRUE, na.rm = TRUE), nrow(fq_change_tbl)),
         n_nn_count_up = sum(nn_change_tbl$count_up %in% TRUE, na.rm = TRUE),
-        prop_nn_count_up = safe_fraction(sum(nn_change_tbl$count_up %in% TRUE, na.rm = TRUE), nrow(nn_change_tbl)),
+        prop_nn_count_up = safe_divide(sum(nn_change_tbl$count_up %in% TRUE, na.rm = TRUE), nrow(nn_change_tbl)),
         n_fq_prop_up = sum(as.character(fq_change_tbl$prop_direction) == "up", na.rm = TRUE),
         n_fq_prop_down = sum(as.character(fq_change_tbl$prop_direction) == "down", na.rm = TRUE),
         n_fq_prop_flat = sum(as.character(fq_change_tbl$prop_direction) == "flat", na.rm = TRUE)
@@ -346,7 +346,7 @@ summarize_input_fq_nn_overview <- function(input_index_tbl, minobs_values, diplo
           n_group_nn = length(group_nn),
           n_group_nn_observed = sum(group_nn_change_tbl$observed %in% TRUE, na.rm = TRUE),
           n_group_nn_count_up = sum(group_nn_change_tbl$count_up %in% TRUE, na.rm = TRUE),
-          prop_group_nn_count_up = safe_fraction(sum(group_nn_change_tbl$count_up %in% TRUE, na.rm = TRUE), nrow(group_nn_change_tbl))
+          prop_group_nn_count_up = safe_divide(sum(group_nn_change_tbl$count_up %in% TRUE, na.rm = TRUE), nrow(group_nn_change_tbl))
         )
       }
     }

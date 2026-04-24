@@ -215,7 +215,11 @@ build_nn_fitness_stability_tables <- function(fit_tbl) {
     dplyr::arrange(parameter_label, patient_id, minobs, pm)
 
   weighted_empirical_tbl <- child_tbl %>%
-    dplyr::filter(parameter_label %in% c("nn_prior_empirical_censored_weighted", "nn_prior_empirical")) %>%
+    dplyr::filter(parameter_label %in% c(
+      "nn_prior_empirical_censored_weighted",
+      "nn_prior_empirical_two_shell",
+      "nn_prior_empirical"
+    )) %>%
     dplyr::select(patient_id, minobs, pm, parameter_label, k, bootstrap_mean, bootstrap_sd, bootstrap_iqr) %>%
     tidyr::pivot_wider(
       names_from = parameter_label,
@@ -223,27 +227,66 @@ build_nn_fitness_stability_tables <- function(fit_tbl) {
       names_sep = "__"
     )
 
-  if (nrow(weighted_empirical_tbl) &&
-      all(c(
-        "bootstrap_mean__nn_prior_empirical_censored_weighted",
-        "bootstrap_mean__nn_prior_empirical",
-        "bootstrap_sd__nn_prior_empirical_censored_weighted",
-        "bootstrap_sd__nn_prior_empirical",
-        "bootstrap_iqr__nn_prior_empirical_censored_weighted",
-        "bootstrap_iqr__nn_prior_empirical"
-      ) %in% names(weighted_empirical_tbl))) {
+  pair_specs <- tibble::tribble(
+    ~lhs_label, ~rhs_label, ~comparison_label,
+    "nn_prior_empirical_censored_weighted", "nn_prior_empirical", "weighted vs empirical",
+    "nn_prior_empirical_two_shell", "nn_prior_empirical", "empirical_two_shell vs empirical",
+    "nn_prior_empirical_censored_weighted", "nn_prior_empirical_two_shell", "weighted vs empirical_two_shell"
+  )
+
+  if (nrow(weighted_empirical_tbl)) {
+    pair_rows <- lapply(seq_len(nrow(pair_specs)), function(i) {
+      lhs_label <- pair_specs$lhs_label[[i]]
+      rhs_label <- pair_specs$rhs_label[[i]]
+      required_cols <- c(
+        paste0("bootstrap_mean__", lhs_label),
+        paste0("bootstrap_mean__", rhs_label),
+        paste0("bootstrap_sd__", lhs_label),
+        paste0("bootstrap_sd__", rhs_label),
+        paste0("bootstrap_iqr__", lhs_label),
+        paste0("bootstrap_iqr__", rhs_label)
+      )
+      if (!all(required_cols %in% names(weighted_empirical_tbl))) {
+        return(NULL)
+      }
+
+      weighted_empirical_tbl %>%
+        dplyr::transmute(
+          patient_id,
+          minobs,
+          pm,
+          k,
+          lhs_parameter_label = lhs_label,
+          rhs_parameter_label = rhs_label,
+          comparison_label = pair_specs$comparison_label[[i]],
+          lhs_bootstrap_mean = .data[[paste0("bootstrap_mean__", lhs_label)]],
+          rhs_bootstrap_mean = .data[[paste0("bootstrap_mean__", rhs_label)]],
+          lhs_bootstrap_sd = .data[[paste0("bootstrap_sd__", lhs_label)]],
+          rhs_bootstrap_sd = .data[[paste0("bootstrap_sd__", rhs_label)]],
+          lhs_bootstrap_iqr = .data[[paste0("bootstrap_iqr__", lhs_label)]],
+          rhs_bootstrap_iqr = .data[[paste0("bootstrap_iqr__", rhs_label)]],
+          mean_diff = lhs_bootstrap_mean - rhs_bootstrap_mean,
+          sd_ratio = lhs_bootstrap_sd / rhs_bootstrap_sd,
+          iqr_ratio = lhs_bootstrap_iqr / rhs_bootstrap_iqr
+        )
+    })
+    weighted_empirical_tbl <- dplyr::bind_rows(pair_rows)
+  }
+
+  if (nrow(weighted_empirical_tbl)) {
     weighted_empirical_tbl <- weighted_empirical_tbl %>%
       dplyr::mutate(
-        weighted_minus_empirical_mean =
-          bootstrap_mean__nn_prior_empirical_censored_weighted -
-          bootstrap_mean__nn_prior_empirical,
-        weighted_empirical_sd_ratio =
-          bootstrap_sd__nn_prior_empirical_censored_weighted /
-          bootstrap_sd__nn_prior_empirical,
-        weighted_empirical_iqr_ratio =
-          bootstrap_iqr__nn_prior_empirical_censored_weighted /
-          bootstrap_iqr__nn_prior_empirical
-      )
+        patient_id = factor(as.character(patient_id), levels = sort_pid_levels(patient_id)),
+        comparison_label = factor(
+          comparison_label,
+          levels = c(
+            "weighted vs empirical",
+            "empirical_two_shell vs empirical",
+            "weighted vs empirical_two_shell"
+          )
+        )
+      ) %>%
+      dplyr::arrange(comparison_label, patient_id, minobs, pm, k)
   }
 
   list(
@@ -268,7 +311,7 @@ save_nn_diagnostic_figures <- function(ctx,
       "NN identifiability class",
       "Weighted prior source fractions",
       "NN bootstrap stability by method",
-      "Weighted vs empirical NN SD ratio"
+      "Pairwise NN SD ratio comparisons"
     ),
     png_path = file.path(
       ctx$figures_dir,
@@ -344,17 +387,18 @@ save_nn_diagnostic_figures <- function(ctx,
   }
 
   if (nrow(nn_stability_weighted_empirical_tbl) &&
-      "weighted_empirical_sd_ratio" %in% names(nn_stability_weighted_empirical_tbl)) {
+      "sd_ratio" %in% names(nn_stability_weighted_empirical_tbl)) {
     ratio_tbl <- nn_stability_weighted_empirical_tbl %>%
-      dplyr::filter(is.finite(weighted_empirical_sd_ratio), weighted_empirical_sd_ratio > 0)
+      dplyr::filter(is.finite(sd_ratio), sd_ratio > 0)
     if (nrow(ratio_tbl)) {
-      p_ratio <- ggplot2::ggplot(ratio_tbl, ggplot2::aes(x = weighted_empirical_sd_ratio)) +
+      p_ratio <- ggplot2::ggplot(ratio_tbl, ggplot2::aes(x = sd_ratio)) +
         ggplot2::geom_vline(xintercept = 1, linetype = 2, color = "grey40") +
         ggplot2::geom_histogram(bins = 40, fill = "#74A9CF", color = "white") +
         ggplot2::scale_x_log10() +
-        ggplot2::labs(x = "Weighted / empirical NN bootstrap SD", y = "NN children") +
+        ggplot2::facet_wrap(~ comparison_label, ncol = 1, scales = "free_y") +
+        ggplot2::labs(x = "Pairwise NN bootstrap SD ratio", y = "NN children") +
         ggplot2::theme_bw(base_size = 11)
-      ggplot2::ggsave(artifact_tbl$png_path[artifact_tbl$artifact == "weighted_empirical_nn_sd_ratio"], p_ratio, width = 7, height = 4.5, dpi = 150)
+      ggplot2::ggsave(artifact_tbl$png_path[artifact_tbl$artifact == "weighted_empirical_nn_sd_ratio"], p_ratio, width = 8.5, height = 8.5, dpi = 150)
     }
   }
 

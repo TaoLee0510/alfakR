@@ -45,7 +45,7 @@ weighted_prior_cache_matches <- function(cached,
     return(FALSE)
   }
 
-  if (!identical(nn_prior, "empirical_censored_weighted")) {
+  if (!nn_prior %in% c("empirical_censored_weighted", "empirical_two_shell")) {
     return(TRUE)
   }
 
@@ -301,7 +301,7 @@ run_alfak_fit <- function(patient_id,
     " | parameter_label=", parameter_label,
     " | nn_prior=", nn_prior,
     " | grid=", nn_prior_grid_n,
-    if (identical(nn_prior, "empirical_censored_weighted")) paste0(
+    if (nn_prior %in% c("empirical_censored_weighted", "empirical_two_shell")) paste0(
       " | fit_subset=", nn_prior_fit_subset,
       " | zero_q=", signif(nn_prior_zero_exposure_quantile, 4),
       " | zero_scale=", signif(nn_prior_zero_weight_scale, 4),

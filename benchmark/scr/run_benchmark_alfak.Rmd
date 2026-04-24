@@ -14,7 +14,7 @@ params:
   patient_subset: !r character(0)
   minobs_values: [5, 10, 20]
   pm_values: [5e-05]
-  parameter_labels: ["nn_prior_empirical_censored", "nn_prior_empirical_censored_weighted", "nn_prior_none", "nn_prior_empirical"]
+  parameter_labels: ["nn_prior_empirical_censored", "nn_prior_empirical_censored_weighted", "nn_prior_empirical_two_shell", "nn_prior_none", "nn_prior_empirical"]
   n_cores: 9
   nboot: 45
   n0: 100000
@@ -195,9 +195,9 @@ if (nrow(all_sample_fit_index_tbl)) {
 
 retained_patient_tbl <- benchmark_run$retained_patient_tbl
 if (nrow(retained_patient_tbl)) {
-  emit_report_table(retained_patient_tbl, caption = "Common samples retained by all four methods; only these are shown in Samplewise Results")
+  emit_report_table(retained_patient_tbl, caption = "Common samples retained by all selected methods; only these are shown in Samplewise Results")
 } else {
-  emit_report_table(empty_note_tbl("No common retained samples are available yet."), caption = "Common samples retained by all four methods")
+  emit_report_table(empty_note_tbl("No common retained samples are available yet."), caption = "Common samples retained by all selected methods")
 }
 ```
 
@@ -250,6 +250,7 @@ if (nrow(nn_diagnostic_figure_artifact_tbl)) {
 
 ```{r nn-stability, results='asis'}
 nn_stability_case_tbl <- benchmark_run$nn_stability_case_tbl
+nn_stability_pairwise_tbl <- benchmark_run$nn_stability_weighted_empirical_tbl
 if (nrow(nn_stability_case_tbl)) {
   emit_report_table(
     nn_stability_case_tbl %>%
@@ -269,6 +270,26 @@ if (nrow(nn_stability_case_tbl)) {
 } else {
   emit_report_table(empty_note_tbl("No NN bootstrap stability diagnostics are available."), caption = "NN bootstrap stability by case")
 }
+
+nn_pairwise_availability_tbl <- tibble::tribble(
+  ~comparison_label,
+  "weighted vs empirical",
+  "empirical_two_shell vs empirical",
+  "weighted vs empirical_two_shell"
+) %>%
+  dplyr::left_join(
+    nn_stability_pairwise_tbl %>%
+      dplyr::count(comparison_label, name = "n_nn_children_compared"),
+    by = "comparison_label"
+  ) %>%
+  dplyr::mutate(
+    n_nn_children_compared = dplyr::coalesce(n_nn_children_compared, 0L),
+    comparison_available = dplyr::if_else(n_nn_children_compared > 0L, "yes", "no")
+  )
+emit_report_table(
+  nn_pairwise_availability_tbl,
+  caption = "Pairwise NN comparison availability"
+)
 
 if (nrow(nn_diagnostic_figure_artifact_tbl)) {
   emit_report_image_grid(

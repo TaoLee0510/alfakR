@@ -16,7 +16,8 @@ alfak(
   allow_noninteger_counts = FALSE,
   correct_efflux = FALSE,
   landscape_data_output = FALSE,
-  nn_prior = c("empirical_censored", "empirical_censored_weighted", "none", "empirical"),
+  nn_prior = c("empirical_censored", "empirical_censored_weighted",
+    "empirical_two_shell", "none", "empirical"),
   nn_prior_sd = NULL,
   nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
   nn_prior_grid_n = ALFAK_NN_PRIOR_CENSORED_GRID_POINTS,
@@ -34,6 +35,14 @@ alfak(
   nn_prior_two_step_support = c("none", "rescue"),
   nn_prior_two_step_support_min = 0.15,
   nn_prior_two_step_cap_floor = 0.3,
+  nn_two_shell_min_delta_n = 3L,
+  nn_two_shell_min_exposure = NULL,
+  nn_two_shell_min_observed_count = 1L,
+  nn_two_shell_max_weight_ratio = 1,
+  nn_two_shell_lambda = 1,
+  nn_two_shell_reuse_sd = NULL,
+  nn_two_shell_uncertainty_floor = NULL,
+  nn_two_shell_save_diagnostics = TRUE,
   krig_bootstrap_mode = c("marginal", "joint")
 )
 }
@@ -102,9 +111,16 @@ children, optionally screens very low-exposure zeros before fitting the
 prior, and when a bootstrap replicate has no observed neighbour children
 it first falls back to a weak sample-pooled prior learned from the same
 sample's observed neighbours before using no prior only as a final
-fallback. Weighted mode can also optionally use observed 2-step
-descendants to rescue otherwise weak zero-only latent children without
-changing the underlying single-step neighbour likelihood.
+fallback.
+\code{"empirical_two_shell"} is an opt-in sparse two-timepoint correction. It
+first obtains the usual one-step neighbour estimates, estimates supported
+two-step descendants from those one-step nodes, learns separate empirical
+delta distributions for the 0->1 and 1->2 shells, then re-estimates each
+one-step neighbour once with the direct likelihood, inward frequent-parent
+prior, and an uncertainty-inflated outward two-step prior. It does not
+alternate repeated smoothing passes. If supported two-step evidence is
+absent or too small, the replicate falls back to the weighted censored
+one-step behaviour.
 \code{"none"} disables the latent-neighbour prior contribution.
 \code{"empirical"} opt-in uses the empirical child-minus-parent prior estimated
 from observed neighbours.
@@ -133,44 +149,45 @@ only when \code{nn_prior = "empirical_censored_weighted"} and
 \code{nn_prior_fit_subset = "hybrid"}. If supplied, this is the projected
 child-exposure threshold used to retain zero-only children in the prior fit.}
 
-\item{nn_prior_zero_exposure_quantile}{Numeric scalar in \code{[0, 1]} used only
-for weighted hybrid fitting when \code{nn_prior_zero_exposure_min} is
-\code{NULL} and enough observed neighbour children are available. The threshold
-is the corresponding quantile of the observed projected child exposures.}
+\item{nn_prior_zero_exposure_quantile}{Numeric scalar in \verb{[0, 1]} used only
+for weighted hybrid fitting when \code{nn_prior_zero_exposure_min} is \code{NULL} and
+enough observed neighbour children are available. The threshold is the
+corresponding quantile of the observed projected child exposures.}
 
-\item{nn_prior_zero_weight_scale}{Numeric scalar in \code{[0, 1]} giving the
-baseline downweighting applied to zero-only latent children in weighted mode
-before the global zero-weight cap.}
+\item{nn_prior_zero_weight_scale}{Numeric scalar in \verb{[0, 1]} giving the
+baseline downweighting applied to zero-only latent children in weighted
+mode before the global zero-weight cap.}
 
-\item{nn_prior_zero_weight_cap_ratio}{Optional non-negative numeric scalar used
-only in weighted mode. When supplied, the total zero-child weight is capped at
-this ratio times the number of observed neighbour children. When \code{NULL},
-a data-adaptive cap is used based on the retained zero-only children's
-effective evidence mass rather than their raw count alone.}
+\item{nn_prior_zero_weight_cap_ratio}{Optional non-negative numeric scalar
+used only in weighted mode. When supplied, the total zero-child weight is
+capped at this ratio times the number of observed neighbour children.
+When \code{NULL}, a data-adaptive cap is used based on the retained zero-only
+children's effective evidence mass rather than their raw count alone.}
 
 \item{nn_prior_zero_birth_fallback_weight}{Optional numeric scalar in
-\code{[0, 1]} kept as a compatibility alias for
+\verb{[0, 1]} kept as a compatibility alias for
 \code{nn_prior_zero_birth_child_floor} in weighted mode. When supplied, it
 overrides \code{nn_prior_zero_birth_child_floor}.}
 
-\item{nn_prior_zero_birth_child_floor}{Numeric scalar in \code{[0, 1]} used
-only in weighted mode. This is the minimum child-level birth-reliability
-multiplier applied when a zero-only child's parent support is entirely driven
-by fallback-imputed birth times.}
+\item{nn_prior_zero_birth_child_floor}{Numeric scalar in \verb{[0, 1]} used only
+in weighted mode. This is the minimum child-level birth-reliability
+multiplier applied when a zero-only child's parent support is entirely
+driven by fallback-imputed birth times.}
 
-\item{nn_prior_zero_birth_child_shape}{Non-negative numeric scalar used only in
-weighted mode. Larger values make the child-level birth-reliability
+\item{nn_prior_zero_birth_child_shape}{Non-negative numeric scalar used only
+in weighted mode. Larger values make the child-level birth-reliability
 multiplier decay more sharply as fallback burden increases.}
 
-\item{nn_prior_zero_birth_replicate_floor}{Numeric scalar in \code{[0, 1]} used
-only in weighted mode. This is the minimum replicate-level birth-reliability
-multiplier when the retained zero-only children in a bootstrap replicate are
-collectively dominated by fallback-imputed parent birth times.}
+\item{nn_prior_zero_birth_replicate_floor}{Numeric scalar in \verb{[0, 1]} used
+only in weighted mode. This is the minimum replicate-level
+birth-reliability multiplier when the retained zero-only children in a
+bootstrap replicate are collectively dominated by fallback-imputed parent
+birth times.}
 
 \item{nn_prior_zero_birth_replicate_shape}{Non-negative numeric scalar used
 only in weighted mode. Larger values make the replicate-level
-birth-reliability multiplier decay more sharply as the replicate-wide fallback
-burden increases.}
+birth-reliability multiplier decay more sharply as the replicate-wide
+fallback burden increases.}
 
 \item{nn_prior_hybrid_min_obs}{Positive integer used only when
 \code{nn_prior = "empirical_censored_weighted"} and
@@ -181,23 +198,58 @@ relies on weighting, adaptive capping, and optional 2-step rescue.}
 
 \item{nn_prior_two_step_support}{Character; weighted-mode only control for
 whether observed 2-step descendants can rescue zero-only latent neighbour
-children. \code{"none"} (default) ignores 2-step observed support.
-\code{"rescue"} uses observed descendants one mutation away from a zero-only
-child to soften hybrid screening and strengthen that child's effective
-evidence mass and weight without changing the single-step neighbour
-objective itself.}
+children. \code{"none"} (default) ignores 2-step observed support. \code{"rescue"}
+uses observed descendants one mutation away from a zero-only child to
+soften hybrid screening and strengthen that child's effective evidence mass
+and weight without changing the single-step neighbour objective itself.}
 
-\item{nn_prior_two_step_support_min}{Numeric scalar in \code{[0, 1]} used only
+\item{nn_prior_two_step_support_min}{Numeric scalar in \verb{[0, 1]} used only
 when \code{nn_prior = "empirical_censored_weighted"} and
 \code{nn_prior_two_step_support = "rescue"}. In hybrid fitting, a zero-only
 child is retained if either its projected exposure passes the exposure
 threshold or its 2-step support score reaches this minimum.}
 
-\item{nn_prior_two_step_cap_floor}{Numeric scalar in \code{[0, 1]} used only
-when \code{nn_prior = "empirical_censored_weighted"} and
-\code{nn_prior_two_step_support = "rescue"}. This sets the minimum fraction of
-a fully supported 2-step rescue score that can contribute to the retained
+\item{nn_prior_two_step_cap_floor}{Numeric scalar in \verb{[0, 1]} used only when
+\code{nn_prior = "empirical_censored_weighted"} and
+\code{nn_prior_two_step_support = "rescue"}. This sets the minimum fraction of a
+fully supported 2-step rescue score that can contribute to the retained
 zero-child support term used in effective-mass and weight calculations.}
+
+\item{nn_two_shell_min_delta_n}{Positive integer used only when
+\code{nn_prior = "empirical_two_shell"}. It is the minimum number of usable
+path-weighted 1->2 shell deltas required before fitting the outward prior;
+otherwise the replicate falls back to the inward one-step estimate.}
+
+\item{nn_two_shell_min_exposure}{Optional non-negative numeric scalar used
+only for \code{nn_prior = "empirical_two_shell"}. Unobserved two-step candidates
+are retained only when their expected exposure reaches this threshold. When
+\code{NULL}, an adaptive threshold based on the projected one-step exposure
+distribution is used and reported in diagnostics.}
+
+\item{nn_two_shell_min_observed_count}{Non-negative integer count threshold
+used only for \code{nn_prior = "empirical_two_shell"}. Two-step candidates with
+at least this total observed count are retained automatically.}
+
+\item{nn_two_shell_max_weight_ratio}{Non-negative numeric scalar used only
+for \code{nn_prior = "empirical_two_shell"}. It caps each one-step node's total
+outward prior weight relative to its inward parent-prior weight.}
+
+\item{nn_two_shell_lambda}{Non-negative numeric scalar multiplying the
+outward two-step prior term.}
+
+\item{nn_two_shell_reuse_sd}{Optional non-negative numeric scalar. It inflates
+the effective standard deviation of the outward prior because provisional
+two-step estimates reuse the same count data. When \code{NULL}, a conservative
+replicate-specific value based on \code{nn_prior_sd_floor} and the estimated
+1->2 prior scale is used.}
+
+\item{nn_two_shell_uncertainty_floor}{Optional non-negative numeric scalar.
+Minimum standard error assigned to provisional two-step fitness estimates.
+When \code{NULL}, a conservative package default is used.}
+
+\item{nn_two_shell_save_diagnostics}{Logical; if \code{TRUE} and
+\code{nn_prior = "empirical_two_shell"}, \code{alfak()} saves
+\code{nn_prior_diagnostics.Rds} containing replicate and per-node diagnostics.}
 
 \item{krig_bootstrap_mode}{Character; \code{"marginal"} (default) samples
 bootstrap fitness values independently by column, matching the original
@@ -261,7 +313,28 @@ print(paste("Cross-validation R-squared:", result_r_squared))
 # Check for created files
 list.files(temp_output_dir)
 
+# Sparse two-timepoint use: opt into the two-shell correction and inspect
+# diagnostics if the outward term falls back or has little effect.
+sparse_counts <- matrix(
+  c(80, 60,
+    5, 0,
+    0, 4),
+  nrow = 3,
+  byrow = TRUE,
+  dimnames = list(c("2.2.2", "2.2.3", "2.2.4"), c("0", "1"))
+)
+sparse_dir <- tempfile("alfak_two_shell_")
+alfak(
+  yi = list(x = sparse_counts, dt = 1),
+  outdir = sparse_dir,
+  minobs = 20,
+  nboot = 5,
+  nn_prior = "empirical_two_shell"
+)
+readRDS(file.path(sparse_dir, "nn_prior_diagnostics.Rds"))$replicate
+
 # Clean up
 unlink(temp_output_dir, recursive = TRUE)
+unlink(sparse_dir, recursive = TRUE)
 }
 }

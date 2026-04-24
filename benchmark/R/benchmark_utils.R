@@ -33,6 +33,15 @@ pm_to_label <- function(pm) {
   format(pm, scientific = FALSE, trim = TRUE)
 }
 
+safe_divide <- function(num, den) {
+  num <- suppressWarnings(as.numeric(num))
+  den <- suppressWarnings(as.numeric(den))
+  if (!is.finite(num) || !is.finite(den) || den <= 0) {
+    return(NA_real_)
+  }
+  num / den
+}
+
 write_tsv_base <- function(x, path) {
   utils::write.table(
     x,

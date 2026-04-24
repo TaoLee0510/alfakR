@@ -528,13 +528,13 @@ build_focus_observed_latent_decomposition <- function(bundle_list,
       dplyr::summarise(
         n_states = dplyr::n(),
         n_observed_states = sum(observed %in% TRUE, na.rm = TRUE),
-        prop_observed = safe_fraction(sum(observed %in% TRUE, na.rm = TRUE), dplyr::n()),
+        prop_observed = safe_divide(sum(observed %in% TRUE, na.rm = TRUE), dplyr::n()),
         mean_landscape_mean = mean(landscape_mean, na.rm = TRUE),
         median_landscape_mean = stats::median(landscape_mean, na.rm = TRUE),
         mean_landscape_sd = mean(landscape_sd, na.rm = TRUE),
-        prop_count_up_observed = safe_fraction(sum(count_up %in% TRUE & observed %in% TRUE, na.rm = TRUE), sum(observed %in% TRUE, na.rm = TRUE)),
-        prop_prop_up_observed = safe_fraction(sum(prop_direction == "up" & observed %in% TRUE, na.rm = TRUE), sum(observed %in% TRUE, na.rm = TRUE)),
-        prop_prop_down_observed = safe_fraction(sum(prop_direction == "down" & observed %in% TRUE, na.rm = TRUE), sum(observed %in% TRUE, na.rm = TRUE)),
+        prop_count_up_observed = safe_divide(sum(count_up %in% TRUE & observed %in% TRUE, na.rm = TRUE), sum(observed %in% TRUE, na.rm = TRUE)),
+        prop_prop_up_observed = safe_divide(sum(prop_direction == "up" & observed %in% TRUE, na.rm = TRUE), sum(observed %in% TRUE, na.rm = TRUE)),
+        prop_prop_down_observed = safe_divide(sum(prop_direction == "down" & observed %in% TRUE, na.rm = TRUE), sum(observed %in% TRUE, na.rm = TRUE)),
         .groups = "drop"
       ) %>%
       dplyr::arrange(match(parameter_label, parameter_levels), match(state_class, focus_state_class_levels()))
@@ -555,14 +555,14 @@ build_focus_observed_latent_decomposition <- function(bundle_list,
         n_unique_parents = dplyr::n_distinct(parent_k),
         n_unique_children = dplyr::n_distinct(child_k),
         n_beneficial = sum(beneficial %in% TRUE, na.rm = TRUE),
-        beneficial_proportion = safe_fraction(sum(beneficial %in% TRUE, na.rm = TRUE), sum(edge_valid %in% TRUE, na.rm = TRUE)),
+        beneficial_proportion = safe_divide(sum(beneficial %in% TRUE, na.rm = TRUE), sum(edge_valid %in% TRUE, na.rm = TRUE)),
         mean_delta = mean(delta[edge_valid %in% TRUE], na.rm = TRUE),
         median_delta = stats::median(delta[edge_valid %in% TRUE], na.rm = TRUE),
         mean_abs_delta = mean(abs(delta[edge_valid %in% TRUE]), na.rm = TRUE),
         positive_delta_n = sum(delta > 0, na.rm = TRUE),
         negative_delta_n = sum(delta < 0, na.rm = TRUE),
-        prop_child_observed = safe_fraction(sum(child_observed %in% TRUE, na.rm = TRUE), dplyr::n()),
-        prop_child_count_up_observed = safe_fraction(sum(child_count_up %in% TRUE & child_observed %in% TRUE, na.rm = TRUE), sum(child_observed %in% TRUE, na.rm = TRUE)),
+        prop_child_observed = safe_divide(sum(child_observed %in% TRUE, na.rm = TRUE), dplyr::n()),
+        prop_child_count_up_observed = safe_divide(sum(child_count_up %in% TRUE & child_observed %in% TRUE, na.rm = TRUE), sum(child_observed %in% TRUE, na.rm = TRUE)),
         .groups = "drop"
       ) %>%
       dplyr::arrange(match(parameter_label, parameter_levels), match(edge_class, focus_edge_class_levels()))
