@@ -34,6 +34,7 @@ params:
   nn_prior_two_step_support: "rescue"
   nn_prior_two_step_support_min: 0.15
   nn_prior_two_step_cap_floor: 0.30
+  cohort_transition_version: "contextual"
   include_posterior_comparison: true
   top_shift_n: 15
   run_nn_identifiability: true

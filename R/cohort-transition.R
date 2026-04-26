@@ -509,6 +509,10 @@ cohort_transition_delta_se <- function(delta_values, fallback = ALFAK_NN_PRIOR_S
   if (!is.finite(se) || se <= 0) fallback else max(se, fallback)
 }
 
+`%||%` <- function(x, y) {
+  if (is.null(x) || !length(x) || (length(x) == 1L && is.na(x))) y else x
+}
+
 #' Extract cohort transition records from two-shell fits
 #'
 #' @param fit_dirs Character vector of two-shell fit directories.
@@ -1022,6 +1026,15 @@ aggregate_cohort_transition_records_by_patient <- function(records,
   out
 }
 
+#' Compute v2 class-specific borrowing controls
+#'
+#' @param effect_class Transition group class.
+#' @param cohort_transition_lambda_consistent_deleterious,cohort_transition_lambda_consistent_neutral,cohort_transition_lambda_consistent_beneficial,cohort_transition_lambda_context_dependent,cohort_transition_lambda_high_variable,cohort_transition_lambda_sparse_unknown,cohort_transition_lambda_global_fallback
+#'   Class-specific borrowing multipliers.
+#' @param cohort_transition_sd_multiplier_consistent_deleterious,cohort_transition_sd_multiplier_consistent_neutral,cohort_transition_sd_multiplier_consistent_beneficial,cohort_transition_sd_multiplier_context_dependent,cohort_transition_sd_multiplier_high_variable,cohort_transition_sd_multiplier_sparse_unknown,cohort_transition_sd_multiplier_global_fallback
+#'   Class-specific prior SD multipliers.
+#' @return A list with lambda, SD multiplier, and use flags.
+#' @export
 compute_class_specific_borrowing <- function(effect_class,
                                              cohort_transition_lambda_consistent_deleterious = 0.50,
                                              cohort_transition_lambda_consistent_neutral = 0.25,
@@ -1068,6 +1081,19 @@ compute_class_specific_borrowing <- function(effect_class,
   )
 }
 
+#' Compute a v2 transition group class
+#'
+#' @param k,eff_k,effective_observed Observed patient count, effective patient
+#'   count, and effective observed evidence.
+#' @param mu,se_mu Weighted group mean and standard error.
+#' @param tau,i2,sign_consistency Heterogeneity metrics.
+#' @param cohort_transition_min_patients_consistent,cohort_transition_min_effective_patients,cohort_transition_min_effective_observed
+#'   Minimum support thresholds.
+#' @param cohort_transition_effect_threshold,cohort_transition_sign_consistency_threshold,cohort_transition_high_heterogeneity_i2,cohort_transition_high_between_patient_sd
+#'   Classification thresholds.
+#' @return A list with effect/heterogeneity class and normal-approximation
+#'   effect probabilities.
+#' @export
 compute_transition_group_class <- function(k,
                                            eff_k,
                                            effective_observed,
@@ -1934,6 +1960,16 @@ cohort_transition_build_prior_tables_v2 <- function(patient_group_summaries,
   list(global_prior = global[1L, , drop = FALSE], group_priors = group_priors, all_group_priors = classes)
 }
 
+#' Estimate a shrunk patient-specific transition shift
+#'
+#' @param patient_records Patient-level observed transition summaries.
+#' @param prior Cohort transition prior.
+#' @param cohort_transition_patient_shift_min_records Minimum observed records
+#'   needed to estimate a nonzero shift.
+#' @param cohort_transition_patient_shift_shrinkage_sd Shrinkage SD for the
+#'   patient-level residual shift.
+#' @return A one-row data frame with the shrunk shift and reliability.
+#' @export
 estimate_patient_transition_shift <- function(patient_records,
                                               prior,
                                               cohort_transition_patient_shift_min_records = 3L,
@@ -2257,20 +2293,40 @@ learn_cohort_transition_prior_v2 <- function(records,
 
 #' Learn a cohort-level transition-effect prior
 #'
-#' Version `"v2"` is the default and aggregates bootstrap/path records to
-#' patient-level evidence before classifying each transition group for
-#' selective borrowing. Version `"v1"` preserves the original direct cohort
-#' prior behavior for compatibility.
+#' Version `"v2"` remains the lower-level default for backward compatibility and
+#' aggregates bootstrap/path records to patient-level evidence before
+#' classifying each transition group for selective borrowing. Version
+#' `"contextual"` creates a context-aware evidence-bank prior on Delta fitness
+#' conditioned on parent karyotype profile shape, copy-number area, CNA burden,
+#' changed chromosome, local copy state, and event similarity. Version `"v1"`
+#' preserves the original direct cohort-prior behavior for compatibility.
 #'
 #' @inheritParams extract_cohort_transition_records
 #' @param records Transition records produced by `extract_cohort_transition_records()`.
-#' @param cohort_transition_version Prior-learning version, `"v2"` or `"v1"`.
+#' @param leave_one_patient_out Whether to store/use leave-one-patient-out
+#'   evidence for patient refits.
+#' @param cohort_transition_version Prior-learning version, `"contextual"`,
+#'   `"v2"`, or `"v1"`.
+#' @param cohort_transition_min_patients_per_group Minimum patients required for
+#'   a v1/v2 group prior before fallback.
+#' @param cohort_transition_min_effective_n Minimum effective evidence for
+#'   v1/v2 group priors.
+#' @param cohort_transition_sd_floor Minimum transition-effect SD.
+#' @param cohort_transition_patient_sd_floor Patient heterogeneity SD floor.
+#' @param cohort_transition_global_fallback Whether unsupported groups can fall
+#'   back to a broad global prior.
+#' @param cohort_transition_zero_weight_cap_ratio Cap on zero-censoring evidence
+#'   weight.
+#' @param cohort_transition_zero_expected_count_cap Cap on zero expected-count
+#'   influence in v1 compatibility fitting.
+#' @param cohort_transition_zero_mean_shift_cap Maximum zero-censoring shift of
+#'   a group mean in v1 compatibility fitting.
 #' @return A cohort-transition prior object.
 #' @export
 learn_cohort_transition_prior <- function(records,
                                           leave_one_patient_out = TRUE,
                                           grouping = c("gain_loss", "gain_loss_chr", "gain_loss_chr_burden", "exact_event"),
-                                          cohort_transition_version = c("v2", "v1"),
+                                          cohort_transition_version = c("v2", "contextual", "v1"),
                                           cohort_transition_min_patients_per_group = 2L,
                                           cohort_transition_min_effective_n = 3L,
                                           cohort_transition_sd_floor = 0.05,
@@ -2282,6 +2338,14 @@ learn_cohort_transition_prior <- function(records,
                                           ...) {
   grouping <- match.arg(grouping)
   cohort_transition_version <- match.arg(cohort_transition_version)
+  if (identical(cohort_transition_version, "contextual")) {
+    return(learn_cohort_transition_prior_contextual(
+      records = records,
+      leave_one_patient_out = leave_one_patient_out,
+      grouping = grouping,
+      ...
+    ))
+  }
   if (identical(cohort_transition_version, "v1")) {
     return(learn_cohort_transition_prior_v1(
       records = records,
@@ -2327,8 +2391,8 @@ resolve_cohort_transition_prior_object <- function(cohort_transition_prior = NUL
   if (is.null(prior)) {
     stop("`nn_prior = \"cohort_transition\"` requires `cohort_transition_prior` or `cohort_transition_prior_path`.", call. = FALSE)
   }
-  if (!is.list(prior) || !(prior$version %in% c("cohort_transition_v1", "cohort_transition_v2"))) {
-    stop("`cohort_transition_prior` must be a cohort_transition_v1 or cohort_transition_v2 prior object.", call. = FALSE)
+  if (!is.list(prior) || !(prior$version %in% c("cohort_transition_v1", "cohort_transition_v2", "cohort_transition_contextual_v1"))) {
+    stop("`cohort_transition_prior` must be a cohort_transition_v1, cohort_transition_v2, or cohort_transition_contextual_v1 prior object.", call. = FALSE)
   }
   if (identical(prior$version, "cohort_transition_v1")) {
     warning("Using a cohort_transition_v1 prior object; v2 selective borrowing is preferred.", call. = FALSE)
@@ -2342,6 +2406,14 @@ resolve_cohort_transition_prior_object <- function(cohort_transition_prior = NUL
 }
 
 cohort_transition_prior_for_patient <- function(prior, patient_id = NULL) {
+  if (identical(prior$version, "cohort_transition_contextual_v1")) {
+    if (isTRUE(prior$leave_one_patient_out) &&
+        (is.null(patient_id) || length(patient_id) != 1L || !nzchar(patient_id))) {
+      stop("`cohort_transition_patient_id` is required for leave-one-patient-out contextual cohort transition priors.", call. = FALSE)
+    }
+    prior$target_patient_id <- if (is.null(patient_id)) NA_character_ else as.character(patient_id)
+    return(prior)
+  }
   if (isTRUE(prior$leave_one_patient_out) && length(prior$loo_priors)) {
     if (is.null(patient_id) || !nzchar(patient_id)) {
       stop("`cohort_transition_patient_id` is required for leave-one-patient-out cohort transition priors.", call. = FALSE)
@@ -2456,6 +2528,1431 @@ lookup_cohort_transition_group_prior <- function(prior_use, parent_karyotype, ch
     use_for_observed = isTRUE(row$use_for_observed[1]),
     use_for_low_information = isTRUE(row$use_for_low_information[1]),
     parsed = parsed
+  )
+}
+
+cohort_context_as_cn_vector <- function(karyotype) {
+  if (is.numeric(karyotype)) {
+    vec <- as.numeric(karyotype)
+    if (!length(vec) || any(!is.finite(vec))) {
+      stop("Numeric karyotypes must contain finite copy-number values.", call. = FALSE)
+    }
+    return(vec)
+  }
+  if (is.character(karyotype) && length(karyotype) == 1L && nzchar(karyotype)) {
+    return(as.numeric(parse_karyotype_ids(karyotype)[1, ]))
+  }
+  stop("`karyotype` must be a single karyotype string or numeric copy-number vector.", call. = FALSE)
+}
+
+cohort_context_karyotype_label <- function(karyotype) {
+  if (is.numeric(karyotype)) {
+    paste(as.numeric(karyotype), collapse = ".")
+  } else {
+    as.character(karyotype)[1]
+  }
+}
+
+cohort_context_profile_vector <- function(cn_vector,
+                                          profile_transform = c("mass", "centered", "zscore", "raw"),
+                                          chromosome_weights = NULL) {
+  profile_transform <- match.arg(profile_transform)
+  cn <- as.numeric(cn_vector)
+  if (is.null(chromosome_weights)) {
+    chromosome_weights <- rep(1, length(cn))
+  }
+  chromosome_weights <- as.numeric(chromosome_weights)
+  if (length(chromosome_weights) != length(cn) || any(!is.finite(chromosome_weights)) || any(chromosome_weights < 0)) {
+    stop("`chromosome_weights` must be a non-negative numeric vector aligned with the karyotype.", call. = FALSE)
+  }
+  weighted_cn <- cn * chromosome_weights
+  if (identical(profile_transform, "mass")) {
+    total <- sum(weighted_cn)
+    if (!is.finite(total) || total <= 0) {
+      return(rep(1 / length(cn), length(cn)))
+    }
+    return(weighted_cn / total)
+  }
+  if (identical(profile_transform, "centered")) {
+    return(cn - mean(cn))
+  }
+  if (identical(profile_transform, "zscore")) {
+    sd_cn <- stats::sd(cn)
+    if (!is.finite(sd_cn) || sd_cn <= 0) {
+      return(rep(0, length(cn)))
+    }
+    return((cn - mean(cn)) / sd_cn)
+  }
+  cn
+}
+
+cohort_context_gini <- function(x) {
+  x <- as.numeric(x)
+  x <- x[is.finite(x)]
+  if (!length(x)) return(NA_real_)
+  if (any(x < 0)) x <- x - min(x)
+  sx <- sum(x)
+  if (!is.finite(sx) || sx <= 0) return(0)
+  x <- sort(x)
+  n <- length(x)
+  sum((2 * seq_len(n) - n - 1) * x) / (n * sx)
+}
+
+#' Compute karyotype copy-number profile features
+#'
+#' @param karyotype Single karyotype string such as `"2.2.3"` or a numeric
+#'   copy-number vector.
+#' @param baseline_ploidy Copy-number baseline used for CNA burden.
+#' @param chromosome_weights Optional non-negative chromosome weights.
+#' @param profile_transform Profile representation used by contextual matching.
+#' @return A one-row data frame with scalar fields and list-columns containing
+#'   copy-number/profile vectors.
+#' @export
+compute_karyotype_profile_features <- function(karyotype,
+                                               baseline_ploidy = 2,
+                                               chromosome_weights = NULL,
+                                               profile_transform = c("mass", "centered", "zscore", "raw")) {
+  profile_transform <- match.arg(profile_transform)
+  validate_positive_finite(baseline_ploidy, "baseline_ploidy")
+  cn <- cohort_context_as_cn_vector(karyotype)
+  label <- cohort_context_karyotype_label(karyotype)
+  if (is.null(chromosome_weights)) {
+    chromosome_weights <- rep(1, length(cn))
+  }
+  if (length(chromosome_weights) != length(cn)) {
+    stop("`chromosome_weights` must have the same length as the karyotype vector.", call. = FALSE)
+  }
+  total_cn <- sum(cn)
+  mass <- cohort_context_profile_vector(cn, "mass", chromosome_weights)
+  centered <- cohort_context_profile_vector(cn, "centered", chromosome_weights)
+  zscore <- cohort_context_profile_vector(cn, "zscore", chromosome_weights)
+  transformed <- cohort_context_profile_vector(cn, profile_transform, chromosome_weights)
+  entropy <- {
+    p <- mass[mass > 0 & is.finite(mass)]
+    if (length(p)) -sum(p * log(p)) else NA_real_
+  }
+  data.frame(
+    karyotype = label,
+    n_chr = length(cn),
+    cn_vector = I(list(cn)),
+    total_cn = total_cn,
+    mean_cn = mean(cn),
+    var_cn = if (length(cn) > 1L) stats::var(cn) else 0,
+    sd_cn = if (length(cn) > 1L) stats::sd(cn) else 0,
+    min_cn = min(cn),
+    max_cn = max(cn),
+    cna_burden = sum(abs(cn - baseline_ploidy)),
+    n_gain_chr = sum(cn > baseline_ploidy),
+    n_loss_chr = sum(cn < baseline_ploidy),
+    profile_entropy = entropy,
+    profile_gini = cohort_context_gini(cn),
+    profile_mass_vector = I(list(mass)),
+    centered_profile_vector = I(list(centered)),
+    zscore_profile_vector = I(list(zscore)),
+    context_profile_vector = I(list(transformed)),
+    stringsAsFactors = FALSE
+  )
+}
+
+#' Compute transition context features
+#'
+#' @param parent_karyotype Parent karyotype string or numeric vector.
+#' @param child_karyotype Child karyotype string or numeric vector.
+#' @param parent_fitness Optional patient-specific parent fitness.
+#' @inheritParams compute_karyotype_profile_features
+#' @return A one-row data frame with transition and background features.
+#' @export
+compute_transition_context_features <- function(parent_karyotype,
+                                                child_karyotype,
+                                                parent_fitness = NA_real_,
+                                                baseline_ploidy = 2,
+                                                chromosome_weights = NULL,
+                                                profile_transform = "mass") {
+  parent_vec <- cohort_context_as_cn_vector(parent_karyotype)
+  child_vec <- cohort_context_as_cn_vector(child_karyotype)
+  if (length(parent_vec) != length(child_vec)) {
+    stop("Parent and child karyotypes must have matching dimensions.", call. = FALSE)
+  }
+  parent_label <- cohort_context_karyotype_label(parent_karyotype)
+  child_label <- cohort_context_karyotype_label(child_karyotype)
+  parent_feat <- compute_karyotype_profile_features(
+    parent_vec,
+    baseline_ploidy = baseline_ploidy,
+    chromosome_weights = chromosome_weights,
+    profile_transform = profile_transform
+  )
+  child_feat <- compute_karyotype_profile_features(
+    child_vec,
+    baseline_ploidy = baseline_ploidy,
+    chromosome_weights = chromosome_weights,
+    profile_transform = profile_transform
+  )
+  diff_vec <- child_vec - parent_vec
+  changed <- which(diff_vec != 0)
+  transition_chr <- if (length(changed) == 1L) changed else NA_integer_
+  transition_direction <- if (length(changed) == 1L && diff_vec[changed] > 0) {
+    "gain"
+  } else if (length(changed) == 1L && diff_vec[changed] < 0) {
+    "loss"
+  } else {
+    "complex"
+  }
+  transition_size <- sum(abs(diff_vec))
+  parent_z <- parent_feat$zscore_profile_vector[[1]]
+  changed_parent_copy <- if (length(changed) == 1L) parent_vec[changed] else NA_real_
+  changed_child_copy <- if (length(changed) == 1L) child_vec[changed] else NA_real_
+  changed_parent_z <- if (length(changed) == 1L) parent_z[changed] else NA_real_
+  changed_child_z <- if (length(changed) == 1L) child_feat$zscore_profile_vector[[1]][changed] else NA_real_
+  data.frame(
+    parent_karyotype = parent_label,
+    child_karyotype = child_label,
+    transition_chr = transition_chr,
+    transition_direction = transition_direction,
+    transition_size = transition_size,
+    is_one_step = isTRUE(length(changed) == 1L && abs(diff_vec[changed]) == 1),
+    parent_total_cn = parent_feat$total_cn,
+    child_total_cn = child_feat$total_cn,
+    delta_total_cn = child_feat$total_cn - parent_feat$total_cn,
+    parent_burden = parent_feat$cna_burden,
+    child_burden = child_feat$cna_burden,
+    delta_burden = child_feat$cna_burden - parent_feat$cna_burden,
+    parent_mean_cn = parent_feat$mean_cn,
+    parent_sd_cn = parent_feat$sd_cn,
+    parent_cna_burden = parent_feat$cna_burden,
+    child_cna_burden = child_feat$cna_burden,
+    parent_cn_vector = I(list(parent_vec)),
+    child_cn_vector = I(list(child_vec)),
+    parent_profile_mass = I(list(parent_feat$profile_mass_vector[[1]])),
+    child_profile_mass = I(list(child_feat$profile_mass_vector[[1]])),
+    parent_context_profile = I(list(parent_feat$context_profile_vector[[1]])),
+    child_context_profile = I(list(child_feat$context_profile_vector[[1]])),
+    changed_chr_parent_copy = changed_parent_copy,
+    changed_chr_child_copy = changed_child_copy,
+    changed_chr_parent_zscore = changed_parent_z,
+    changed_chr_child_zscore = changed_child_z,
+    changed_chr_is_peak = isTRUE(length(changed) == 1L && parent_vec[changed] == max(parent_vec)),
+    changed_chr_is_valley = isTRUE(length(changed) == 1L && parent_vec[changed] == min(parent_vec)),
+    parent_fitness = parent_fitness,
+    parent_fitness_bin = if (is.finite(parent_fitness)) {
+      cut(parent_fitness, breaks = c(-Inf, -0.05, 0.05, Inf), labels = c("low", "near_zero", "high"))[1]
+    } else {
+      NA
+    },
+    stringsAsFactors = FALSE
+  )
+}
+
+#' Compute distance between karyotype profile vectors
+#'
+#' @param profile_a,profile_b Numeric profile vectors.
+#' @param method Distance method.
+#' @param chromosome_weights Optional non-negative weights.
+#' @return A finite non-negative distance; Hellinger and Jensen-Shannon are
+#'   computed on normalized mass profiles.
+#' @export
+karyotype_profile_distance <- function(profile_a,
+                                       profile_b,
+                                       method = c("hellinger", "jensen_shannon", "cosine", "euclidean", "manhattan"),
+                                       chromosome_weights = NULL) {
+  method <- match.arg(method)
+  a <- as.numeric(profile_a)
+  b <- as.numeric(profile_b)
+  if (length(a) != length(b)) {
+    return(Inf)
+  }
+  if (is.null(chromosome_weights)) chromosome_weights <- rep(1, length(a))
+  chromosome_weights <- as.numeric(chromosome_weights)
+  if (length(chromosome_weights) != length(a)) {
+    stop("`chromosome_weights` must match the profile length.", call. = FALSE)
+  }
+  ok <- is.finite(a) & is.finite(b) & is.finite(chromosome_weights) & chromosome_weights >= 0
+  if (!all(ok)) {
+    a <- a[ok]
+    b <- b[ok]
+    chromosome_weights <- chromosome_weights[ok]
+  }
+  if (!length(a)) return(Inf)
+  normalize_mass <- function(x) {
+    x <- pmax(0, x * chromosome_weights)
+    sx <- sum(x)
+    if (!is.finite(sx) || sx <= 0) rep(1 / length(x), length(x)) else x / sx
+  }
+  d <- switch(
+    method,
+    hellinger = {
+      pa <- normalize_mass(a)
+      pb <- normalize_mass(b)
+      sqrt(sum((sqrt(pa) - sqrt(pb))^2) / 2)
+    },
+    jensen_shannon = {
+      eps <- 1e-12
+      pa <- pmax(normalize_mass(a), eps)
+      pb <- pmax(normalize_mass(b), eps)
+      pa <- pa / sum(pa)
+      pb <- pb / sum(pb)
+      m <- 0.5 * (pa + pb)
+      sqrt(0.5 * sum(pa * log(pa / m)) + 0.5 * sum(pb * log(pb / m)))
+    },
+    cosine = {
+      aw <- a * chromosome_weights
+      bw <- b * chromosome_weights
+      denom <- sqrt(sum(aw^2)) * sqrt(sum(bw^2))
+      if (!is.finite(denom) || denom <= 0) 1 else max(0, 1 - sum(aw * bw) / denom)
+    },
+    euclidean = sqrt(sum(chromosome_weights * (a - b)^2)),
+    manhattan = sum(chromosome_weights * abs(a - b))
+  )
+  if (!is.finite(d) || d < 0) Inf else d
+}
+
+#' Compute distance between CNA transition events
+#'
+#' @param context_a,context_b One-row transition context data frames from
+#'   `compute_transition_context_features()`.
+#' @param event_match Event matching rule.
+#' @return A non-negative distance, or `Inf` when a hard event-match rule fails.
+#' @export
+transition_event_distance <- function(context_a,
+                                      context_b,
+                                      event_match = c("same_chr_direction", "same_direction", "kernel")) {
+  event_match <- match.arg(event_match)
+  getv <- function(x, name) {
+    if (is.data.frame(x)) x[[name]][1] else x[[name]]
+  }
+  chr_a <- getv(context_a, "transition_chr")
+  chr_b <- getv(context_b, "transition_chr")
+  dir_a <- as.character(getv(context_a, "transition_direction"))
+  dir_b <- as.character(getv(context_b, "transition_direction"))
+  if (identical(event_match, "same_chr_direction") &&
+      (!isTRUE(is.finite(chr_a) && is.finite(chr_b) && chr_a == chr_b) || !identical(dir_a, dir_b))) {
+    return(Inf)
+  }
+  if (identical(event_match, "same_direction") && !identical(dir_a, dir_b)) {
+    return(Inf)
+  }
+  chr_penalty <- if (is.finite(chr_a) && is.finite(chr_b) && chr_a == chr_b) 0 else 1
+  direction_penalty <- if (identical(dir_a, dir_b)) 0 else 2
+  size_diff <- abs(as.numeric(getv(context_a, "transition_size")) - as.numeric(getv(context_b, "transition_size")))
+  local_copy_diff <- abs(as.numeric(getv(context_a, "changed_chr_parent_copy")) - as.numeric(getv(context_b, "changed_chr_parent_copy")))
+  local_z_diff <- abs(as.numeric(getv(context_a, "changed_chr_parent_zscore")) - as.numeric(getv(context_b, "changed_chr_parent_zscore")))
+  delta_area_diff <- abs(as.numeric(getv(context_a, "delta_total_cn")) - as.numeric(getv(context_b, "delta_total_cn")))
+  delta_burden_diff <- abs(as.numeric(getv(context_a, "delta_burden")) - as.numeric(getv(context_b, "delta_burden")))
+  vals <- c(chr_penalty, direction_penalty, size_diff, local_copy_diff, local_z_diff, delta_area_diff, delta_burden_diff)
+  vals[!is.finite(vals)] <- 0
+  sqrt(sum(vals^2))
+}
+
+#' Compute contextual transition distance
+#'
+#' @param target_context,evidence_context One-row transition context data frames.
+#' @param bandwidths List with profile, area, burden, local, and event bandwidths.
+#' @param weights List with profile, area, burden, local, and event weights.
+#' @param profile_distance Profile distance method.
+#' @param event_match Event matching rule.
+#' @param chromosome_weights Optional chromosome weights.
+#' @return A list of total and component distances.
+#' @export
+compute_context_distance <- function(target_context,
+                                     evidence_context,
+                                     bandwidths,
+                                     weights,
+                                     profile_distance = c("hellinger", "jensen_shannon", "cosine", "euclidean", "manhattan"),
+                                     event_match = c("same_chr_direction", "same_direction", "kernel"),
+                                     chromosome_weights = NULL) {
+  profile_distance <- match.arg(profile_distance)
+  event_match <- match.arg(event_match)
+  getv <- function(x, name) {
+    if (is.data.frame(x)) x[[name]][1] else x[[name]]
+  }
+  getlist <- function(x, name) {
+    val <- getv(x, name)
+    if (is.list(val)) val[[1]] else val
+  }
+  d_profile <- karyotype_profile_distance(
+    getlist(target_context, "parent_context_profile"),
+    getlist(evidence_context, "parent_context_profile"),
+    method = profile_distance,
+    chromosome_weights = chromosome_weights
+  )
+  d_area <- abs(as.numeric(getv(target_context, "parent_total_cn")) - as.numeric(getv(evidence_context, "parent_total_cn")))
+  d_burden <- abs(as.numeric(getv(target_context, "parent_burden")) - as.numeric(getv(evidence_context, "parent_burden")))
+  d_local <- sqrt(sum(c(
+    as.numeric(getv(target_context, "changed_chr_parent_copy")) - as.numeric(getv(evidence_context, "changed_chr_parent_copy")),
+    as.numeric(getv(target_context, "changed_chr_parent_zscore")) - as.numeric(getv(evidence_context, "changed_chr_parent_zscore"))
+  )^2, na.rm = TRUE))
+  d_event <- transition_event_distance(target_context, evidence_context, event_match = event_match)
+  scale_one <- function(d, bw) {
+    if (!is.finite(d)) return(Inf)
+    if (!is.finite(bw) || bw <= 0) bw <- 1
+    d / bw
+  }
+  components <- c(
+    profile = scale_one(d_profile, bandwidths$profile),
+    area = scale_one(d_area, bandwidths$area),
+    burden = scale_one(d_burden, bandwidths$burden),
+    local = scale_one(d_local, bandwidths$local),
+    event = scale_one(d_event, bandwidths$event)
+  )
+  weight_vec <- c(
+    profile = weights$profile,
+    area = weights$area,
+    burden = weights$burden,
+    local = weights$local,
+    event = weights$event
+  )
+  weight_vec[!is.finite(weight_vec) | weight_vec < 0] <- 0
+  total <- sqrt(sum(weight_vec * components^2))
+  list(
+    context_distance = if (is.finite(total)) total else Inf,
+    profile_distance = d_profile,
+    area_distance = d_area,
+    burden_distance = d_burden,
+    local_distance = d_local,
+    event_distance = d_event
+  )
+}
+
+#' Compute contextual kernel weights
+#'
+#' @param target_context One-row target transition context.
+#' @param evidence_contexts Evidence bank data frame with context columns.
+#' @inheritParams compute_context_distance
+#' @param k_nearest Maximum number of nonzero neighbors to retain.
+#' @param min_kernel_weight Minimum final kernel weight.
+#' @return A data frame of nearest contextual evidence weights.
+#' @export
+compute_context_kernel_weights <- function(target_context,
+                                           evidence_contexts,
+                                           bandwidths,
+                                           weights,
+                                           event_match = c("same_chr_direction", "same_direction", "kernel"),
+                                           k_nearest = 50,
+                                           min_kernel_weight = 1e-6,
+                                           profile_distance = "hellinger",
+                                           chromosome_weights = NULL) {
+  event_match <- match.arg(event_match)
+  validate_positive_integer(k_nearest, "k_nearest")
+  validate_nonnegative_finite(min_kernel_weight, "min_kernel_weight")
+  if (!is.data.frame(evidence_contexts) || !nrow(evidence_contexts)) {
+    return(data.frame())
+  }
+  rows <- lapply(seq_len(nrow(evidence_contexts)), function(i) {
+    ev <- evidence_contexts[i, , drop = FALSE]
+    dist <- compute_context_distance(
+      target_context = target_context,
+      evidence_context = ev,
+      bandwidths = bandwidths,
+      weights = weights,
+      profile_distance = profile_distance,
+      event_match = event_match,
+      chromosome_weights = chromosome_weights
+    )
+    kernel_weight <- if (is.finite(dist$context_distance)) exp(-0.5 * dist$context_distance^2) else 0
+    quality_weight <- if ("quality_weight" %in% names(ev)) ev$quality_weight[1] else 1
+    if (!is.finite(quality_weight) || quality_weight < 0) quality_weight <- 0
+    data.frame(
+      evidence_row_id = if ("evidence_id" %in% names(ev)) ev$evidence_id[1] else i,
+      patient_id = if ("patient_id" %in% names(ev)) as.character(ev$patient_id[1]) else NA_character_,
+      context_distance = dist$context_distance,
+      profile_distance = dist$profile_distance,
+      area_distance = dist$area_distance,
+      burden_distance = dist$burden_distance,
+      local_distance = dist$local_distance,
+      event_distance = dist$event_distance,
+      kernel_weight = kernel_weight,
+      quality_weight = quality_weight,
+      final_weight = kernel_weight * quality_weight,
+      stringsAsFactors = FALSE
+    )
+  })
+  out <- do.call(rbind, rows)
+  out <- out[is.finite(out$final_weight) & out$final_weight >= min_kernel_weight, , drop = FALSE]
+  if (!nrow(out)) return(out)
+  out <- out[order(out$final_weight, decreasing = TRUE), , drop = FALSE]
+  utils::head(out, k_nearest)
+}
+
+cohort_context_enrich_record <- function(record,
+                                         evidence_id,
+                                         baseline_ploidy = 2,
+                                         chromosome_weights = NULL,
+                                         profile_transform = "mass") {
+  ctx <- compute_transition_context_features(
+    parent_karyotype = record$parent_karyotype[1],
+    child_karyotype = record$child_karyotype[1],
+    parent_fitness = if ("parent_fitness" %in% names(record)) record$parent_fitness[1] else NA_real_,
+    baseline_ploidy = baseline_ploidy,
+    chromosome_weights = chromosome_weights,
+    profile_transform = profile_transform
+  )
+  for (nm in names(ctx)) {
+    if (!nm %in% names(record)) {
+      record[[nm]] <- ctx[[nm]]
+    }
+  }
+  record$evidence_id <- evidence_id
+  record
+}
+
+#' Build contextual transition evidence banks
+#'
+#' @param records Transition records from upstream two-shell results.
+#' @inheritParams compute_karyotype_profile_features
+#' @param cohort_transition_use_prior_dominated_records Whether prior-dominated
+#'   observed records can enter the observed evidence bank.
+#' @param cohort_transition_use_boundary_records Whether boundary records can
+#'   enter the observed evidence bank.
+#' @param cohort_transition_max_delta_se,cohort_transition_max_delta_se_quantile
+#'   Delta-SE filters for observed evidence.
+#' @param cohort_transition_min_path_responsibility Minimum path responsibility.
+#' @param cohort_transition_min_observed_count Minimum observed child count.
+#' @param cohort_context_zero_min_expected_count Minimum parent-like expected
+#'   count for zero censoring evidence.
+#' @param cohort_context_zero_as_censoring_only Treat zeros as censoring only.
+#' @param ... Additional controls passed through for compatibility.
+#' @return A list with `evidence_bank`, `zero_evidence_bank`, and diagnostics.
+#' @export
+build_contextual_transition_evidence_bank <- function(records,
+                                                      baseline_ploidy = 2,
+                                                      chromosome_weights = NULL,
+                                                      profile_transform = "mass",
+                                                      cohort_transition_use_prior_dominated_records = FALSE,
+                                                      cohort_transition_use_boundary_records = FALSE,
+                                                      cohort_transition_max_delta_se = NULL,
+                                                      cohort_transition_max_delta_se_quantile = 0.75,
+                                                      cohort_transition_min_path_responsibility = 0.05,
+                                                      cohort_transition_min_observed_count = 1L,
+                                                      cohort_context_zero_min_expected_count = 3.0,
+                                                      cohort_context_zero_as_censoring_only = TRUE,
+                                                      ...) {
+  if (!is.data.frame(records) || !nrow(records)) {
+    return(list(evidence_bank = data.frame(), zero_evidence_bank = data.frame(), diagnostics = list(n_input_records = 0L)))
+  }
+  filtered <- filter_cohort_transition_records(
+    records,
+    cohort_transition_use_prior_dominated_records = cohort_transition_use_prior_dominated_records,
+    cohort_transition_use_boundary_records = cohort_transition_use_boundary_records,
+    cohort_transition_max_delta_se = cohort_transition_max_delta_se,
+    cohort_transition_max_delta_se_quantile = cohort_transition_max_delta_se_quantile,
+    cohort_transition_min_path_responsibility = cohort_transition_min_path_responsibility,
+    cohort_transition_min_observed_count = cohort_transition_min_observed_count,
+    cohort_transition_zero_min_expected_count = cohort_context_zero_min_expected_count,
+    cohort_transition_zero_as_censoring_only = cohort_context_zero_as_censoring_only
+  )
+  kept <- filtered$kept_records
+  if (!nrow(kept)) {
+    return(list(evidence_bank = data.frame(), zero_evidence_bank = data.frame(), diagnostics = filtered$diagnostics))
+  }
+  observed <- kept[kept$cohort_transition_evidence_type == "observed_delta_evidence" &
+                     !as.logical(kept$child_is_zero) &
+                     is.finite(kept$delta_hat), , drop = FALSE]
+  zeros <- kept[kept$cohort_transition_evidence_type == "zero_censoring_evidence", , drop = FALSE]
+  enrich <- function(df, prefix) {
+    if (!nrow(df)) return(data.frame())
+    rows <- vector("list", nrow(df))
+    for (i in seq_len(nrow(df))) {
+      rows[[i]] <- cohort_context_enrich_record(
+        df[i, , drop = FALSE],
+        evidence_id = paste0(prefix, "_", i),
+        baseline_ploidy = baseline_ploidy,
+        chromosome_weights = chromosome_weights,
+        profile_transform = profile_transform
+      )
+    }
+    out <- do.call(rbind, rows)
+    if (!"quality_weight" %in% names(out)) {
+      se <- pmax(as.numeric(out$delta_se), 0.05)
+      pr <- as.numeric(out$path_responsibility)
+      pr[!is.finite(pr) | pr < 0] <- 0
+      out$quality_weight <- pmax(0, pr) / (1 + se^2)
+      out$quality_weight[!is.finite(out$quality_weight)] <- 0
+    }
+    rownames(out) <- NULL
+    out
+  }
+  evidence_bank <- enrich(observed, "obs")
+  zero_evidence_bank <- enrich(zeros, "zero")
+  diagnostics <- c(
+    filtered$diagnostics,
+    list(
+      n_context_observed_evidence = nrow(evidence_bank),
+      n_context_zero_evidence = nrow(zero_evidence_bank),
+      n_patients_in_evidence_bank = length(unique(evidence_bank$patient_id)),
+      evidence_source_type_counts = if (nrow(evidence_bank)) table(evidence_bank$source_type) else integer(0),
+      evidence_delta_summary = if (nrow(evidence_bank)) summary(evidence_bank$delta_hat) else summary(numeric(0)),
+      evidence_delta_se_summary = if (nrow(evidence_bank)) summary(evidence_bank$delta_se) else summary(numeric(0))
+    )
+  )
+  list(evidence_bank = evidence_bank, zero_evidence_bank = zero_evidence_bank, diagnostics = diagnostics, filtered = filtered)
+}
+
+cohort_context_pairwise_values <- function(evidence_bank, fun) {
+  if (!is.data.frame(evidence_bank) || nrow(evidence_bank) < 2L) return(numeric(0))
+  vals <- numeric(0)
+  for (i in seq_len(nrow(evidence_bank) - 1L)) {
+    for (j in seq.int(i + 1L, nrow(evidence_bank))) {
+      vals <- c(vals, fun(evidence_bank[i, , drop = FALSE], evidence_bank[j, , drop = FALSE]))
+    }
+  }
+  vals[is.finite(vals) & vals > 0]
+}
+
+estimate_context_bandwidths <- function(evidence_bank,
+                                        profile_distance = "hellinger",
+                                        chromosome_weights = NULL,
+                                        cohort_context_bandwidth_profile = NULL,
+                                        cohort_context_bandwidth_area = NULL,
+                                        cohort_context_bandwidth_burden = NULL,
+                                        cohort_context_bandwidth_local = NULL,
+                                        cohort_context_bandwidth_event = NULL) {
+  robust_bw <- function(x, fallback = 1) {
+    x <- x[is.finite(x) & x > 0]
+    if (!length(x)) return(fallback)
+    val <- as.numeric(stats::quantile(x, probs = 0.5, names = FALSE, type = 8))
+    if (!is.finite(val) || val <= 0) fallback else val
+  }
+  profile_vals <- cohort_context_pairwise_values(evidence_bank, function(a, b) {
+    karyotype_profile_distance(a$parent_context_profile[[1]], b$parent_context_profile[[1]], method = profile_distance, chromosome_weights = chromosome_weights)
+  })
+  area_vals <- cohort_context_pairwise_values(evidence_bank, function(a, b) abs(a$parent_total_cn[1] - b$parent_total_cn[1]))
+  burden_vals <- cohort_context_pairwise_values(evidence_bank, function(a, b) abs(a$parent_burden[1] - b$parent_burden[1]))
+  local_vals <- cohort_context_pairwise_values(evidence_bank, function(a, b) {
+    sqrt(sum(c(a$changed_chr_parent_copy[1] - b$changed_chr_parent_copy[1],
+               a$changed_chr_parent_zscore[1] - b$changed_chr_parent_zscore[1])^2, na.rm = TRUE))
+  })
+  event_vals <- cohort_context_pairwise_values(evidence_bank, function(a, b) transition_event_distance(a, b, event_match = "kernel"))
+  list(
+    profile = if (is.null(cohort_context_bandwidth_profile)) robust_bw(profile_vals, 0.25) else cohort_context_bandwidth_profile,
+    area = if (is.null(cohort_context_bandwidth_area)) robust_bw(area_vals, 2) else cohort_context_bandwidth_area,
+    burden = if (is.null(cohort_context_bandwidth_burden)) robust_bw(burden_vals, 2) else cohort_context_bandwidth_burden,
+    local = if (is.null(cohort_context_bandwidth_local)) robust_bw(local_vals, 1) else cohort_context_bandwidth_local,
+    event = if (is.null(cohort_context_bandwidth_event)) robust_bw(event_vals, 1) else cohort_context_bandwidth_event
+  )
+}
+
+cohort_context_class_borrowing <- function(effect_class,
+                                           cohort_context_lambda_consistent_deleterious = 0.50,
+                                           cohort_context_lambda_consistent_neutral = 0.25,
+                                           cohort_context_lambda_consistent_beneficial = 0.10,
+                                           cohort_context_lambda_high_variable = 0.00,
+                                           cohort_context_lambda_sparse_unknown = 0.00,
+                                           cohort_context_lambda_conflicting_zero = 0.00,
+                                           cohort_context_sd_multiplier_consistent_deleterious = 1.0,
+                                           cohort_context_sd_multiplier_consistent_neutral = 1.5,
+                                           cohort_context_sd_multiplier_consistent_beneficial = 2.5,
+                                           cohort_context_sd_multiplier_high_variable = 4.0,
+                                           cohort_context_sd_multiplier_sparse_unknown = 4.0,
+                                           cohort_context_sd_multiplier_conflicting_zero = 4.0) {
+  lambda <- switch(
+    effect_class,
+    context_consistent_deleterious = cohort_context_lambda_consistent_deleterious,
+    context_consistent_neutral = cohort_context_lambda_consistent_neutral,
+    context_consistent_beneficial = cohort_context_lambda_consistent_beneficial,
+    context_high_variable = cohort_context_lambda_high_variable,
+    context_sparse_unknown = cohort_context_lambda_sparse_unknown,
+    context_conflicting_zero = cohort_context_lambda_conflicting_zero,
+    cohort_context_lambda_sparse_unknown
+  )
+  sd_multiplier <- switch(
+    effect_class,
+    context_consistent_deleterious = cohort_context_sd_multiplier_consistent_deleterious,
+    context_consistent_neutral = cohort_context_sd_multiplier_consistent_neutral,
+    context_consistent_beneficial = cohort_context_sd_multiplier_consistent_beneficial,
+    context_high_variable = cohort_context_sd_multiplier_high_variable,
+    context_sparse_unknown = cohort_context_sd_multiplier_sparse_unknown,
+    context_conflicting_zero = cohort_context_sd_multiplier_conflicting_zero,
+    cohort_context_sd_multiplier_sparse_unknown
+  )
+  list(lambda = lambda, sd_multiplier = sd_multiplier)
+}
+
+#' Classify a target-specific contextual transition prior
+#'
+#' @param patient_evidence Patient-level weighted context evidence.
+#' @param zero_neighbors Optional similar zero-censoring neighbors.
+#' @param cohort_context_min_patients,cohort_context_min_effective_n,cohort_context_min_effective_patients,cohort_context_min_unique_children
+#'   Minimum contextual support thresholds.
+#' @param cohort_context_effect_threshold,cohort_context_sign_consistency_threshold,cohort_context_high_weighted_sd,cohort_context_high_between_patient_sd,cohort_context_high_i2
+#'   Context classification thresholds.
+#' @param cohort_context_sd_floor Minimum contextual prior SD.
+#' @param ... Class-specific contextual borrowing and SD multiplier controls.
+#' @return A one-row data frame with class and heterogeneity metrics.
+#' @export
+classify_contextual_transition_prior <- function(patient_evidence,
+                                                 zero_neighbors = NULL,
+                                                 cohort_context_min_patients = 3L,
+                                                 cohort_context_min_effective_n = 5,
+                                                 cohort_context_min_effective_patients = 3,
+                                                 cohort_context_min_unique_children = 3L,
+                                                 cohort_context_effect_threshold = 0.02,
+                                                 cohort_context_sign_consistency_threshold = 0.75,
+                                                 cohort_context_high_weighted_sd = 0.10,
+                                                 cohort_context_high_between_patient_sd = 0.10,
+                                                 cohort_context_high_i2 = 0.50,
+                                                 cohort_context_sd_floor = 0.05,
+                                                 ...) {
+  if (!is.data.frame(patient_evidence) || !nrow(patient_evidence)) {
+    class <- "context_sparse_unknown"
+    borrow <- cohort_context_class_borrowing(class, ...)
+    return(data.frame(
+      context_delta_mu = 0,
+      context_delta_sd = cohort_context_sd_floor * borrow$sd_multiplier,
+      context_effective_n = 0,
+      context_n_patients = 0L,
+      context_n_unique_children = 0L,
+      context_weighted_sd = NA_real_,
+      context_between_patient_sd = NA_real_,
+      context_i2 = NA_real_,
+      context_sign_consistency = NA_real_,
+      context_p_deleterious = 0,
+      context_p_beneficial = 0,
+      context_p_neutral = 0,
+      context_effect_class = class,
+      context_heterogeneity_class = "context_sparse_unknown",
+      context_lambda = borrow$lambda,
+      context_sd_multiplier = borrow$sd_multiplier,
+      context_support_score = 0,
+      context_sparse_unknown_flag = TRUE,
+      context_high_variable_flag = FALSE,
+      context_conflicting_zero_flag = FALSE,
+      warning_flags = "",
+      stringsAsFactors = FALSE
+    ))
+  }
+  w <- as.numeric(patient_evidence$patient_weight)
+  delta <- as.numeric(patient_evidence$delta_patient_mean)
+  se <- pmax(as.numeric(patient_evidence$delta_patient_se), cohort_context_sd_floor)
+  ok <- is.finite(w) & w > 0 & is.finite(delta)
+  w <- w[ok]
+  delta <- delta[ok]
+  se <- se[ok]
+  evidence_ok <- patient_evidence[ok, , drop = FALSE]
+  if (!length(delta) || sum(w) <= 0) {
+    return(classify_contextual_transition_prior(data.frame(), cohort_context_sd_floor = cohort_context_sd_floor, ...))
+  }
+  mu <- stats::weighted.mean(delta, w)
+  weighted_sd <- sqrt(stats::weighted.mean((delta - mu)^2, w))
+  se_mu <- sqrt(1 / sum(w / (se^2 + cohort_context_sd_floor^2)))
+  between_patient_sd <- if (length(delta) > 1L) stats::sd(delta) else 0
+  i2 <- if (is.finite(weighted_sd) && weighted_sd > 0) {
+    max(0, (weighted_sd^2 - mean(se^2)) / weighted_sd^2)
+  } else {
+    0
+  }
+  sign_mu <- sign(mu)
+  sign_consistency <- if (abs(mu) <= cohort_context_effect_threshold) {
+    sum(w[abs(delta) <= cohort_context_effect_threshold]) / sum(w)
+  } else {
+    sum(w[sign(delta) == sign_mu]) / sum(w)
+  }
+  eff_n <- sum(w)^2 / sum(w^2)
+  patient_weights <- w
+  eff_patients <- sum(patient_weights)^2 / sum(patient_weights^2)
+  n_patients <- length(unique(evidence_ok$patient_id))
+  n_unique_children <- length(unique(evidence_ok$child_karyotype))
+  p_beneficial <- 1 - stats::pnorm(cohort_context_effect_threshold, mean = mu, sd = max(se_mu, cohort_context_sd_floor))
+  p_deleterious <- stats::pnorm(-cohort_context_effect_threshold, mean = mu, sd = max(se_mu, cohort_context_sd_floor))
+  p_neutral <- stats::pnorm(cohort_context_effect_threshold, mean = mu, sd = max(se_mu, cohort_context_sd_floor)) -
+    stats::pnorm(-cohort_context_effect_threshold, mean = mu, sd = max(se_mu, cohort_context_sd_floor))
+  sparse <- n_patients < cohort_context_min_patients ||
+    eff_n < cohort_context_min_effective_n ||
+    eff_patients < cohort_context_min_effective_patients ||
+    n_unique_children < cohort_context_min_unique_children
+  high_variable <- !sparse && (
+    (is.finite(weighted_sd) && weighted_sd >= cohort_context_high_weighted_sd) ||
+      (is.finite(between_patient_sd) && between_patient_sd >= cohort_context_high_between_patient_sd) ||
+      (is.finite(i2) && i2 >= cohort_context_high_i2) ||
+      (is.finite(sign_consistency) && sign_consistency < cohort_context_sign_consistency_threshold)
+  )
+  zero_conflict <- FALSE
+  if (!is.null(zero_neighbors) && is.data.frame(zero_neighbors) && nrow(zero_neighbors)) {
+    zero_weight <- sum(zero_neighbors$final_weight, na.rm = TRUE)
+    zero_conflict <- is.finite(zero_weight) && zero_weight > 0 &&
+      (p_beneficial >= 0.8 || p_neutral >= 0.6)
+  }
+  if (sparse) {
+    class <- "context_sparse_unknown"
+  } else if (zero_conflict) {
+    class <- "context_conflicting_zero"
+  } else if (high_variable) {
+    class <- "context_high_variable"
+  } else if (p_deleterious >= 0.8 && sign_consistency >= cohort_context_sign_consistency_threshold) {
+    class <- "context_consistent_deleterious"
+  } else if (p_beneficial >= 0.8 && sign_consistency >= cohort_context_sign_consistency_threshold) {
+    class <- "context_consistent_beneficial"
+  } else if (p_neutral >= 0.6 && weighted_sd < cohort_context_high_weighted_sd) {
+    class <- "context_consistent_neutral"
+  } else {
+    class <- "context_sparse_unknown"
+  }
+  heterogeneity_class <- if (class == "context_high_variable") "context_high_variable" else if (class == "context_sparse_unknown") "context_sparse_unknown" else "context_supported"
+  borrow <- cohort_context_class_borrowing(class, ...)
+  prior_sd <- max(cohort_context_sd_floor, weighted_sd, se_mu) * borrow$sd_multiplier
+  warning_flags <- if (identical(class, "context_consistent_beneficial")) "survivor_bias_warning" else ""
+  data.frame(
+    context_delta_mu = mu,
+    context_delta_sd = prior_sd,
+    context_effective_n = eff_n,
+    context_n_patients = n_patients,
+    context_n_unique_children = n_unique_children,
+    context_weighted_sd = weighted_sd,
+    context_between_patient_sd = between_patient_sd,
+    context_i2 = i2,
+    context_sign_consistency = sign_consistency,
+    context_p_deleterious = p_deleterious,
+    context_p_beneficial = p_beneficial,
+    context_p_neutral = p_neutral,
+    context_effect_class = class,
+    context_heterogeneity_class = heterogeneity_class,
+    context_lambda = borrow$lambda,
+    context_sd_multiplier = borrow$sd_multiplier,
+    context_support_score = min(1, eff_n / max(1, cohort_context_min_effective_n)),
+    context_sparse_unknown_flag = identical(class, "context_sparse_unknown"),
+    context_high_variable_flag = identical(class, "context_high_variable"),
+    context_conflicting_zero_flag = identical(class, "context_conflicting_zero"),
+    warning_flags = warning_flags,
+    stringsAsFactors = FALSE
+  )
+}
+
+cohort_context_patient_level_neighbors <- function(evidence_bank, weights_df, sd_floor = 0.05) {
+  if (!nrow(weights_df)) return(data.frame())
+  idx <- match(weights_df$evidence_row_id, evidence_bank$evidence_id)
+  ev <- evidence_bank[idx[!is.na(idx)], , drop = FALSE]
+  weights_df <- weights_df[!is.na(idx), , drop = FALSE]
+  if (!nrow(ev)) return(data.frame())
+  split_key <- as.character(ev$patient_id)
+  rows <- lapply(split(seq_len(nrow(ev)), split_key), function(ii) {
+    ww <- weights_df$final_weight[ii]
+    se <- pmax(as.numeric(ev$delta_se[ii]), sd_floor)
+    inv <- ww / (se^2 + sd_floor^2)
+    inv[!is.finite(inv) | inv < 0] <- 0
+    if (sum(inv) <= 0) inv <- ww
+    delta <- as.numeric(ev$delta_hat[ii])
+    ok <- is.finite(delta) & is.finite(inv) & inv > 0
+    data.frame(
+      patient_id = ev$patient_id[ii[1]],
+      delta_patient_mean = if (any(ok)) stats::weighted.mean(delta[ok], inv[ok]) else NA_real_,
+      delta_patient_se = if (sum(inv[ok]) > 0) sqrt(1 / sum(inv[ok])) else NA_real_,
+      patient_weight = sum(ww, na.rm = TRUE),
+      n_context_neighbors = length(ii),
+      child_karyotype = paste(unique(ev$child_karyotype[ii]), collapse = ";"),
+      stringsAsFactors = FALSE
+    )
+  })
+  out <- do.call(rbind, rows)
+  rownames(out) <- NULL
+  out
+}
+
+#' Lookup a target-specific contextual transition prior
+#'
+#' @param target_parent_karyotype,target_child_karyotype Target transition.
+#' @param target_patient_id Target patient for leave-one-patient-out lookup.
+#' @param evidence_bank Observed contextual transition evidence.
+#' @param zero_evidence_bank Optional zero-censoring evidence bank.
+#' @param leave_one_patient_out Exclude `target_patient_id` from evidence.
+#' @param baseline_ploidy,chromosome_weights,profile_transform Karyotype
+#'   feature configuration.
+#' @param profile_distance,event_match Context distance configuration.
+#' @param bandwidths,weights Context kernel bandwidths and component weights.
+#' @param k_nearest,min_kernel_weight Neighbor retention controls.
+#' @param cohort_context_sd_floor Minimum contextual prior SD.
+#' @param ... Context classification and borrowing controls.
+#' @return A list with `prior`, nearest neighbors, and diagnostics.
+#' @export
+lookup_contextual_transition_prior <- function(target_parent_karyotype,
+                                               target_child_karyotype,
+                                               target_patient_id,
+                                               evidence_bank,
+                                               zero_evidence_bank = NULL,
+                                               leave_one_patient_out = TRUE,
+                                               baseline_ploidy = 2,
+                                               chromosome_weights = NULL,
+                                               profile_transform = "mass",
+                                               profile_distance = "hellinger",
+                                               event_match = "same_chr_direction",
+                                               bandwidths = list(profile = 0.25, area = 2, burden = 2, local = 1, event = 1),
+                                               weights = list(profile = 1.0, area = 0.5, burden = 0.5, local = 1.0, event = 2.0),
+                                               k_nearest = 50,
+                                               min_kernel_weight = 1e-6,
+                                               cohort_context_sd_floor = 0.05,
+                                               ...) {
+  target_context <- compute_transition_context_features(
+    target_parent_karyotype,
+    target_child_karyotype,
+    baseline_ploidy = baseline_ploidy,
+    chromosome_weights = chromosome_weights,
+    profile_transform = profile_transform
+  )
+  ev <- evidence_bank
+  if (isTRUE(leave_one_patient_out) && !is.null(target_patient_id) && "patient_id" %in% names(ev)) {
+    ev <- ev[as.character(ev$patient_id) != as.character(target_patient_id), , drop = FALSE]
+  }
+  neighbors <- compute_context_kernel_weights(
+    target_context = target_context,
+    evidence_contexts = ev,
+    bandwidths = bandwidths,
+    weights = weights,
+    event_match = event_match,
+    k_nearest = k_nearest,
+    min_kernel_weight = min_kernel_weight,
+    profile_distance = profile_distance,
+    chromosome_weights = chromosome_weights
+  )
+  zero_neighbors <- data.frame()
+  if (!is.null(zero_evidence_bank) && is.data.frame(zero_evidence_bank) && nrow(zero_evidence_bank)) {
+    zev <- zero_evidence_bank
+    if (isTRUE(leave_one_patient_out) && !is.null(target_patient_id) && "patient_id" %in% names(zev)) {
+      zev <- zev[as.character(zev$patient_id) != as.character(target_patient_id), , drop = FALSE]
+    }
+    zero_neighbors <- compute_context_kernel_weights(
+      target_context = target_context,
+      evidence_contexts = zev,
+      bandwidths = bandwidths,
+      weights = weights,
+      event_match = event_match,
+      k_nearest = k_nearest,
+      min_kernel_weight = min_kernel_weight,
+      profile_distance = profile_distance,
+      chromosome_weights = chromosome_weights
+    )
+  }
+  patient_evidence <- cohort_context_patient_level_neighbors(ev, neighbors, sd_floor = cohort_context_sd_floor)
+  prior_row <- classify_contextual_transition_prior(
+    patient_evidence,
+    zero_neighbors = zero_neighbors,
+    cohort_context_sd_floor = cohort_context_sd_floor,
+    ...
+  )
+  prior_row$target_parent_karyotype <- cohort_context_karyotype_label(target_parent_karyotype)
+  prior_row$target_child_karyotype <- cohort_context_karyotype_label(target_child_karyotype)
+  prior_row$target_patient_id <- if (is.null(target_patient_id)) NA_character_ else as.character(target_patient_id)
+  prior_row$transition_chr <- target_context$transition_chr[1]
+  prior_row$transition_direction <- target_context$transition_direction[1]
+  prior_row$transition_size <- target_context$transition_size[1]
+  prior_row <- prior_row[c(
+    "target_parent_karyotype", "target_child_karyotype", "target_patient_id",
+    setdiff(names(prior_row), c("target_parent_karyotype", "target_child_karyotype", "target_patient_id"))
+  )]
+  list(
+    prior = prior_row,
+    neighbors = neighbors,
+    zero_neighbors = zero_neighbors,
+    patient_evidence = patient_evidence,
+    diagnostics = list(
+      n_candidate_evidence = nrow(ev),
+      n_neighbors = nrow(neighbors),
+      n_zero_neighbors = nrow(zero_neighbors),
+      leave_one_patient_out = isTRUE(leave_one_patient_out)
+    )
+  )
+}
+
+combine_contextual_path_priors <- function(path_priors, path_weights) {
+  priors <- lapply(path_priors, `[[`, "prior")
+  prior_df <- do.call(rbind, priors)
+  mu <- prior_df$context_delta_mu
+  sd <- prior_df$context_delta_sd
+  path_weights <- normalize_nn_weights(path_weights, fallback_n = length(mu))
+  mu_combined <- sum(path_weights * mu, na.rm = TRUE)
+  var_combined <- sum(path_weights * (sd^2 + (mu - mu_combined)^2), na.rm = TRUE)
+  dominant <- path_weights >= 0.2
+  if (!any(dominant)) dominant[which.max(path_weights)] <- TRUE
+  classes <- prior_df$context_effect_class
+  conservative <- if (any(classes[dominant] == "context_high_variable")) {
+    "context_high_variable"
+  } else if (any(classes[dominant] == "context_sparse_unknown")) {
+    "context_sparse_unknown"
+  } else if (any(classes[dominant] == "context_conflicting_zero")) {
+    "context_conflicting_zero"
+  } else if (length(unique(classes[dominant])) > 1L) {
+    "mixed_context"
+  } else {
+    classes[which.max(path_weights)]
+  }
+  data.frame(
+    context_delta_mu = mu_combined,
+    context_delta_sd = sqrt(max(var_combined, 0)),
+    context_effective_n = sum(path_weights * prior_df$context_effective_n, na.rm = TRUE),
+    context_n_patients = max(prior_df$context_n_patients, na.rm = TRUE),
+    context_n_unique_children = max(prior_df$context_n_unique_children, na.rm = TRUE),
+    context_weighted_sd = sum(path_weights * prior_df$context_weighted_sd, na.rm = TRUE),
+    context_between_patient_sd = sum(path_weights * prior_df$context_between_patient_sd, na.rm = TRUE),
+    context_sign_consistency = sum(path_weights * prior_df$context_sign_consistency, na.rm = TRUE),
+    context_p_deleterious = sum(path_weights * prior_df$context_p_deleterious, na.rm = TRUE),
+    context_p_beneficial = sum(path_weights * prior_df$context_p_beneficial, na.rm = TRUE),
+    context_p_neutral = sum(path_weights * prior_df$context_p_neutral, na.rm = TRUE),
+    context_effect_class = conservative,
+    context_heterogeneity_class = if (conservative %in% c("context_high_variable", "mixed_context")) "context_high_variable" else prior_df$context_heterogeneity_class[which.max(path_weights)],
+    context_lambda = {
+      val <- suppressWarnings(min(prior_df$context_lambda[dominant], na.rm = TRUE))
+      if (is.finite(val)) val else 0
+    },
+    context_sd_multiplier = {
+      val <- suppressWarnings(max(prior_df$context_sd_multiplier[dominant], na.rm = TRUE))
+      if (is.finite(val)) val else 4
+    },
+    context_support_score = sum(path_weights * prior_df$context_support_score, na.rm = TRUE),
+    context_sparse_unknown_flag = any(prior_df$context_sparse_unknown_flag[dominant]),
+    context_high_variable_flag = any(prior_df$context_high_variable_flag[dominant]) || identical(conservative, "mixed_context"),
+    context_conflicting_zero_flag = any(prior_df$context_conflicting_zero_flag[dominant]),
+    mixed_context_class_flag = length(unique(classes[dominant])) > 1L,
+    stringsAsFactors = FALSE
+  )
+}
+
+context_label_for_overlay <- function(child_is_zero,
+                                      non_identifiable_zero,
+                                      context_class,
+                                      update_applied,
+                                      skipped_reason,
+                                      guardrail_hit) {
+  if (isTRUE(guardrail_hit) && !isTRUE(update_applied)) return("guardrail_skipped")
+  if (!isTRUE(child_is_zero)) return("patient_observed_no_context_update")
+  if (isTRUE(non_identifiable_zero)) return("low_exposure_zero_nonidentifiable")
+  switch(
+    context_class,
+    context_consistent_deleterious = "informative_zero_context_consistent_deleterious",
+    context_consistent_neutral = "informative_zero_context_consistent_neutral",
+    context_consistent_beneficial = "informative_zero_context_consistent_beneficial_conservative",
+    context_high_variable = "context_high_variable_uncertain",
+    context_sparse_unknown = "context_sparse_unknown_nonidentifiable",
+    context_conflicting_zero = "context_high_variable_uncertain",
+    mixed_context = "mixed_parent_context_uncertain",
+    if (!is.na(skipped_reason) && identical(skipped_reason, "fallback_to_v2_broad_prior")) "fallback_to_v2_broad_prior" else "context_sparse_unknown_nonidentifiable"
+  )
+}
+
+#' Apply contextual cohort-transition overlay to one NN child
+#'
+#' The contextual overlay combines the patient-specific two-shell baseline with
+#' a target-specific Delta-fitness prior learned from similar parent karyotype
+#' backgrounds and CNA events. Observed NN are unchanged by default, sparse or
+#' high-variable contexts keep the baseline, and zero NN updates are capped by
+#' borrowing and shift guardrails.
+#'
+#' @param item NN child context object.
+#' @param child_name Child karyotype ID.
+#' @param build_opt_fc Objective builder used by `solve_fitness_bootstrap()`.
+#' @param search_interval Numeric optimization interval.
+#' @param prior_use Contextual prior object for the target patient.
+#' @param f_two_shell_baseline Patient-specific two-shell baseline fitness.
+#' @param nn_present Optional logical indicating whether the child is observed.
+#' @param two_shell_node_diagnostics Optional one-row two-shell diagnostics.
+#' @param cohort_contextual_apply_to Which nodes may receive contextual updates.
+#' @param cohort_context_lambda Global contextual borrowing multiplier.
+#' @param cohort_context_max_borrowing_fraction Maximum borrowing fraction.
+#' @param cohort_context_max_abs_delta_shift Optional shift cap.
+#' @param cohort_context_sd_floor,cohort_context_patient_sd_floor Contextual SD
+#'   floors.
+#' @param cohort_context_keep_baseline_when_sparse,cohort_context_keep_baseline_when_high_variable
+#'   Keep the two-shell baseline for sparse/high-variable contexts.
+#'
+#' @return A list with final fitness and node diagnostics.
+#' @export
+apply_contextual_cohort_overlay <- function(item,
+                                            child_name,
+                                            build_opt_fc,
+                                            search_interval,
+                                            prior_use,
+                                            f_two_shell_baseline,
+                                            nn_present = NULL,
+                                            two_shell_node_diagnostics = NULL,
+                                            cohort_contextual_apply_to = c("zero_only", "low_information", "all"),
+                                            cohort_context_lambda = 0.25,
+                                            cohort_context_max_borrowing_fraction = 0.5,
+                                            cohort_context_max_abs_delta_shift = NULL,
+                                            cohort_context_sd_floor = 0.05,
+                                            cohort_context_patient_sd_floor = 0.10,
+                                            cohort_context_keep_baseline_when_sparse = TRUE,
+                                            cohort_context_keep_baseline_when_high_variable = TRUE) {
+  cohort_contextual_apply_to <- match.arg(cohort_contextual_apply_to)
+  direct_objective <- build_opt_fc(item, do_prior_param = FALSE)
+  n_parents <- length(item$parent_fitness)
+  if (n_parents == 0L) {
+    return(list(f_final = f_two_shell_baseline, diagnostics = data.frame()))
+  }
+  parent_karyotypes <- item$nj
+  if (is.null(parent_karyotypes) || length(parent_karyotypes) != n_parents ||
+      any(is.na(parent_karyotypes)) || any(!nzchar(parent_karyotypes))) {
+    parent_karyotypes <- names(item$parent_fitness)
+  }
+  path_weights <- normalize_nn_weights(item$parent_opportunity_weights, fallback_n = n_parents)
+  parent_fit <- as.numeric(item$parent_fitness)
+  selector <- should_apply_cohort_transition_to_node(
+    item = item,
+    child_name = child_name,
+    nn_present = nn_present,
+    two_shell_node_diagnostics = two_shell_node_diagnostics,
+    cohort_transition_apply_to = cohort_contextual_apply_to
+  )
+  expected_parent_like <- as.numeric(item$projected_exposure)
+  if (length(expected_parent_like) != 1L || !is.finite(expected_parent_like)) expected_parent_like <- NA_real_
+  zero_info <- compute_zero_informativeness_score(expected_parent_like, informative_threshold = prior_use$context_feature_config$zero_min_expected_count %||% 3)
+  child_observed_count <- sum(item$child_obs, na.rm = TRUE)
+  child_is_zero <- selector$child_is_zero
+  non_identifiable_zero <- isTRUE(child_is_zero) &&
+    (!is.finite(expected_parent_like) || expected_parent_like < (prior_use$context_feature_config$zero_min_expected_count %||% 3))
+  lookups <- lapply(seq_len(n_parents), function(idx) {
+    lookup_contextual_transition_prior(
+      target_parent_karyotype = parent_karyotypes[idx],
+      target_child_karyotype = child_name,
+      target_patient_id = prior_use$target_patient_id,
+      evidence_bank = prior_use$evidence_bank,
+      zero_evidence_bank = prior_use$zero_evidence_bank,
+      leave_one_patient_out = prior_use$leave_one_patient_out,
+      baseline_ploidy = prior_use$context_feature_config$baseline_ploidy,
+      chromosome_weights = prior_use$context_feature_config$chromosome_weights,
+      profile_transform = prior_use$context_feature_config$profile_transform,
+      profile_distance = prior_use$context_feature_config$profile_distance,
+      event_match = prior_use$context_feature_config$event_match,
+      bandwidths = prior_use$context_bandwidths,
+      weights = prior_use$context_weight_config,
+      k_nearest = prior_use$context_feature_config$k_nearest,
+      min_kernel_weight = prior_use$context_feature_config$min_kernel_weight,
+      cohort_context_sd_floor = cohort_context_sd_floor,
+      cohort_context_min_patients = prior_use$context_feature_config$min_patients,
+      cohort_context_min_effective_n = prior_use$context_feature_config$min_effective_n,
+      cohort_context_min_effective_patients = prior_use$context_feature_config$min_effective_patients,
+      cohort_context_min_unique_children = prior_use$context_feature_config$min_unique_children,
+      cohort_context_effect_threshold = prior_use$context_feature_config$effect_threshold,
+      cohort_context_sign_consistency_threshold = prior_use$context_feature_config$sign_consistency_threshold,
+      cohort_context_high_weighted_sd = prior_use$context_feature_config$high_weighted_sd,
+      cohort_context_high_between_patient_sd = prior_use$context_feature_config$high_between_patient_sd,
+      cohort_context_high_i2 = prior_use$context_feature_config$high_i2,
+      cohort_context_lambda_consistent_deleterious = prior_use$context_feature_config$lambda_consistent_deleterious,
+      cohort_context_lambda_consistent_neutral = prior_use$context_feature_config$lambda_consistent_neutral,
+      cohort_context_lambda_consistent_beneficial = prior_use$context_feature_config$lambda_consistent_beneficial,
+      cohort_context_lambda_high_variable = prior_use$context_feature_config$lambda_high_variable,
+      cohort_context_lambda_sparse_unknown = prior_use$context_feature_config$lambda_sparse_unknown,
+      cohort_context_lambda_conflicting_zero = prior_use$context_feature_config$lambda_conflicting_zero,
+      cohort_context_sd_multiplier_consistent_deleterious = prior_use$context_feature_config$sd_multiplier_consistent_deleterious,
+      cohort_context_sd_multiplier_consistent_neutral = prior_use$context_feature_config$sd_multiplier_consistent_neutral,
+      cohort_context_sd_multiplier_consistent_beneficial = prior_use$context_feature_config$sd_multiplier_consistent_beneficial,
+      cohort_context_sd_multiplier_high_variable = prior_use$context_feature_config$sd_multiplier_high_variable,
+      cohort_context_sd_multiplier_sparse_unknown = prior_use$context_feature_config$sd_multiplier_sparse_unknown,
+      cohort_context_sd_multiplier_conflicting_zero = prior_use$context_feature_config$sd_multiplier_conflicting_zero
+    )
+  })
+  combined <- combine_contextual_path_priors(lookups, path_weights)
+  parent_combined <- sum(path_weights * parent_fit, na.rm = TRUE)
+  direct_se <- estimate_scalar_objective_se(
+    objective_fn = direct_objective,
+    optimum = if (is.finite(f_two_shell_baseline)) f_two_shell_baseline else mean(search_interval),
+    search_interval = search_interval,
+    se_floor = max(cohort_context_sd_floor, cohort_context_patient_sd_floor)
+  )
+  anchor_sd <- max(cohort_context_sd_floor, cohort_context_patient_sd_floor, direct_se, na.rm = TRUE)
+  if (!is.finite(anchor_sd) || anchor_sd <= 0) anchor_sd <- max(cohort_context_sd_floor, cohort_context_patient_sd_floor)
+  anchor_info <- if (is.finite(f_two_shell_baseline)) 1 / anchor_sd^2 else 0
+  context_sd <- max(cohort_context_sd_floor, cohort_context_patient_sd_floor, combined$context_delta_sd[1])
+  context_target <- parent_combined + combined$context_delta_mu[1]
+  zero_multiplier <- if (isTRUE(child_is_zero)) pmin(1, pmax(0, zero_info$zero_informativeness_score[1])) else 1
+  if (!is.finite(zero_multiplier) || isTRUE(non_identifiable_zero)) zero_multiplier <- 0
+  class_disallowed <- combined$context_effect_class %in% c("context_high_variable", "context_sparse_unknown", "context_conflicting_zero", "mixed_context")
+  if (isTRUE(cohort_context_keep_baseline_when_high_variable) && isTRUE(combined$context_high_variable_flag[1])) class_disallowed <- TRUE
+  if (isTRUE(cohort_context_keep_baseline_when_sparse) && isTRUE(combined$context_sparse_unknown_flag[1])) class_disallowed <- TRUE
+  effective_lambda <- cohort_context_lambda * combined$context_lambda[1] * zero_multiplier * combined$context_support_score[1]
+  if (isTRUE(class_disallowed) || !isTRUE(selector$apply)) effective_lambda <- 0
+  if (!is.finite(effective_lambda) || effective_lambda < 0) effective_lambda <- 0
+  prior_info <- effective_lambda / context_sd^2
+  f_overlay <- f_final <- f_two_shell_baseline
+  update_applied <- FALSE
+  guardrail_hit <- FALSE
+  skipped_reason <- selector$reason
+  if (isTRUE(selector$apply) && prior_info > 0 && anchor_info > 0 && is.finite(f_two_shell_baseline)) {
+    f_overlay <- (anchor_info * f_two_shell_baseline + prior_info * context_target) / (anchor_info + prior_info)
+    borrowing <- prior_info / (prior_info + anchor_info)
+    max_shift <- cohort_context_max_abs_delta_shift
+    if (is.null(max_shift)) {
+      max_shift <- max(2 * context_sd, 2 * anchor_sd, 0.10)
+    }
+    shift <- f_overlay - f_two_shell_baseline
+    if (is.finite(shift) && abs(shift) > max_shift) {
+      f_overlay <- f_two_shell_baseline + sign(shift) * max_shift
+      guardrail_hit <- TRUE
+    }
+    if (is.finite(borrowing) && borrowing > cohort_context_max_borrowing_fraction) {
+      f_final <- f_two_shell_baseline
+      guardrail_hit <- TRUE
+      skipped_reason <- "borrowing_fraction_guardrail"
+    } else {
+      f_final <- f_overlay
+      update_applied <- is.finite(f_final) && abs(f_final - f_two_shell_baseline) > sqrt(.Machine$double.eps)
+      if (!isTRUE(update_applied)) skipped_reason <- "overlay_shift_negligible"
+    }
+  } else if (isTRUE(selector$apply) && isTRUE(non_identifiable_zero)) {
+    skipped_reason <- "non_identifiable_low_exposure_zero"
+  } else if (isTRUE(selector$apply) && prior_info <= 0) {
+    skipped_reason <- if (isTRUE(class_disallowed)) "context_class_disallows_borrowing" else "context_support_insufficient"
+  }
+  borrowing <- if (prior_info + anchor_info > 0) prior_info / (prior_info + anchor_info) else NA_real_
+  q_delta <- c(0.8, 0.9, 0.95)
+  delta_upper <- combined$context_delta_mu[1] + stats::qnorm(q_delta) * context_sd
+  fitness_upper <- parent_combined + delta_upper
+  neighbor_ids <- paste(utils::head(unlist(lapply(lookups, function(x) x$neighbors$evidence_row_id)), 10), collapse = ";")
+  neighbor_patients <- paste(utils::head(unlist(lapply(lookups, function(x) x$neighbors$patient_id)), 10), collapse = ";")
+  neighbor_weights <- paste(signif(utils::head(unlist(lapply(lookups, function(x) x$neighbors$final_weight)), 10), 4), collapse = ";")
+  neighbor_deltas <- paste(signif(utils::head(unlist(lapply(lookups, function(x) {
+    idx <- match(x$neighbors$evidence_row_id, prior_use$evidence_bank$evidence_id)
+    prior_use$evidence_bank$delta_hat[idx]
+  })), 10), 4), collapse = ";")
+  label <- context_label_for_overlay(child_is_zero, non_identifiable_zero, combined$context_effect_class[1], update_applied, skipped_reason, guardrail_hit)
+  rows <- lapply(seq_len(n_parents), function(idx) {
+    pr <- lookups[[idx]]$prior
+    data.frame(
+      karyotype = child_name,
+      patient_id = prior_use$target_patient_id %||% NA_character_,
+      parent_karyotype = parent_karyotypes[idx],
+      child_karyotype = child_name,
+      child_is_zero = child_is_zero,
+      child_observed_count = child_observed_count,
+      expected_count_parent_like = zero_info$expected_count_parent_like,
+      zero_informativeness_score = zero_info$zero_informativeness_score,
+      transition_chr = pr$transition_chr %||% NA_integer_,
+      transition_direction = pr$transition_direction %||% NA_character_,
+      transition_size = pr$transition_size %||% NA_real_,
+      context_effective_n = combined$context_effective_n,
+      context_n_patients = combined$context_n_patients,
+      context_n_unique_children = combined$context_n_unique_children,
+      context_support_score = combined$context_support_score,
+      context_weighted_mean_delta = combined$context_delta_mu,
+      context_delta_mu = combined$context_delta_mu,
+      context_delta_sd = context_sd,
+      context_weighted_sd = combined$context_weighted_sd,
+      context_between_patient_sd = combined$context_between_patient_sd,
+      context_sign_consistency = combined$context_sign_consistency,
+      context_p_deleterious = combined$context_p_deleterious,
+      context_p_beneficial = combined$context_p_beneficial,
+      context_p_neutral = combined$context_p_neutral,
+      context_effect_class = combined$context_effect_class,
+      context_heterogeneity_class = combined$context_heterogeneity_class,
+      context_sparse_unknown_flag = combined$context_sparse_unknown_flag,
+      context_high_variable_flag = combined$context_high_variable_flag,
+      context_conflicting_zero_flag = combined$context_conflicting_zero_flag,
+      mixed_context_class_flag = combined$mixed_context_class_flag,
+      context_lambda = combined$context_lambda,
+      effective_context_lambda = effective_lambda,
+      context_sd_multiplier = combined$context_sd_multiplier,
+      context_prior_dominated_flag = isTRUE(child_is_zero) && is.finite(borrowing) && borrowing > cohort_context_max_borrowing_fraction,
+      parent_fitness = parent_fit[idx],
+      path_responsibility = path_weights[idx],
+      f_two_shell_baseline = f_two_shell_baseline,
+      f_contextual_overlay = f_overlay,
+      f_cohort_overlay = f_overlay,
+      f_final = f_final,
+      f_delta_from_two_shell = f_final - f_two_shell_baseline,
+      delta_context_mean = combined$context_delta_mu,
+      delta_context_sd = context_sd,
+      delta_posterior_mean = f_final - parent_combined,
+      delta_upper_80 = delta_upper[1],
+      delta_upper_90 = delta_upper[2],
+      delta_upper_95 = delta_upper[3],
+      fitness_posterior_mean = f_final,
+      fitness_upper_80 = fitness_upper[1],
+      fitness_upper_90 = fitness_upper[2],
+      fitness_upper_95 = fitness_upper[3],
+      posterior_interval_approximation = "normal_prior_overlay",
+      cohort_update_applied = update_applied,
+      cohort_update_skipped_reason = if (is.na(skipped_reason)) NA_character_ else skipped_reason,
+      guardrail_hit = guardrail_hit,
+      borrowing_fraction = borrowing,
+      cohort_borrowing_fraction = borrowing,
+      non_identifiable_zero_flag = non_identifiable_zero,
+      context_label = label,
+      nearest_context_evidence_ids = neighbor_ids,
+      nearest_context_evidence_patients = neighbor_patients,
+      nearest_context_evidence_weights = neighbor_weights,
+      nearest_context_evidence_deltas = neighbor_deltas,
+      stringsAsFactors = FALSE
+    )
+  })
+  list(f_final = f_final, diagnostics = do.call(rbind, rows))
+}
+
+learn_cohort_transition_prior_contextual <- function(records,
+                                                     leave_one_patient_out = TRUE,
+                                                     grouping = c("gain_loss", "gain_loss_chr", "gain_loss_chr_burden", "exact_event"),
+                                                     cohort_context_baseline_ploidy = 2,
+                                                     cohort_context_chromosome_weights = NULL,
+                                                     cohort_context_profile_transform = c("mass", "centered", "zscore", "raw"),
+                                                     cohort_context_profile_distance = c("hellinger", "jensen_shannon", "cosine", "euclidean", "manhattan"),
+                                                     cohort_context_event_match = c("same_chr_direction", "same_direction", "kernel"),
+                                                     cohort_context_bandwidth_profile = NULL,
+                                                     cohort_context_bandwidth_area = NULL,
+                                                     cohort_context_bandwidth_burden = NULL,
+                                                     cohort_context_bandwidth_local = NULL,
+                                                     cohort_context_bandwidth_event = NULL,
+                                                     cohort_context_profile_weight = 1.0,
+                                                     cohort_context_area_weight = 0.5,
+                                                     cohort_context_burden_weight = 0.5,
+                                                     cohort_context_local_weight = 1.0,
+                                                     cohort_context_event_weight = 2.0,
+                                                     cohort_context_min_patients = 3L,
+                                                     cohort_context_min_effective_n = 5,
+                                                     cohort_context_min_effective_patients = 3,
+                                                     cohort_context_min_unique_children = 3L,
+                                                     cohort_context_k_nearest = 50,
+                                                     cohort_context_min_kernel_weight = 1e-6,
+                                                     cohort_context_effect_threshold = 0.02,
+                                                     cohort_context_sign_consistency_threshold = 0.75,
+                                                     cohort_context_high_weighted_sd = 0.10,
+                                                     cohort_context_high_between_patient_sd = 0.10,
+                                                     cohort_context_high_i2 = 0.50,
+                                                     cohort_context_lambda_consistent_deleterious = 0.50,
+                                                     cohort_context_lambda_consistent_neutral = 0.25,
+                                                     cohort_context_lambda_consistent_beneficial = 0.10,
+                                                     cohort_context_lambda_high_variable = 0.00,
+                                                     cohort_context_lambda_sparse_unknown = 0.00,
+                                                     cohort_context_lambda_conflicting_zero = 0.00,
+                                                     cohort_context_sd_floor = 0.05,
+                                                     cohort_context_patient_sd_floor = 0.10,
+                                                     cohort_context_sd_multiplier_consistent_deleterious = 1.0,
+                                                     cohort_context_sd_multiplier_consistent_neutral = 1.5,
+                                                     cohort_context_sd_multiplier_consistent_beneficial = 2.5,
+                                                     cohort_context_sd_multiplier_high_variable = 4.0,
+                                                     cohort_context_sd_multiplier_sparse_unknown = 4.0,
+                                                     cohort_context_sd_multiplier_conflicting_zero = 4.0,
+                                                     cohort_context_zero_as_censoring_only = TRUE,
+                                                     cohort_context_zero_min_expected_count = 3.0,
+                                                     cohort_context_zero_weight_cap_ratio = 0.25,
+                                                     cohort_transition_use_prior_dominated_records = FALSE,
+                                                     cohort_transition_use_boundary_records = FALSE,
+                                                     cohort_transition_max_delta_se = NULL,
+                                                     cohort_transition_max_delta_se_quantile = 0.75,
+                                                     cohort_transition_min_path_responsibility = 0.05,
+                                                     cohort_transition_min_observed_count = 1L,
+                                                     ...) {
+  grouping <- match.arg(grouping)
+  cohort_context_profile_transform <- match.arg(cohort_context_profile_transform)
+  cohort_context_profile_distance <- match.arg(cohort_context_profile_distance)
+  cohort_context_event_match <- match.arg(cohort_context_event_match)
+  validate_positive_finite(cohort_context_sd_floor, "cohort_context_sd_floor")
+  validate_positive_finite(cohort_context_patient_sd_floor, "cohort_context_patient_sd_floor")
+  bank <- build_contextual_transition_evidence_bank(
+    records = records,
+    baseline_ploidy = cohort_context_baseline_ploidy,
+    chromosome_weights = cohort_context_chromosome_weights,
+    profile_transform = cohort_context_profile_transform,
+    cohort_transition_use_prior_dominated_records = cohort_transition_use_prior_dominated_records,
+    cohort_transition_use_boundary_records = cohort_transition_use_boundary_records,
+    cohort_transition_max_delta_se = cohort_transition_max_delta_se,
+    cohort_transition_max_delta_se_quantile = cohort_transition_max_delta_se_quantile,
+    cohort_transition_min_path_responsibility = cohort_transition_min_path_responsibility,
+    cohort_transition_min_observed_count = cohort_transition_min_observed_count,
+    cohort_context_zero_min_expected_count = cohort_context_zero_min_expected_count,
+    cohort_context_zero_as_censoring_only = cohort_context_zero_as_censoring_only
+  )
+  bandwidths <- estimate_context_bandwidths(
+    bank$evidence_bank,
+    profile_distance = cohort_context_profile_distance,
+    chromosome_weights = cohort_context_chromosome_weights,
+    cohort_context_bandwidth_profile = cohort_context_bandwidth_profile,
+    cohort_context_bandwidth_area = cohort_context_bandwidth_area,
+    cohort_context_bandwidth_burden = cohort_context_bandwidth_burden,
+    cohort_context_bandwidth_local = cohort_context_bandwidth_local,
+    cohort_context_bandwidth_event = cohort_context_bandwidth_event
+  )
+  v2_fallback <- tryCatch(
+    learn_cohort_transition_prior_v2(
+      records = records,
+      leave_one_patient_out = leave_one_patient_out,
+      grouping = grouping,
+      cohort_transition_sd_floor = max(cohort_context_sd_floor, 0.05),
+      cohort_transition_patient_sd_floor = max(cohort_context_patient_sd_floor, 0.10),
+      cohort_transition_zero_weight_cap_ratio = cohort_context_zero_weight_cap_ratio,
+      cohort_transition_use_prior_dominated_records = cohort_transition_use_prior_dominated_records,
+      cohort_transition_use_boundary_records = cohort_transition_use_boundary_records,
+      cohort_transition_max_delta_se = cohort_transition_max_delta_se,
+      cohort_transition_max_delta_se_quantile = cohort_transition_max_delta_se_quantile,
+      cohort_transition_min_path_responsibility = cohort_transition_min_path_responsibility,
+      cohort_transition_min_observed_count = cohort_transition_min_observed_count,
+      cohort_transition_zero_as_censoring_only = cohort_context_zero_as_censoring_only,
+      cohort_transition_zero_min_expected_count = cohort_context_zero_min_expected_count,
+      ...
+    ),
+    error = function(e) list(version = "cohort_transition_v2_unavailable", error = conditionMessage(e))
+  )
+  patient_ids <- sort(unique(as.character(records$patient_id)))
+  config <- list(
+    baseline_ploidy = cohort_context_baseline_ploidy,
+    chromosome_weights = cohort_context_chromosome_weights,
+    profile_transform = cohort_context_profile_transform,
+    profile_distance = cohort_context_profile_distance,
+    event_match = cohort_context_event_match,
+    min_patients = cohort_context_min_patients,
+    min_effective_n = cohort_context_min_effective_n,
+    min_effective_patients = cohort_context_min_effective_patients,
+    min_unique_children = cohort_context_min_unique_children,
+    k_nearest = cohort_context_k_nearest,
+    min_kernel_weight = cohort_context_min_kernel_weight,
+    effect_threshold = cohort_context_effect_threshold,
+    sign_consistency_threshold = cohort_context_sign_consistency_threshold,
+    high_weighted_sd = cohort_context_high_weighted_sd,
+    high_between_patient_sd = cohort_context_high_between_patient_sd,
+    high_i2 = cohort_context_high_i2,
+    lambda_consistent_deleterious = cohort_context_lambda_consistent_deleterious,
+    lambda_consistent_neutral = cohort_context_lambda_consistent_neutral,
+    lambda_consistent_beneficial = cohort_context_lambda_consistent_beneficial,
+    lambda_high_variable = cohort_context_lambda_high_variable,
+    lambda_sparse_unknown = cohort_context_lambda_sparse_unknown,
+    lambda_conflicting_zero = cohort_context_lambda_conflicting_zero,
+    sd_floor = cohort_context_sd_floor,
+    patient_sd_floor = cohort_context_patient_sd_floor,
+    sd_multiplier_consistent_deleterious = cohort_context_sd_multiplier_consistent_deleterious,
+    sd_multiplier_consistent_neutral = cohort_context_sd_multiplier_consistent_neutral,
+    sd_multiplier_consistent_beneficial = cohort_context_sd_multiplier_consistent_beneficial,
+    sd_multiplier_high_variable = cohort_context_sd_multiplier_high_variable,
+    sd_multiplier_sparse_unknown = cohort_context_sd_multiplier_sparse_unknown,
+    sd_multiplier_conflicting_zero = cohort_context_sd_multiplier_conflicting_zero,
+    zero_as_censoring_only = cohort_context_zero_as_censoring_only,
+    zero_min_expected_count = cohort_context_zero_min_expected_count
+  )
+  weight_config <- list(
+    profile = cohort_context_profile_weight,
+    area = cohort_context_area_weight,
+    burden = cohort_context_burden_weight,
+    local = cohort_context_local_weight,
+    event = cohort_context_event_weight
+  )
+  diagnostics <- c(
+    list(
+      version = "cohort_transition_contextual_v1",
+      n_raw_transition_records = nrow(records),
+      n_context_observed_evidence = nrow(bank$evidence_bank),
+      n_context_zero_evidence = nrow(bank$zero_evidence_bank),
+      n_context_records_excluded = bank$diagnostics$n_excluded_records %||% NA_integer_,
+      exclusion_reasons = bank$diagnostics[names(cohort_transition_empty_filter_diagnostics())],
+      n_patients_in_evidence_bank = length(unique(bank$evidence_bank$patient_id)),
+      profile_transform = cohort_context_profile_transform,
+      profile_distance = cohort_context_profile_distance,
+      event_match_mode = cohort_context_event_match,
+      bandwidth_profile = bandwidths$profile,
+      bandwidth_area = bandwidths$area,
+      bandwidth_burden = bandwidths$burden,
+      bandwidth_local = bandwidths$local,
+      bandwidth_event = bandwidths$event,
+      chromosome_weights_used = !is.null(cohort_context_chromosome_weights)
+    ),
+    bank$diagnostics
+  )
+  list(
+    version = "cohort_transition_contextual_v1",
+    grouping = grouping,
+    contextual = TRUE,
+    evidence_bank = bank$evidence_bank,
+    zero_evidence_bank = bank$zero_evidence_bank,
+    context_feature_config = config,
+    context_bandwidths = bandwidths,
+    context_weight_config = weight_config,
+    v2_fallback_prior = v2_fallback,
+    patient_ids = patient_ids,
+    leave_one_patient_out = isTRUE(leave_one_patient_out),
+    loo_priors = list(),
+    diagnostics = diagnostics,
+    filter_diagnostics = bank$diagnostics,
+    excluded_records = bank$filtered$excluded_records
   )
 }
 
@@ -2629,6 +4126,15 @@ fit_cohort_transition_nn_child <- function(item,
   list(f_map = f_map, diagnostics = do.call(rbind, rows))
 }
 
+#' Decide whether a cohort-transition overlay should be applied to a NN node
+#'
+#' @param item NN child context object.
+#' @param child_name Child karyotype ID.
+#' @param nn_present Optional logical indicating whether the child is observed.
+#' @param two_shell_node_diagnostics Optional one-row two-shell diagnostics.
+#' @param cohort_transition_apply_to Overlay application mode.
+#' @return A list with apply decision, skip reason, and information flags.
+#' @export
 should_apply_cohort_transition_to_node <- function(item,
                                                    child_name,
                                                    nn_present = NULL,
@@ -2665,6 +4171,24 @@ should_apply_cohort_transition_to_node <- function(item,
   list(apply = FALSE, reason = "sufficient_patient_information", child_is_zero = child_is_zero, low_information = low_information)
 }
 
+#' Apply v2 group-level cohort-transition overlay to one NN child
+#'
+#' @param item NN child context object.
+#' @param child_name Child karyotype ID.
+#' @param build_opt_fc Objective builder used by `solve_fitness_bootstrap()`.
+#' @param search_interval Numeric optimization interval.
+#' @param prior_use Patient-specific cohort transition prior.
+#' @param f_two_shell_baseline Patient-specific two-shell baseline fitness.
+#' @param nn_present Optional logical indicating whether the child is observed.
+#' @param two_shell_node_diagnostics Optional one-row two-shell diagnostics.
+#' @param cohort_transition_apply_to Overlay application mode.
+#' @param cohort_transition_lambda Global borrowing multiplier.
+#' @param cohort_transition_max_borrowing_fraction Maximum borrowing fraction.
+#' @param cohort_transition_max_abs_delta_shift Optional shift cap.
+#' @param cohort_transition_sd_floor,cohort_transition_patient_sd_floor SD
+#'   floors for prior and patient heterogeneity.
+#' @return A list with final fitness and node diagnostics.
+#' @export
 apply_cohort_transition_overlay <- function(item,
                                             child_name,
                                             build_opt_fc,
@@ -2913,17 +4437,22 @@ refit_patient_with_cohort_transition_prior <- function(patient,
 #' or incomplete patient directory is backed up with a `__corrupt_<timestamp>`
 #' suffix and rerun only for that patient when `rerun_corrupt_two_shell = TRUE`.
 #'
-#' The v2 cohort model is fit on patient-level transition effects, not absolute
-#' fitness: `Delta = child fitness - parent fitness`. Raw bootstrap/path records
-#' are first aggregated within patient and transition group so repeated paths do
-#' not count as independent patients. Transition groups are classified for
-#' cross-patient consistency before borrowing; high-variable and sparse groups
-#' get weak or zero borrowing. Informative zero nearest neighbours are retained
-#' as censoring evidence and are never converted into fake observed delta
-#' labels. Low-exposure zeros are excluded from prior fitting, and zero evidence
-#' cannot create a narrow group-specific prior by itself. With
-#' `cohort_transition_leave_one_patient_out = TRUE`, patient `p` is refit with
-#' priors learned from the other patients; this avoids borrowing that patient's
+#' The default contextual cohort model is fit on transition effects, not
+#' absolute fitness: `Delta = child fitness - parent fitness`. It builds an
+#' evidence bank from high-confidence observed/frequent transitions and matches
+#' each target NN by parent copy-number profile shape, total copy-number area,
+#' CNA burden, changed chromosome, direction, local copy state, and event
+#' similarity. Raw bootstrap/path records are not treated as independent
+#' patients, zero NN are censoring evidence only, and low-exposure zero NN remain
+#' non-identifiable. High-variable or sparse contexts keep the patient-specific
+#' two-shell baseline and receive uncertainty labels instead of forced cohort
+#' imputation.
+#'
+#' Version `"v2"` remains available as a group-level fallback/comparison mode.
+#' It aggregates raw bootstrap/path records within patient and transition group,
+#' classifies groups for cross-patient consistency, and borrows only weakly from
+#' supported groups. With leave-one-patient-out enabled, patient `p` is refit
+#' using evidence from the other patients; this avoids borrowing that patient's
 #' own two-shell transition effects back into its refit.
 #'
 #' Patient-level diagnostics include cohort borrowing fractions and flags for
@@ -2946,7 +4475,8 @@ refit_patient_with_cohort_transition_prior <- function(patient,
 #' @param minobs,nboot,n0,nb,pm,passage_times,allow_noninteger_counts,correct_efflux Arguments forwarded to `alfak()`.
 #' @param cohort_transition_grouping Transition grouping mode.
 #' @param cohort_transition_version Cohort-transition implementation version.
-#'   `"v2"` is the default heterogeneity-aware selective-borrowing overlay.
+#'   `"contextual"` is the default context-aware evidence-bank overlay; `"v2"`
+#'   keeps the group-level heterogeneity-aware selective-borrowing overlay.
 #' @param cohort_transition_apply_to Which NN nodes can receive the v2 overlay.
 #'   The default `"zero_only"` leaves observed NN estimates at the
 #'   patient-specific two-shell baseline.
@@ -2957,6 +4487,49 @@ refit_patient_with_cohort_transition_prior <- function(patient,
 #'   allowed before a v2 update is skipped.
 #' @param cohort_transition_max_abs_delta_shift Optional maximum absolute change
 #'   from the two-shell baseline.
+#' @param cohort_contextual_apply_to Which NN nodes can receive contextual
+#'   overlay updates. If `NULL`, inherits `cohort_transition_apply_to`.
+#' @param cohort_contextual_overlay_base Baseline used by contextual mode.
+#' @param cohort_context_baseline_ploidy Baseline ploidy used to compute CNA
+#'   burden.
+#' @param cohort_context_chromosome_weights Optional chromosome weights for
+#'   profile distances.
+#' @param cohort_context_profile_transform Copy-number profile representation:
+#'   mass, centered, zscore, or raw.
+#' @param cohort_context_profile_distance Profile distance used by contextual
+#'   kernel matching.
+#' @param cohort_context_event_match Event matching rule for contextual
+#'   neighbors.
+#' @param cohort_context_bandwidth_profile,cohort_context_bandwidth_area,cohort_context_bandwidth_burden,cohort_context_bandwidth_local,cohort_context_bandwidth_event
+#'   Optional contextual kernel bandwidths; `NULL` uses adaptive values.
+#' @param cohort_context_profile_weight,cohort_context_area_weight,cohort_context_burden_weight,cohort_context_local_weight,cohort_context_event_weight
+#'   Component weights in the contextual distance.
+#' @param cohort_context_min_patients,cohort_context_min_effective_n,cohort_context_min_effective_patients,cohort_context_min_unique_children
+#'   Context support thresholds.
+#' @param cohort_context_k_nearest,cohort_context_min_kernel_weight Neighbor
+#'   retention controls for contextual lookup.
+#' @param cohort_context_effect_threshold,cohort_context_sign_consistency_threshold,cohort_context_high_weighted_sd,cohort_context_high_between_patient_sd,cohort_context_high_i2
+#'   Context classification thresholds.
+#' @param cohort_context_lambda Global contextual borrowing multiplier.
+#' @param cohort_context_lambda_consistent_deleterious,cohort_context_lambda_consistent_neutral,cohort_context_lambda_consistent_beneficial,cohort_context_lambda_high_variable,cohort_context_lambda_sparse_unknown,cohort_context_lambda_conflicting_zero
+#'   Class-specific contextual borrowing strengths.
+#' @param cohort_context_sd_floor,cohort_context_patient_sd_floor Contextual
+#'   prior SD and patient heterogeneity floors.
+#' @param cohort_context_sd_multiplier_consistent_deleterious,cohort_context_sd_multiplier_consistent_neutral,cohort_context_sd_multiplier_consistent_beneficial,cohort_context_sd_multiplier_high_variable,cohort_context_sd_multiplier_sparse_unknown,cohort_context_sd_multiplier_conflicting_zero
+#'   Class-specific contextual prior SD multipliers.
+#' @param cohort_context_zero_as_censoring_only Treat contextual zero evidence
+#'   as censoring only, never as observed Delta labels.
+#' @param cohort_context_zero_min_expected_count Minimum parent-like expected
+#'   count for contextual zero censoring evidence.
+#' @param cohort_context_zero_weight_cap_ratio Cap on contextual zero evidence.
+#' @param cohort_context_max_borrowing_fraction Maximum contextual borrowing
+#'   fraction before an update is skipped.
+#' @param cohort_context_max_abs_delta_shift Optional maximum contextual shift
+#'   from the two-shell baseline.
+#' @param cohort_context_keep_baseline_when_sparse,cohort_context_keep_baseline_when_high_variable
+#'   Keep the two-shell baseline for sparse or high-variable contexts.
+#' @param cohort_context_leave_one_patient_out Exclude the target patient from
+#'   contextual evidence lookup during refit.
 #' @param cohort_transition_leave_one_patient_out Store LOO priors and use them
 #'   during patient refits.
 #' @param cohort_transition_use_zero Whether informative zero NN records are used
@@ -3035,12 +4608,63 @@ alfak_cohort_transition <- function(patients,
                                     allow_noninteger_counts = FALSE,
                                     correct_efflux = FALSE,
                                     cohort_transition_grouping = c("gain_loss", "gain_loss_chr", "gain_loss_chr_burden", "exact_event"),
-                                    cohort_transition_version = c("v2", "v1"),
+                                    cohort_transition_version = c("contextual", "v2", "v1"),
                                     cohort_transition_apply_to = c("zero_only", "low_information", "all"),
                                     cohort_transition_overlay_base = c("empirical_two_shell", "direct"),
                                     cohort_transition_lambda = 0.25,
                                     cohort_transition_max_borrowing_fraction = 0.5,
                                     cohort_transition_max_abs_delta_shift = NULL,
+                                    cohort_contextual_apply_to = NULL,
+                                    cohort_contextual_overlay_base = c("empirical_two_shell", "direct"),
+                                    cohort_context_baseline_ploidy = 2,
+                                    cohort_context_chromosome_weights = NULL,
+                                    cohort_context_profile_transform = c("mass", "centered", "zscore", "raw"),
+                                    cohort_context_profile_distance = c("hellinger", "jensen_shannon", "cosine", "euclidean", "manhattan"),
+                                    cohort_context_event_match = c("same_chr_direction", "same_direction", "kernel"),
+                                    cohort_context_bandwidth_profile = NULL,
+                                    cohort_context_bandwidth_area = NULL,
+                                    cohort_context_bandwidth_burden = NULL,
+                                    cohort_context_bandwidth_local = NULL,
+                                    cohort_context_bandwidth_event = NULL,
+                                    cohort_context_profile_weight = 1.0,
+                                    cohort_context_area_weight = 0.5,
+                                    cohort_context_burden_weight = 0.5,
+                                    cohort_context_local_weight = 1.0,
+                                    cohort_context_event_weight = 2.0,
+                                    cohort_context_min_patients = 3L,
+                                    cohort_context_min_effective_n = 5,
+                                    cohort_context_min_effective_patients = 3,
+                                    cohort_context_min_unique_children = 3L,
+                                    cohort_context_k_nearest = 50,
+                                    cohort_context_min_kernel_weight = 1e-6,
+                                    cohort_context_effect_threshold = 0.02,
+                                    cohort_context_sign_consistency_threshold = 0.75,
+                                    cohort_context_high_weighted_sd = 0.10,
+                                    cohort_context_high_between_patient_sd = 0.10,
+                                    cohort_context_high_i2 = 0.50,
+                                    cohort_context_lambda = 0.25,
+                                    cohort_context_lambda_consistent_deleterious = 0.50,
+                                    cohort_context_lambda_consistent_neutral = 0.25,
+                                    cohort_context_lambda_consistent_beneficial = 0.10,
+                                    cohort_context_lambda_high_variable = 0.00,
+                                    cohort_context_lambda_sparse_unknown = 0.00,
+                                    cohort_context_lambda_conflicting_zero = 0.00,
+                                    cohort_context_sd_floor = 0.05,
+                                    cohort_context_patient_sd_floor = 0.10,
+                                    cohort_context_sd_multiplier_consistent_deleterious = 1.0,
+                                    cohort_context_sd_multiplier_consistent_neutral = 1.5,
+                                    cohort_context_sd_multiplier_consistent_beneficial = 2.5,
+                                    cohort_context_sd_multiplier_high_variable = 4.0,
+                                    cohort_context_sd_multiplier_sparse_unknown = 4.0,
+                                    cohort_context_sd_multiplier_conflicting_zero = 4.0,
+                                    cohort_context_zero_as_censoring_only = TRUE,
+                                    cohort_context_zero_min_expected_count = 3.0,
+                                    cohort_context_zero_weight_cap_ratio = 0.25,
+                                    cohort_context_max_borrowing_fraction = 0.5,
+                                    cohort_context_max_abs_delta_shift = NULL,
+                                    cohort_context_keep_baseline_when_sparse = TRUE,
+                                    cohort_context_keep_baseline_when_high_variable = TRUE,
+                                    cohort_context_leave_one_patient_out = TRUE,
                                     cohort_transition_leave_one_patient_out = TRUE,
                                     cohort_transition_use_zero = TRUE,
                                     cohort_transition_zero_min_exposure = NULL,
@@ -3093,6 +4717,15 @@ alfak_cohort_transition <- function(patients,
   cohort_transition_version <- match.arg(cohort_transition_version)
   cohort_transition_apply_to <- match.arg(cohort_transition_apply_to)
   cohort_transition_overlay_base <- match.arg(cohort_transition_overlay_base)
+  if (is.null(cohort_contextual_apply_to)) {
+    cohort_contextual_apply_to <- cohort_transition_apply_to
+  } else {
+    cohort_contextual_apply_to <- match.arg(cohort_contextual_apply_to, c("zero_only", "low_information", "all"))
+  }
+  cohort_contextual_overlay_base <- match.arg(cohort_contextual_overlay_base)
+  cohort_context_profile_transform <- match.arg(cohort_context_profile_transform)
+  cohort_context_profile_distance <- match.arg(cohort_context_profile_distance)
+  cohort_context_event_match <- match.arg(cohort_context_event_match)
   dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
   if (is.null(patient_ids)) {
     stop("`patient_ids` must be supplied when `patients` is unnamed.", call. = FALSE)
@@ -3141,7 +4774,11 @@ alfak_cohort_transition <- function(patients,
   )
   prior <- learn_cohort_transition_prior(
     records = records,
-    leave_one_patient_out = cohort_transition_leave_one_patient_out,
+    leave_one_patient_out = if (identical(cohort_transition_version, "contextual")) {
+      cohort_context_leave_one_patient_out
+    } else {
+      cohort_transition_leave_one_patient_out
+    },
     grouping = cohort_transition_grouping,
     cohort_transition_version = cohort_transition_version,
     cohort_transition_min_patients_per_group = cohort_transition_min_patients_per_group,
@@ -3185,7 +4822,50 @@ alfak_cohort_transition <- function(patients,
     cohort_transition_patient_shift_min_records = cohort_transition_patient_shift_min_records,
     cohort_transition_patient_shift_shrinkage_sd = cohort_transition_patient_shift_shrinkage_sd,
     cohort_transition_zero_as_censoring_only = cohort_transition_zero_as_censoring_only,
-    cohort_transition_zero_min_expected_count = cohort_transition_zero_min_expected_count
+    cohort_transition_zero_min_expected_count = cohort_transition_zero_min_expected_count,
+    cohort_context_baseline_ploidy = cohort_context_baseline_ploidy,
+    cohort_context_chromosome_weights = cohort_context_chromosome_weights,
+    cohort_context_profile_transform = cohort_context_profile_transform,
+    cohort_context_profile_distance = cohort_context_profile_distance,
+    cohort_context_event_match = cohort_context_event_match,
+    cohort_context_bandwidth_profile = cohort_context_bandwidth_profile,
+    cohort_context_bandwidth_area = cohort_context_bandwidth_area,
+    cohort_context_bandwidth_burden = cohort_context_bandwidth_burden,
+    cohort_context_bandwidth_local = cohort_context_bandwidth_local,
+    cohort_context_bandwidth_event = cohort_context_bandwidth_event,
+    cohort_context_profile_weight = cohort_context_profile_weight,
+    cohort_context_area_weight = cohort_context_area_weight,
+    cohort_context_burden_weight = cohort_context_burden_weight,
+    cohort_context_local_weight = cohort_context_local_weight,
+    cohort_context_event_weight = cohort_context_event_weight,
+    cohort_context_min_patients = cohort_context_min_patients,
+    cohort_context_min_effective_n = cohort_context_min_effective_n,
+    cohort_context_min_effective_patients = cohort_context_min_effective_patients,
+    cohort_context_min_unique_children = cohort_context_min_unique_children,
+    cohort_context_k_nearest = cohort_context_k_nearest,
+    cohort_context_min_kernel_weight = cohort_context_min_kernel_weight,
+    cohort_context_effect_threshold = cohort_context_effect_threshold,
+    cohort_context_sign_consistency_threshold = cohort_context_sign_consistency_threshold,
+    cohort_context_high_weighted_sd = cohort_context_high_weighted_sd,
+    cohort_context_high_between_patient_sd = cohort_context_high_between_patient_sd,
+    cohort_context_high_i2 = cohort_context_high_i2,
+    cohort_context_lambda_consistent_deleterious = cohort_context_lambda_consistent_deleterious,
+    cohort_context_lambda_consistent_neutral = cohort_context_lambda_consistent_neutral,
+    cohort_context_lambda_consistent_beneficial = cohort_context_lambda_consistent_beneficial,
+    cohort_context_lambda_high_variable = cohort_context_lambda_high_variable,
+    cohort_context_lambda_sparse_unknown = cohort_context_lambda_sparse_unknown,
+    cohort_context_lambda_conflicting_zero = cohort_context_lambda_conflicting_zero,
+    cohort_context_sd_floor = cohort_context_sd_floor,
+    cohort_context_patient_sd_floor = cohort_context_patient_sd_floor,
+    cohort_context_sd_multiplier_consistent_deleterious = cohort_context_sd_multiplier_consistent_deleterious,
+    cohort_context_sd_multiplier_consistent_neutral = cohort_context_sd_multiplier_consistent_neutral,
+    cohort_context_sd_multiplier_consistent_beneficial = cohort_context_sd_multiplier_consistent_beneficial,
+    cohort_context_sd_multiplier_high_variable = cohort_context_sd_multiplier_high_variable,
+    cohort_context_sd_multiplier_sparse_unknown = cohort_context_sd_multiplier_sparse_unknown,
+    cohort_context_sd_multiplier_conflicting_zero = cohort_context_sd_multiplier_conflicting_zero,
+    cohort_context_zero_as_censoring_only = cohort_context_zero_as_censoring_only,
+    cohort_context_zero_min_expected_count = cohort_context_zero_min_expected_count,
+    cohort_context_zero_weight_cap_ratio = cohort_context_zero_weight_cap_ratio
   )
   diagnostics <- prior$diagnostics
   diagnostics$two_shell_root <- two_shell_root
@@ -3199,6 +4879,17 @@ alfak_cohort_transition <- function(patients,
       saveRDS(prior$patient_group_summaries, file.path(outdir, "cohort_transition_patient_group_summaries.Rds"))
       saveRDS(prior$group_classes, file.path(outdir, "cohort_transition_group_classes.Rds"))
       saveRDS(prior, file.path(outdir, "cohort_transition_prior_v2.Rds"))
+    }
+    if (identical(prior$version, "cohort_transition_contextual_v1")) {
+      saveRDS(prior$evidence_bank, file.path(outdir, "cohort_context_evidence_bank.Rds"))
+      saveRDS(prior$zero_evidence_bank, file.path(outdir, "cohort_context_zero_evidence_bank.Rds"))
+      saveRDS(prior$context_feature_config, file.path(outdir, "cohort_context_feature_config.Rds"))
+      saveRDS(prior$context_bandwidths, file.path(outdir, "cohort_context_bandwidths.Rds"))
+      saveRDS(prior$diagnostics, file.path(outdir, "cohort_context_diagnostics.Rds"))
+      if (is.list(prior$v2_fallback_prior) && identical(prior$v2_fallback_prior$version, "cohort_transition_v2")) {
+        saveRDS(prior$v2_fallback_prior, file.path(outdir, "cohort_transition_prior_v2.Rds"))
+        saveRDS(prior$v2_fallback_prior$group_classes, file.path(outdir, "cohort_transition_group_classes.Rds"))
+      }
     }
     saveRDS(diagnostics, file.path(outdir, "cohort_transition_diagnostics.Rds"))
   }
@@ -3229,6 +4920,15 @@ alfak_cohort_transition <- function(patients,
           cohort_transition_max_abs_delta_shift = cohort_transition_max_abs_delta_shift,
           cohort_transition_sd_floor = cohort_transition_sd_floor,
           cohort_transition_patient_sd_floor = cohort_transition_patient_sd_floor,
+          cohort_contextual_apply_to = cohort_contextual_apply_to,
+          cohort_contextual_overlay_base = cohort_contextual_overlay_base,
+          cohort_context_lambda = cohort_context_lambda,
+          cohort_context_max_borrowing_fraction = cohort_context_max_borrowing_fraction,
+          cohort_context_max_abs_delta_shift = cohort_context_max_abs_delta_shift,
+          cohort_context_sd_floor = cohort_context_sd_floor,
+          cohort_context_patient_sd_floor = cohort_context_patient_sd_floor,
+          cohort_context_keep_baseline_when_sparse = cohort_context_keep_baseline_when_sparse,
+          cohort_context_keep_baseline_when_high_variable = cohort_context_keep_baseline_when_high_variable,
           ...
         )
         list(ok = TRUE, error_message = NA_character_, xval = res)

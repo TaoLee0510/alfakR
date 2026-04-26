@@ -29,12 +29,64 @@ alfak_cohort_transition(
   correct_efflux = FALSE,
   cohort_transition_grouping = c("gain_loss", "gain_loss_chr", "gain_loss_chr_burden",
     "exact_event"),
-  cohort_transition_version = c("v2", "v1"),
+  cohort_transition_version = c("contextual", "v2", "v1"),
   cohort_transition_apply_to = c("zero_only", "low_information", "all"),
   cohort_transition_overlay_base = c("empirical_two_shell", "direct"),
   cohort_transition_lambda = 0.25,
   cohort_transition_max_borrowing_fraction = 0.5,
   cohort_transition_max_abs_delta_shift = NULL,
+  cohort_contextual_apply_to = NULL,
+  cohort_contextual_overlay_base = c("empirical_two_shell", "direct"),
+  cohort_context_baseline_ploidy = 2,
+  cohort_context_chromosome_weights = NULL,
+  cohort_context_profile_transform = c("mass", "centered", "zscore", "raw"),
+  cohort_context_profile_distance = c("hellinger", "jensen_shannon", "cosine",
+    "euclidean", "manhattan"),
+  cohort_context_event_match = c("same_chr_direction", "same_direction", "kernel"),
+  cohort_context_bandwidth_profile = NULL,
+  cohort_context_bandwidth_area = NULL,
+  cohort_context_bandwidth_burden = NULL,
+  cohort_context_bandwidth_local = NULL,
+  cohort_context_bandwidth_event = NULL,
+  cohort_context_profile_weight = 1,
+  cohort_context_area_weight = 0.5,
+  cohort_context_burden_weight = 0.5,
+  cohort_context_local_weight = 1,
+  cohort_context_event_weight = 2,
+  cohort_context_min_patients = 3L,
+  cohort_context_min_effective_n = 5,
+  cohort_context_min_effective_patients = 3,
+  cohort_context_min_unique_children = 3L,
+  cohort_context_k_nearest = 50,
+  cohort_context_min_kernel_weight = 1e-06,
+  cohort_context_effect_threshold = 0.02,
+  cohort_context_sign_consistency_threshold = 0.75,
+  cohort_context_high_weighted_sd = 0.1,
+  cohort_context_high_between_patient_sd = 0.1,
+  cohort_context_high_i2 = 0.5,
+  cohort_context_lambda = 0.25,
+  cohort_context_lambda_consistent_deleterious = 0.5,
+  cohort_context_lambda_consistent_neutral = 0.25,
+  cohort_context_lambda_consistent_beneficial = 0.1,
+  cohort_context_lambda_high_variable = 0,
+  cohort_context_lambda_sparse_unknown = 0,
+  cohort_context_lambda_conflicting_zero = 0,
+  cohort_context_sd_floor = 0.05,
+  cohort_context_patient_sd_floor = 0.1,
+  cohort_context_sd_multiplier_consistent_deleterious = 1,
+  cohort_context_sd_multiplier_consistent_neutral = 1.5,
+  cohort_context_sd_multiplier_consistent_beneficial = 2.5,
+  cohort_context_sd_multiplier_high_variable = 4,
+  cohort_context_sd_multiplier_sparse_unknown = 4,
+  cohort_context_sd_multiplier_conflicting_zero = 4,
+  cohort_context_zero_as_censoring_only = TRUE,
+  cohort_context_zero_min_expected_count = 3,
+  cohort_context_zero_weight_cap_ratio = 0.25,
+  cohort_context_max_borrowing_fraction = 0.5,
+  cohort_context_max_abs_delta_shift = NULL,
+  cohort_context_keep_baseline_when_sparse = TRUE,
+  cohort_context_keep_baseline_when_high_variable = TRUE,
+  cohort_context_leave_one_patient_out = TRUE,
   cohort_transition_leave_one_patient_out = TRUE,
   cohort_transition_use_zero = TRUE,
   cohort_transition_zero_min_exposure = NULL,
@@ -114,24 +166,82 @@ alfak_cohort_transition(
 \item{cohort_transition_grouping}{Transition grouping mode.}
 
 \item{cohort_transition_version}{Cohort-transition implementation version.
-\code{"v2"} is the default heterogeneity-aware selective-borrowing overlay;
-\code{"v1"} preserves the original direct cohort-prior behavior.}
+\code{"contextual"} is the default context-aware evidence-bank overlay; \code{"v2"}
+keeps the group-level heterogeneity-aware selective-borrowing overlay.}
 
 \item{cohort_transition_apply_to}{Which NN nodes can receive the v2 overlay.
-The default \code{"zero_only"} leaves observed NN estimates at their
-patient-specific \code{empirical_two_shell} baseline.}
+The default \code{"zero_only"} leaves observed NN estimates at the
+patient-specific two-shell baseline.}
 
-\item{cohort_transition_overlay_base}{Baseline used by v2. The default
-\code{"empirical_two_shell"} runs or preserves patient-specific two-shell
-estimates before applying the cohort overlay.}
+\item{cohort_transition_overlay_base}{Baseline used by v2, by default
+\code{"empirical_two_shell"}.}
 
 \item{cohort_transition_lambda}{Global multiplier for v2 cohort borrowing.}
 
-\item{cohort_transition_max_borrowing_fraction}{Maximum allowed v2 borrowing
-fraction before the update is skipped and diagnosed as cohort-prior dominated.}
+\item{cohort_transition_max_borrowing_fraction}{Maximum borrowing fraction
+allowed before a v2 update is skipped.}
 
 \item{cohort_transition_max_abs_delta_shift}{Optional maximum absolute change
 from the two-shell baseline.}
+
+\item{cohort_contextual_apply_to}{Which NN nodes can receive contextual
+overlay updates. If \code{NULL}, inherits \code{cohort_transition_apply_to}.}
+
+\item{cohort_contextual_overlay_base}{Baseline used by contextual mode.}
+
+\item{cohort_context_baseline_ploidy}{Baseline ploidy used to compute CNA
+burden.}
+
+\item{cohort_context_chromosome_weights}{Optional chromosome weights for
+profile distances.}
+
+\item{cohort_context_profile_transform}{Copy-number profile representation:
+mass, centered, zscore, or raw.}
+
+\item{cohort_context_profile_distance}{Profile distance used by contextual
+kernel matching.}
+
+\item{cohort_context_event_match}{Event matching rule for contextual
+neighbors.}
+
+\item{cohort_context_bandwidth_profile, cohort_context_bandwidth_area, cohort_context_bandwidth_burden, cohort_context_bandwidth_local, cohort_context_bandwidth_event}{Optional contextual kernel bandwidths; \code{NULL} uses adaptive values.}
+
+\item{cohort_context_profile_weight, cohort_context_area_weight, cohort_context_burden_weight, cohort_context_local_weight, cohort_context_event_weight}{Component weights in the contextual distance.}
+
+\item{cohort_context_min_patients, cohort_context_min_effective_n, cohort_context_min_effective_patients, cohort_context_min_unique_children}{Context support thresholds.}
+
+\item{cohort_context_k_nearest, cohort_context_min_kernel_weight}{Neighbor
+retention controls for contextual lookup.}
+
+\item{cohort_context_effect_threshold, cohort_context_sign_consistency_threshold, cohort_context_high_weighted_sd, cohort_context_high_between_patient_sd, cohort_context_high_i2}{Context classification thresholds.}
+
+\item{cohort_context_lambda}{Global contextual borrowing multiplier.}
+
+\item{cohort_context_lambda_consistent_deleterious, cohort_context_lambda_consistent_neutral, cohort_context_lambda_consistent_beneficial, cohort_context_lambda_high_variable, cohort_context_lambda_sparse_unknown, cohort_context_lambda_conflicting_zero}{Class-specific contextual borrowing strengths.}
+
+\item{cohort_context_sd_floor, cohort_context_patient_sd_floor}{Contextual
+prior SD and patient heterogeneity floors.}
+
+\item{cohort_context_sd_multiplier_consistent_deleterious, cohort_context_sd_multiplier_consistent_neutral, cohort_context_sd_multiplier_consistent_beneficial, cohort_context_sd_multiplier_high_variable, cohort_context_sd_multiplier_sparse_unknown, cohort_context_sd_multiplier_conflicting_zero}{Class-specific contextual prior SD multipliers.}
+
+\item{cohort_context_zero_as_censoring_only}{Treat contextual zero evidence
+as censoring only, never as observed Delta labels.}
+
+\item{cohort_context_zero_min_expected_count}{Minimum parent-like expected
+count for contextual zero censoring evidence.}
+
+\item{cohort_context_zero_weight_cap_ratio}{Cap on contextual zero evidence.}
+
+\item{cohort_context_max_borrowing_fraction}{Maximum contextual borrowing
+fraction before an update is skipped.}
+
+\item{cohort_context_max_abs_delta_shift}{Optional maximum contextual shift
+from the two-shell baseline.}
+
+\item{cohort_context_keep_baseline_when_sparse, cohort_context_keep_baseline_when_high_variable}{Keep the two-shell baseline for sparse or high-variable contexts.}
+
+\item{cohort_context_leave_one_patient_out}{Exclude the target patient from
+contextual evidence lookup during refit.}
 
 \item{cohort_transition_leave_one_patient_out}{Store LOO priors and use them
 during patient refits.}
@@ -159,33 +269,32 @@ censoring can impose on a group mean away from observed transition effects.}
 
 \item{cohort_transition_sd_floor}{Minimum transition prior SD.}
 
-\item{cohort_transition_patient_sd_floor}{Patient heterogeneity SD floor. The
-default is conservative to avoid an overconfident patient-level prior from
-repeated bootstrap/path records.}
+\item{cohort_transition_patient_sd_floor}{Patient heterogeneity SD floor.}
 
 \item{cohort_transition_global_fallback}{Whether group priors can fall back to global.}
 
-\item{cohort_transition_use_prior_dominated_records, cohort_transition_use_boundary_records}{Whether prior-dominated or boundary two-shell records may train v2 observed-delta priors. Defaults exclude them.}
+\item{cohort_transition_use_prior_dominated_records, cohort_transition_use_boundary_records}{Whether such records can train v2 priors.}
 
-\item{cohort_transition_max_delta_se, cohort_transition_max_delta_se_quantile}{Absolute or quantile-derived delta-SE screen for v2 observed training records.}
+\item{cohort_transition_max_delta_se, cohort_transition_max_delta_se_quantile}{Delta-SE screens for v2 observed records.}
 
-\item{cohort_transition_min_path_responsibility}{Minimum path responsibility for a raw transition/path record to train v2 priors.}
+\item{cohort_transition_min_path_responsibility}{Minimum path responsibility.}
 
-\item{cohort_transition_min_observed_count}{Minimum observed child count for v2 observed-delta training labels.}
+\item{cohort_transition_min_observed_count}{Minimum observed child count.}
 
-\item{cohort_transition_classify_groups}{Whether to classify v2 transition groups before borrowing.}
+\item{cohort_transition_classify_groups}{Whether v2 groups are classified.}
 
-\item{cohort_transition_min_patients_consistent, cohort_transition_min_effective_patients, cohort_transition_min_effective_observed}{Minimum observed patient-level evidence required before a v2 group can be treated as consistent.}
+\item{cohort_transition_min_patients_consistent, cohort_transition_min_effective_patients, cohort_transition_min_effective_observed}{Minimum patient-level evidence thresholds.}
 
-\item{cohort_transition_effect_threshold, cohort_transition_sign_consistency_threshold, cohort_transition_high_heterogeneity_i2, cohort_transition_high_between_patient_sd, cohort_transition_context_heterogeneity_drop}{Controls for v2 transition group effect and heterogeneity classification.}
+\item{cohort_transition_effect_threshold, cohort_transition_sign_consistency_threshold, cohort_transition_high_heterogeneity_i2, cohort_transition_high_between_patient_sd, cohort_transition_context_heterogeneity_drop}{Group classification controls.}
 
 \item{cohort_transition_lambda_consistent_deleterious, cohort_transition_lambda_consistent_neutral, cohort_transition_lambda_consistent_beneficial, cohort_transition_lambda_context_dependent, cohort_transition_lambda_high_variable, cohort_transition_lambda_sparse_unknown, cohort_transition_lambda_global_fallback}{Class-specific v2 borrowing strengths.}
 
-\item{cohort_transition_sd_multiplier_consistent_deleterious, cohort_transition_sd_multiplier_consistent_neutral, cohort_transition_sd_multiplier_consistent_beneficial, cohort_transition_sd_multiplier_context_dependent, cohort_transition_sd_multiplier_high_variable, cohort_transition_sd_multiplier_sparse_unknown, cohort_transition_sd_multiplier_global_fallback}{Class-specific v2 prior SD widening factors.}
+\item{cohort_transition_sd_multiplier_consistent_deleterious, cohort_transition_sd_multiplier_consistent_neutral, cohort_transition_sd_multiplier_consistent_beneficial, cohort_transition_sd_multiplier_context_dependent, cohort_transition_sd_multiplier_high_variable, cohort_transition_sd_multiplier_sparse_unknown, cohort_transition_sd_multiplier_global_fallback}{Class-specific v2 SD multipliers.}
 
-\item{cohort_transition_patient_shift, cohort_transition_patient_shift_min_records, cohort_transition_patient_shift_shrinkage_sd}{Controls for a shrunk patient-specific transition-effect shift estimated from the target patient's high-confidence observed transitions.}
+\item{cohort_transition_patient_shift, cohort_transition_patient_shift_min_records, cohort_transition_patient_shift_shrinkage_sd}{Patient-specific transition shift controls.}
 
-\item{cohort_transition_zero_as_censoring_only}{If \code{TRUE}, informative zero NN are retained as censoring evidence and never converted into fake observed delta labels.}
+\item{cohort_transition_zero_as_censoring_only}{Treat zeros as censoring
+evidence only, never fake observed delta labels.}
 
 \item{cohort_transition_save_diagnostics}{Save cohort diagnostic RDS files.}
 
@@ -215,14 +324,22 @@ a rerun only for that patient when \code{rerun_missing_two_shell = TRUE}. A corr
 or incomplete patient directory is backed up with a \verb{__corrupt_<timestamp>}
 suffix and rerun only for that patient when \code{rerun_corrupt_two_shell = TRUE}.
 
-The cohort model is fit on transition effects, not absolute fitness:
-\verb{Delta = child fitness - parent fitness}. Informative zero nearest
-neighbours are used as censoring evidence only when their projected
-parent-like expected count or explicit exposure threshold is large enough.
-Low-exposure zeros are excluded from prior fitting, and zero evidence is
-capped so it cannot dominate observed transitions. With
-\code{cohort_transition_leave_one_patient_out = TRUE}, patient \code{p} is refit with
-priors learned from the other patients; this avoids borrowing that patient's
+The default contextual cohort model is fit on transition effects, not
+absolute fitness: \verb{Delta = child fitness - parent fitness}. It builds an
+evidence bank from high-confidence observed/frequent transitions and matches
+each target NN by parent copy-number profile shape, total copy-number area,
+CNA burden, changed chromosome, direction, local copy state, and event
+similarity. Raw bootstrap/path records are not treated as independent
+patients, zero NN are censoring evidence only, and low-exposure zero NN remain
+non-identifiable. High-variable or sparse contexts keep the patient-specific
+two-shell baseline and receive uncertainty labels instead of forced cohort
+imputation.
+
+Version \code{"v2"} remains available as a group-level fallback/comparison mode.
+It aggregates raw bootstrap/path records within patient and transition group,
+classifies groups for cross-patient consistency, and borrows only weakly from
+supported groups. With leave-one-patient-out enabled, patient \code{p} is refit
+using evidence from the other patients; this avoids borrowing that patient's
 own two-shell transition effects back into its refit.
 
 Patient-level diagnostics include cohort borrowing fractions and flags for

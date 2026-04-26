@@ -136,6 +136,74 @@ ct_overlay_builder <- function(item, do_prior_param = FALSE, ...) {
   function(fc) (fc - 0.2)^2
 }
 
+make_context_records <- function(patient_ids = c("patient_A", "patient_B", "patient_C"),
+                                 parents = rep("2.2.2", length(patient_ids)),
+                                 children = rep("2.2.3", length(patient_ids)),
+                                 delta = rep(-0.1, length(patient_ids)),
+                                 source_type = "observed",
+                                 expected = 0) {
+  parents <- rep_len(parents, length(patient_ids))
+  children <- rep_len(children, length(patient_ids))
+  source_type <- rep_len(source_type, length(patient_ids))
+  expected <- rep_len(expected, length(patient_ids))
+  delta <- rep_len(delta, length(patient_ids))
+  rows <- lapply(seq_along(patient_ids), function(i) {
+    parsed <- alfakR:::cohort_transition_parse_pair(parents[i], children[i])
+    data.frame(
+      patient_id = patient_ids[i],
+      parent_karyotype = parents[i],
+      child_karyotype = children[i],
+      transition_chr = parsed$transition_chr,
+      transition_direction = parsed$transition_direction,
+      transition_size = parsed$transition_size,
+      group_gain_loss = parsed$group_gain_loss,
+      group_gain_loss_chr = parsed$group_gain_loss_chr,
+      group_gain_loss_chr_burden = parsed$group_gain_loss_chr_burden,
+      group_exact_event = parsed$group_exact_event,
+      transition_group = parsed$group_gain_loss_chr,
+      parent_total_cn = parsed$parent_total_cn,
+      child_total_cn = parsed$child_total_cn,
+      parent_burden = parsed$parent_burden,
+      child_burden = parsed$child_burden,
+      parent_fitness = 0,
+      child_fitness_two_shell = delta[i],
+      delta_hat = delta[i],
+      delta_se = 0.04,
+      child_observed_count = ifelse(source_type[i] == "informative_zero", 0, 2),
+      child_is_zero = source_type[i] == "informative_zero",
+      projected_exposure = expected[i],
+      expected_count_parent_like = expected[i],
+      zero_informativeness_score = pmin(1, expected[i] / 3),
+      zero_informativeness_category = ifelse(expected[i] >= 3, "informative_zero", "uninformative_zero"),
+      boundary_flag = FALSE,
+      prior_dominated_flag = FALSE,
+      two_shell_used = TRUE,
+      two_shell_outward_weight = 0.2,
+      path_responsibility = 1,
+      replicate_id = 1L,
+      bootstrap_id = 1L,
+      source_type = source_type[i],
+      stringsAsFactors = FALSE
+    )
+  })
+  do.call(rbind, rows)
+}
+
+make_context_prior <- function(records, ...) {
+  dots <- list(...)
+  defaults <- list(
+    records = records,
+    leave_one_patient_out = TRUE,
+    grouping = "gain_loss_chr",
+    cohort_transition_version = "contextual",
+    cohort_context_min_effective_n = 3,
+    cohort_context_min_unique_children = 1L,
+    cohort_context_k_nearest = 20
+  )
+  defaults[names(dots)] <- dots
+  do.call(alfakR::learn_cohort_transition_prior, defaults)
+}
+
 test_that("resolve_two_shell_fit_dirs returns expected cache paths", {
   root <- tempfile("two_shell_root_")
   dir.create(file.path(root, "pm_0.00005", "MINIOBS20", "patient_A"), recursive = TRUE)
@@ -333,6 +401,261 @@ test_that("overlay guardrail caps excessive cohort shifts", {
     cohort_transition_max_borrowing_fraction = 0.99
   )
 
+  expect_true(any(fit$diagnostics$guardrail_hit))
+  expect_lte(abs(fit$f_final - 0.2), 0.0101)
+})
+
+test_that("contextual profile features and transition context are computed", {
+  feat <- alfakR::compute_karyotype_profile_features(c(2, 2, 3, 1))
+  expect_equal(feat$total_cn, 8)
+  expect_equal(feat$cna_burden, 2)
+  expect_equal(sum(feat$profile_mass_vector[[1]]), 1, tolerance = 1e-12)
+  expect_true(is.finite(feat$profile_entropy))
+  expect_true(is.finite(feat$profile_gini))
+
+  ctx <- alfakR::compute_transition_context_features("2.2.2.2", "2.2.3.2")
+  expect_equal(ctx$transition_chr, 3)
+  expect_equal(ctx$transition_direction, "gain")
+  expect_equal(ctx$transition_size, 1)
+  expect_true(ctx$is_one_step)
+  expect_equal(ctx$changed_chr_parent_copy, 2)
+  expect_equal(ctx$changed_chr_child_copy, 3)
+  expect_equal(ctx$delta_total_cn, 1)
+  expect_equal(ctx$delta_burden, 1)
+})
+
+test_that("contextual profile distances are stable and ordered", {
+  x <- c(2, 2, 3, 1)
+  y <- c(2, 2, 3, 1)
+  z <- c(4, 1, 1, 2)
+  expect_equal(alfakR::karyotype_profile_distance(x, y, "hellinger"), 0, tolerance = 1e-12)
+  expect_equal(alfakR::karyotype_profile_distance(x, y, "jensen_shannon"), 0, tolerance = 1e-12)
+  expect_true(is.finite(alfakR::karyotype_profile_distance(x, z, "cosine")))
+  expect_gt(alfakR::karyotype_profile_distance(x, z, "hellinger"), 0)
+})
+
+test_that("context kernel favors matching chromosome and direction", {
+  records <- rbind(
+    make_context_records("patient_A", parents = "2.2.2.2", children = "2.2.3.2", delta = -0.1),
+    make_context_records("patient_B", parents = "2.2.2.2", children = "2.3.2.2", delta = -0.1)
+  )
+  bank <- alfakR::build_contextual_transition_evidence_bank(records)$evidence_bank
+  target <- alfakR::compute_transition_context_features("2.2.2.2", "2.2.3.2")
+  w <- alfakR::compute_context_kernel_weights(
+    target,
+    bank,
+    bandwidths = list(profile = 0.25, area = 2, burden = 2, local = 1, event = 1),
+    weights = list(profile = 1, area = 0.5, burden = 0.5, local = 1, event = 2),
+    event_match = "same_chr_direction"
+  )
+  expect_true("obs_1" %in% w$evidence_row_id)
+  expect_false("obs_2" %in% w$evidence_row_id)
+})
+
+test_that("context evidence bank filters unreliable records and keeps zeros censoring-only", {
+  records <- make_context_records(
+    patient_ids = paste0("patient_", LETTERS[1:5]),
+    delta = rep(-0.1, 5),
+    source_type = c("observed", "observed", "observed", "observed", "informative_zero"),
+    expected = c(0, 0, 0, 0, 5)
+  )
+  records$prior_dominated_flag[1] <- TRUE
+  records$boundary_flag[2] <- TRUE
+  records$path_responsibility[3] <- 0.001
+  records$delta_se[4] <- 10
+  records$delta_hat[5] <- NA_real_
+  bank <- alfakR::build_contextual_transition_evidence_bank(
+    records,
+    cohort_transition_max_delta_se = 1,
+    cohort_transition_min_path_responsibility = 0.05
+  )
+  expect_equal(nrow(bank$evidence_bank), 0)
+  expect_equal(nrow(bank$zero_evidence_bank), 1)
+  expect_false(any(is.finite(bank$zero_evidence_bank$delta_hat)))
+})
+
+test_that("context lookup excludes target patient evidence under LOPO", {
+  prior <- make_context_prior(make_context_records(
+    c("patient_A", "patient_B", "patient_C"),
+    delta = c(-0.1, -0.11, -0.12)
+  ))
+  lookup <- alfakR::lookup_contextual_transition_prior(
+    "2.2.2.2", "2.2.3.2", "patient_A",
+    evidence_bank = prior$evidence_bank,
+    leave_one_patient_out = TRUE,
+    baseline_ploidy = prior$context_feature_config$baseline_ploidy,
+    profile_transform = prior$context_feature_config$profile_transform,
+    profile_distance = prior$context_feature_config$profile_distance,
+    event_match = prior$context_feature_config$event_match,
+    bandwidths = prior$context_bandwidths,
+    weights = prior$context_weight_config,
+    cohort_context_min_effective_n = 2,
+    cohort_context_min_unique_children = 1L
+  )
+  expect_false("patient_A" %in% lookup$neighbors$patient_id)
+})
+
+test_that("consistent deleterious context updates high-exposure zero downward", {
+  prior <- make_context_prior(make_context_records(
+    c("patient_A", "patient_B", "patient_C"),
+    delta = c(-0.1, -0.11, -0.12)
+  ))
+  fit <- alfakR::apply_contextual_cohort_overlay(
+    item = make_ct_overlay_item(child_obs = c(0, 0), projected_exposure = 10),
+    child_name = "2.2.3",
+    build_opt_fc = ct_overlay_builder,
+    search_interval = c(-1, 1),
+    prior_use = alfakR:::cohort_transition_prior_for_patient(prior, "patient_Z"),
+    f_two_shell_baseline = 0.2,
+    nn_present = FALSE,
+    cohort_context_max_borrowing_fraction = 0.9
+  )
+  expect_true(any(fit$diagnostics$context_effect_class == "context_consistent_deleterious"))
+  expect_true(any(fit$diagnostics$cohort_update_applied))
+  expect_lt(fit$f_final, 0.2)
+})
+
+test_that("high-variable and sparse contexts do not aggressively update", {
+  variable_prior <- make_context_prior(make_context_records(
+    c("patient_A", "patient_B", "patient_C", "patient_D"),
+    delta = c(-0.12, 0.12, -0.10, 0.10)
+  ))
+  variable_fit <- alfakR::apply_contextual_cohort_overlay(
+    item = make_ct_overlay_item(child_obs = c(0, 0), projected_exposure = 10),
+    child_name = "2.2.3",
+    build_opt_fc = ct_overlay_builder,
+    search_interval = c(-1, 1),
+    prior_use = alfakR:::cohort_transition_prior_for_patient(variable_prior, "patient_Z"),
+    f_two_shell_baseline = 0.2,
+    nn_present = FALSE
+  )
+  expect_true(any(variable_fit$diagnostics$context_high_variable_flag))
+  expect_equal(variable_fit$f_final, 0.2)
+
+  sparse_prior <- make_context_prior(
+    make_context_records("patient_A", delta = -0.1),
+    cohort_context_min_patients = 3L
+  )
+  sparse_fit <- alfakR::apply_contextual_cohort_overlay(
+    item = make_ct_overlay_item(child_obs = c(0, 0), projected_exposure = 10),
+    child_name = "2.2.3",
+    build_opt_fc = ct_overlay_builder,
+    search_interval = c(-1, 1),
+    prior_use = alfakR:::cohort_transition_prior_for_patient(sparse_prior, "patient_Z"),
+    f_two_shell_baseline = 0.2,
+    nn_present = FALSE
+  )
+  expect_true(any(sparse_fit$diagnostics$context_sparse_unknown_flag))
+  expect_equal(sparse_fit$f_final, 0.2)
+})
+
+test_that("contextual lookup splits background-dependent effects for the same event", {
+  low <- make_context_records(
+    c("low_A", "low_B", "low_C"),
+    parents = c("2.2.2.2", "2.2.2.2", "2.2.2.2"),
+    children = c("2.2.3.2", "2.2.3.2", "2.2.3.2"),
+    delta = c(0.10, 0.11, 0.12)
+  )
+  high <- make_context_records(
+    c("high_A", "high_B", "high_C"),
+    parents = c("4.4.2.2", "4.4.2.2", "4.4.2.2"),
+    children = c("4.4.3.2", "4.4.3.2", "4.4.3.2"),
+    delta = c(-0.10, -0.11, -0.12)
+  )
+  prior <- make_context_prior(
+    rbind(low, high),
+    cohort_context_event_match = "same_chr_direction",
+    cohort_context_profile_weight = 4,
+    cohort_context_bandwidth_profile = 0.05,
+    cohort_context_bandwidth_area = 0.5,
+    cohort_context_bandwidth_burden = 0.5,
+    cohort_context_min_kernel_weight = 0.01
+  )
+  low_lookup <- alfakR::lookup_contextual_transition_prior(
+    "2.2.2.2", "2.2.3.2", "target",
+    prior$evidence_bank,
+    leave_one_patient_out = TRUE,
+    baseline_ploidy = 2,
+    profile_transform = "mass",
+    profile_distance = "hellinger",
+    event_match = "same_chr_direction",
+    bandwidths = prior$context_bandwidths,
+    weights = prior$context_weight_config,
+    min_kernel_weight = 0.01,
+    cohort_context_min_effective_n = 3,
+    cohort_context_min_unique_children = 1L
+  )
+  high_lookup <- alfakR::lookup_contextual_transition_prior(
+    "4.4.2.2", "4.4.3.2", "target",
+    prior$evidence_bank,
+    leave_one_patient_out = TRUE,
+    baseline_ploidy = 2,
+    profile_transform = "mass",
+    profile_distance = "hellinger",
+    event_match = "same_chr_direction",
+    bandwidths = prior$context_bandwidths,
+    weights = prior$context_weight_config,
+    min_kernel_weight = 0.01,
+    cohort_context_min_effective_n = 3,
+    cohort_context_min_unique_children = 1L
+  )
+  expect_equal(low_lookup$prior$context_effect_class, "context_consistent_beneficial")
+  expect_equal(high_lookup$prior$context_effect_class, "context_consistent_deleterious")
+})
+
+test_that("contextual overlay leaves observed and low-exposure zero nodes unchanged", {
+  prior <- make_context_prior(make_context_records(
+    c("patient_A", "patient_B", "patient_C"),
+    delta = c(-0.1, -0.11, -0.12)
+  ))
+  observed <- alfakR::apply_contextual_cohort_overlay(
+    item = make_ct_overlay_item(child_obs = c(2, 2), projected_exposure = 10),
+    child_name = "2.2.3",
+    build_opt_fc = ct_overlay_builder,
+    search_interval = c(-1, 1),
+    prior_use = alfakR:::cohort_transition_prior_for_patient(prior, "patient_Z"),
+    f_two_shell_baseline = 0.2,
+    nn_present = TRUE
+  )
+  expect_equal(observed$f_final, 0.2)
+  expect_equal(unique(observed$diagnostics$context_label), "patient_observed_no_context_update")
+
+  low_zero <- alfakR::apply_contextual_cohort_overlay(
+    item = make_ct_overlay_item(child_obs = c(0, 0), projected_exposure = 0.1),
+    child_name = "2.2.3",
+    build_opt_fc = ct_overlay_builder,
+    search_interval = c(-1, 1),
+    prior_use = alfakR:::cohort_transition_prior_for_patient(prior, "patient_Z"),
+    f_two_shell_baseline = 0.2,
+    nn_present = FALSE
+  )
+  expect_equal(low_zero$f_final, 0.2)
+  expect_true(all(low_zero$diagnostics$non_identifiable_zero_flag))
+  expect_equal(unique(low_zero$diagnostics$context_label), "low_exposure_zero_nonidentifiable")
+})
+
+test_that("contextual multiple-parent priors combine by responsibility and guardrails apply", {
+  records <- rbind(
+    make_context_records(c("patient_A", "patient_B", "patient_C"), parents = "2.2.2", children = "2.2.3", delta = -0.4),
+    make_context_records(c("patient_D", "patient_E", "patient_F"), parents = "2.1.3", children = "2.2.3", delta = -0.2)
+  )
+  prior <- make_context_prior(records, cohort_context_min_effective_n = 3, cohort_context_min_unique_children = 1L)
+  item <- make_ct_overlay_item(child_obs = c(0, 0), projected_exposure = 10)
+  item$nj <- c("2.2.2", "2.1.3")
+  item$parent_fitness <- c(0, 0.1)
+  item$parent_opportunity_weights <- c(3, 1)
+  fit <- alfakR::apply_contextual_cohort_overlay(
+    item = item,
+    child_name = "2.2.3",
+    build_opt_fc = ct_overlay_builder,
+    search_interval = c(-1, 1),
+    prior_use = alfakR:::cohort_transition_prior_for_patient(prior, "patient_Z"),
+    f_two_shell_baseline = 0.2,
+    nn_present = FALSE,
+    cohort_context_max_abs_delta_shift = 0.01,
+    cohort_context_max_borrowing_fraction = 0.99
+  )
+  expect_equal(sum(fit$diagnostics$path_responsibility), 1, tolerance = 1e-12)
   expect_true(any(fit$diagnostics$guardrail_hit))
   expect_lte(abs(fit$f_final - 0.2), 0.0101)
 })

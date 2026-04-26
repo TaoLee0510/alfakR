@@ -8,7 +8,7 @@ learn_cohort_transition_prior(
   records,
   leave_one_patient_out = TRUE,
   grouping = c("gain_loss", "gain_loss_chr", "gain_loss_chr_burden", "exact_event"),
-  cohort_transition_version = c("v2", "v1"),
+  cohort_transition_version = c("v2", "contextual", "v1"),
   cohort_transition_min_patients_per_group = 2L,
   cohort_transition_min_effective_n = 3L,
   cohort_transition_sd_floor = 0.05,
@@ -23,52 +23,47 @@ learn_cohort_transition_prior(
 \arguments{
 \item{records}{Transition records produced by \code{extract_cohort_transition_records()}.}
 
-\item{leave_one_patient_out}{Whether to store leave-one-patient-out priors.}
+\item{leave_one_patient_out}{Whether to store/use leave-one-patient-out
+evidence for patient refits.}
 
 \item{grouping}{Transition grouping mode.}
 
-\item{cohort_transition_version}{Prior-learning version. \code{"v2"} is the
-default and fits heterogeneity-aware patient-level selective borrowing;
-\code{"v1"} preserves the original direct cohort-prior behavior.}
+\item{cohort_transition_version}{Prior-learning version, \code{"contextual"},
+\code{"v2"}, or \code{"v1"}.}
 
-\item{cohort_transition_min_patients_per_group}{Minimum number of patients
-required before using a group-specific prior without fallback.}
+\item{cohort_transition_min_patients_per_group}{Minimum patients required for
+a v1/v2 group prior before fallback.}
 
-\item{cohort_transition_min_effective_n}{Minimum effective evidence required
-before using a group-specific prior without fallback.}
+\item{cohort_transition_min_effective_n}{Minimum effective evidence for
+v1/v2 group priors.}
 
-\item{cohort_transition_sd_floor}{Minimum transition-effect prior standard deviation.}
+\item{cohort_transition_sd_floor}{Minimum transition-effect SD.}
 
-\item{cohort_transition_patient_sd_floor}{Patient heterogeneity standard
-deviation floor added to transition priors. The default is conservative to
-prevent repeated bootstrap/path records from producing an overconfident
-patient-level transition prior.}
+\item{cohort_transition_patient_sd_floor}{Patient heterogeneity SD floor.}
 
-\item{cohort_transition_global_fallback}{Whether under-supported groups can
-fall back to the global transition prior.}
+\item{cohort_transition_global_fallback}{Whether unsupported groups can fall
+back to a broad global prior.}
 
-\item{cohort_transition_zero_weight_cap_ratio}{Cap on total zero evidence
-weight relative to observed evidence.}
+\item{cohort_transition_zero_weight_cap_ratio}{Cap on zero-censoring evidence
+weight.}
 
-\item{cohort_transition_zero_expected_count_cap}{Cap applied to the
-parent-like expected count inside zero-censoring likelihoods. Counts above
-this value are still classified as informative zeros, but are not allowed
-to add unbounded pressure to the cohort transition mean.}
+\item{cohort_transition_zero_expected_count_cap}{Cap on zero expected-count
+influence in v1 compatibility fitting.}
 
-\item{cohort_transition_zero_mean_shift_cap}{Maximum absolute shift that zero
-censoring evidence can impose on a group mean away from the observed
-transition-effect mean. Set \code{NULL} to disable.}
+\item{cohort_transition_zero_mean_shift_cap}{Maximum zero-censoring shift of
+a group mean in v1 compatibility fitting.}
 
-\item{...}{Additional v2 filtering, classification, borrowing, zero-censoring,
-and patient-shift controls.}
+\item{...}{Reserved for future extraction controls.}
 }
 \value{
 A cohort-transition prior object.
 }
 \description{
-Version \code{"v2"} aggregates bootstrap/path records to patient-level
-transition-effect evidence before classifying transition groups. The prior is
-learned on \code{Delta = child fitness - parent fitness}, not absolute fitness,
-and informative zero NN are retained as censoring evidence rather than fake
-observed delta labels.
+Version \code{"v2"} remains the lower-level default for backward compatibility and
+aggregates bootstrap/path records to patient-level evidence before
+classifying each transition group for selective borrowing. Version
+\code{"contextual"} creates a context-aware evidence-bank prior on Delta fitness
+conditioned on parent karyotype profile shape, copy-number area, CNA burden,
+changed chromosome, local copy state, and event similarity. Version \code{"v1"}
+preserves the original direct cohort-prior behavior for compatibility.
 }

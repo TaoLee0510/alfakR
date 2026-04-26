@@ -255,6 +255,11 @@ build_benchmark_context <- function(params, repo_dir = resolve_repo_dir()) {
       nn_prior_two_step_cap_floor_use > 1) {
     stop("nn_prior_two_step_cap_floor must be a finite number in [0, 1].")
   }
+  cohort_transition_version_use <- if (is.null(params$cohort_transition_version)) {
+    "contextual"
+  } else {
+    match.arg(as.character(params$cohort_transition_version), c("contextual", "v2", "v1"))
+  }
 
   force_refit_use <- isTRUE(params$force_refit)
   rebuild_inputs_use <- isTRUE(params$rebuild_inputs)
@@ -352,6 +357,7 @@ build_benchmark_context <- function(params, repo_dir = resolve_repo_dir()) {
     nn_prior_two_step_support_use = nn_prior_two_step_support_use,
     nn_prior_two_step_support_min_use = nn_prior_two_step_support_min_use,
     nn_prior_two_step_cap_floor_use = nn_prior_two_step_cap_floor_use,
+    cohort_transition_version_use = cohort_transition_version_use,
     force_refit_use = force_refit_use,
     rebuild_inputs_use = rebuild_inputs_use,
     run_benchmark_use = run_benchmark_use,
@@ -1553,6 +1559,7 @@ run_benchmark_pipeline <- function(ctx) {
     nn_prior_two_step_support = ctx$nn_prior_two_step_support_use,
     nn_prior_two_step_support_min = ctx$nn_prior_two_step_support_min_use,
     nn_prior_two_step_cap_floor = ctx$nn_prior_two_step_cap_floor_use,
+    cohort_transition_version = ctx$cohort_transition_version_use,
     nboot = ctx$nboot_use,
     n0 = ctx$n0_use,
     nb = ctx$nb_use,
@@ -1582,6 +1589,7 @@ run_benchmark_pipeline <- function(ctx) {
       n0 = ctx$n0_use,
       nb = ctx$nb_use,
       correct_efflux = ctx$correct_efflux_use,
+      cohort_transition_version = ctx$cohort_transition_version_use,
       diploid_state = ctx$diploid_state,
       force_refit = ctx$force_refit_use
     )
