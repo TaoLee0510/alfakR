@@ -113,6 +113,29 @@ make_ct_records <- function(patient_ids = c("patient_A", "patient_B", "patient_C
   do.call(rbind, rows)
 }
 
+make_ct_overlay_item <- function(child_obs = c(0, 0), projected_exposure = 10, parent_fitness = 0) {
+  list(
+    ni = "2.2.3",
+    nj = "2.2.2",
+    pij = 1,
+    parent_fitness = unname(c(parent_fitness)),
+    parent_birth_times = 0,
+    parent_birth_fallback = FALSE,
+    parent_opportunity_weights = 1,
+    parent_xfit = matrix(c(1, 1), nrow = 2),
+    child_obs = child_obs,
+    ntot = c(100, 100),
+    parent_fitness_mean_pij = parent_fitness,
+    parent_fitness_mean_exposure = parent_fitness,
+    projected_exposure = projected_exposure
+  )
+}
+
+ct_overlay_builder <- function(item, do_prior_param = FALSE, ...) {
+  force(item)
+  function(fc) (fc - 0.2)^2
+}
+
 test_that("resolve_two_shell_fit_dirs returns expected cache paths", {
   root <- tempfile("two_shell_root_")
   dir.create(file.path(root, "pm_0.00005", "MINIOBS20", "patient_A"), recursive = TRUE)
@@ -129,6 +152,189 @@ test_that("resolve_two_shell_fit_dirs returns expected cache paths", {
   expect_equal(resolved$minobs_tag, rep("MINIOBS20", 2))
   expect_equal(resolved$expected_fit_dir, file.path(root, "pm_0.00005", "MINIOBS20", c("patient_A", "patient_B")))
   expect_true(all(resolved$exists))
+})
+
+test_that("filter_cohort_transition_records reports exclusion reasons", {
+  records <- make_ct_records(
+    patient_ids = paste0("patient_", LETTERS[1:6]),
+    delta = rep(0.1, 6),
+    expected = c(0, 0, 0, 0, 0, 0.1)
+  )
+  records$prior_dominated_flag[1] <- TRUE
+  records$boundary_flag[2] <- TRUE
+  records$delta_se[3] <- 10
+  records$path_responsibility[4] <- 0.01
+  records$delta_hat[5] <- NA_real_
+  records$source_type[6] <- "informative_zero"
+  records$child_is_zero[6] <- TRUE
+  records$child_observed_count[6] <- 0
+
+  filtered <- alfakR::filter_cohort_transition_records(
+    records,
+    cohort_transition_max_delta_se = 1,
+    cohort_transition_min_path_responsibility = 0.05,
+    cohort_transition_zero_min_expected_count = 3
+  )
+
+  expect_equal(nrow(filtered$kept_records), 0)
+  expect_equal(filtered$diagnostics$prior_dominated, 1)
+  expect_equal(filtered$diagnostics$boundary_dominated, 1)
+  expect_equal(filtered$diagnostics$large_delta_se, 1)
+  expect_equal(filtered$diagnostics$low_path_responsibility, 1)
+  expect_equal(filtered$diagnostics$non_finite_delta, 1)
+  expect_equal(filtered$diagnostics$low_exposure_zero, 1)
+})
+
+test_that("bootstrap and path rows aggregate to patient-level evidence", {
+  patient_a <- make_ct_records(rep("patient_A", 10), rep(0.1, 10))
+  patient_b <- make_ct_records("patient_B", 0.2)
+  records <- rbind(patient_a, patient_b)
+  filtered <- alfakR::filter_cohort_transition_records(records, cohort_transition_min_path_responsibility = 0)
+  summaries <- alfakR::aggregate_cohort_transition_records_by_patient(
+    filtered$kept_records,
+    grouping = "gain_loss_chr"
+  )
+  obs <- summaries[summaries$cohort_transition_evidence_type == "observed_delta_evidence", , drop = FALSE]
+
+  expect_equal(nrow(obs), 2)
+  expect_equal(sort(obs$patient_id), c("patient_A", "patient_B"))
+
+  classes <- alfakR::classify_cohort_transition_groups(summaries)
+  gain_chr <- classes[classes$group == "gain_chr3" & classes$group_level == "gain_loss_chr", , drop = FALSE]
+  expect_equal(gain_chr$n_patients_observed, 2)
+  expect_lte(gain_chr$effective_patients_observed, 2)
+})
+
+test_that("consistent deleterious groups get nonzero conservative borrowing", {
+  records <- make_ct_records(
+    c("patient_A", "patient_B", "patient_C"),
+    c(-0.10, -0.12, -0.11)
+  )
+  prior <- alfakR::learn_cohort_transition_prior(
+    records,
+    leave_one_patient_out = FALSE,
+    grouping = "gain_loss_chr"
+  )
+  row <- prior$group_priors[prior$group_priors$group == "gain_chr3", , drop = FALSE]
+
+  expect_equal(row$effect_class, "consistent_deleterious")
+  expect_gt(row$cohort_lambda, 0)
+  expect_true(row$recommended_use_for_zero)
+})
+
+test_that("high-variable groups do not borrow by default", {
+  records <- make_ct_records(
+    c("patient_A", "patient_B", "patient_C", "patient_D"),
+    c(-0.12, 0.12, -0.10, 0.10)
+  )
+  prior <- alfakR::learn_cohort_transition_prior(
+    records,
+    leave_one_patient_out = FALSE,
+    grouping = "gain_loss_chr"
+  )
+  row <- prior$group_priors[prior$group_priors$group == "gain_chr3", , drop = FALSE]
+
+  expect_true(row$effect_class == "high_variable" || row$heterogeneity_class == "high_variable")
+  expect_equal(row$cohort_lambda, 0)
+})
+
+test_that("sparse groups do not use strong group-specific priors", {
+  prior <- alfakR::learn_cohort_transition_prior(
+    make_ct_records("patient_A", -0.2),
+    leave_one_patient_out = FALSE,
+    grouping = "gain_loss_chr"
+  )
+  row <- prior$group_priors[prior$group_priors$group == "gain_chr3", , drop = FALSE]
+
+  expect_equal(row$effect_class, "sparse_unknown")
+  expect_equal(row$cohort_lambda, 0)
+})
+
+test_that("observed NN are unchanged by zero-only v2 overlay", {
+  prior <- alfakR::learn_cohort_transition_prior(
+    make_ct_records(c("patient_A", "patient_B", "patient_C"), c(-0.1, -0.12, -0.11)),
+    leave_one_patient_out = FALSE,
+    grouping = "gain_loss_chr"
+  )
+  fit <- alfakR::apply_cohort_transition_overlay(
+    item = make_ct_overlay_item(child_obs = c(2, 2), projected_exposure = 10),
+    child_name = "2.2.3",
+    build_opt_fc = ct_overlay_builder,
+    search_interval = c(-1, 1),
+    prior_use = alfakR:::cohort_transition_prior_for_patient(prior),
+    f_two_shell_baseline = 0.2,
+    nn_present = TRUE,
+    cohort_transition_apply_to = "zero_only"
+  )
+
+  expect_equal(fit$f_final, 0.2)
+  expect_false(any(fit$diagnostics$cohort_update_applied))
+  expect_equal(unique(fit$diagnostics$cohort_update_skipped_reason), "observed_nn_skipped_by_zero_only")
+})
+
+test_that("high-exposure zero in consistent deleterious group receives weak overlay", {
+  prior <- alfakR::learn_cohort_transition_prior(
+    make_ct_records(c("patient_A", "patient_B", "patient_C"), c(-0.1, -0.12, -0.11)),
+    leave_one_patient_out = FALSE,
+    grouping = "gain_loss_chr"
+  )
+  fit <- alfakR::apply_cohort_transition_overlay(
+    item = make_ct_overlay_item(child_obs = c(0, 0), projected_exposure = 10),
+    child_name = "2.2.3",
+    build_opt_fc = ct_overlay_builder,
+    search_interval = c(-1, 1),
+    prior_use = alfakR:::cohort_transition_prior_for_patient(prior),
+    f_two_shell_baseline = 0.2,
+    nn_present = FALSE,
+    cohort_transition_max_borrowing_fraction = 0.9
+  )
+
+  expect_true(any(fit$diagnostics$cohort_update_applied))
+  expect_lt(fit$f_final, 0.2)
+  expect_gt(unique(fit$diagnostics$effective_lambda), 0)
+})
+
+test_that("low-exposure zero is marked non-identifiable and not aggressively updated", {
+  prior <- alfakR::learn_cohort_transition_prior(
+    make_ct_records(c("patient_A", "patient_B", "patient_C"), c(-0.1, -0.12, -0.11)),
+    leave_one_patient_out = FALSE,
+    grouping = "gain_loss_chr"
+  )
+  fit <- alfakR::apply_cohort_transition_overlay(
+    item = make_ct_overlay_item(child_obs = c(0, 0), projected_exposure = 0.1),
+    child_name = "2.2.3",
+    build_opt_fc = ct_overlay_builder,
+    search_interval = c(-1, 1),
+    prior_use = alfakR:::cohort_transition_prior_for_patient(prior),
+    f_two_shell_baseline = 0.2,
+    nn_present = FALSE
+  )
+
+  expect_equal(fit$f_final, 0.2)
+  expect_true(all(fit$diagnostics$non_identifiable_zero_flag))
+  expect_false(any(fit$diagnostics$cohort_update_applied))
+})
+
+test_that("overlay guardrail caps excessive cohort shifts", {
+  prior <- alfakR::learn_cohort_transition_prior(
+    make_ct_records(c("patient_A", "patient_B", "patient_C"), c(-0.4, -0.42, -0.41)),
+    leave_one_patient_out = FALSE,
+    grouping = "gain_loss_chr"
+  )
+  fit <- alfakR::apply_cohort_transition_overlay(
+    item = make_ct_overlay_item(child_obs = c(0, 0), projected_exposure = 10),
+    child_name = "2.2.3",
+    build_opt_fc = ct_overlay_builder,
+    search_interval = c(-1, 1),
+    prior_use = alfakR:::cohort_transition_prior_for_patient(prior),
+    f_two_shell_baseline = 0.2,
+    nn_present = FALSE,
+    cohort_transition_max_abs_delta_shift = 0.01,
+    cohort_transition_max_borrowing_fraction = 0.99
+  )
+
+  expect_true(any(fit$diagnostics$guardrail_hit))
+  expect_lte(abs(fit$f_final - 0.2), 0.0101)
 })
 
 test_that("ensure_two_shell_fits reuses valid existing two-shell directories", {
@@ -344,13 +550,15 @@ test_that("informative zeros are retained as censoring evidence without fake obs
     cohort_transition_min_effective_n = 1
   )
 
-  expect_equal(prior$global_prior$n_observed_records, 1)
-  expect_equal(prior$global_prior$n_zero_records, 1)
-  expect_true(prior$diagnostics$zero_likelihood_approximation)
+  expect_equal(prior$version, "cohort_transition_v2")
+  expect_equal(prior$global_prior$n_observed_patient_summaries, 1)
+  expect_equal(prior$global_prior$n_zero_patient_summaries, 1)
+  expect_equal(prior$diagnostics$n_zero_censoring_records, 1)
+  expect_false(prior$diagnostics$zero_likelihood_approximation)
   expect_false(any(records$source_type == "informative_zero" & is.finite(records$delta_hat)))
 })
 
-test_that("extreme zero exposures are capped in cohort prior fitting", {
+test_that("extreme zero exposures do not create a fake narrow observed-delta prior", {
   observed <- make_ct_records(
     patient_ids = paste0("obs_", seq_len(8)),
     delta = rep(0, 8),
@@ -370,14 +578,13 @@ test_that("extreme zero exposures are capped in cohort prior fitting", {
     leave_one_patient_out = FALSE,
     grouping = "gain_loss_chr",
     cohort_transition_min_patients_per_group = 1L,
-    cohort_transition_min_effective_n = 1,
-    cohort_transition_zero_expected_count_cap = 10
+    cohort_transition_min_effective_n = 1
   )
-  expect_true(capped$diagnostics$zero_expected_count_capped)
-  expect_equal(capped$diagnostics$n_zero_expected_count_capped, 8)
-  expect_gte(capped$global_prior$mu, -0.2 - 1e-8)
-  expect_lte(abs(capped$global_prior$mu), 0.2 + 1e-8)
-  expect_true(grepl("zero_mean_shift_cap", capped$global_prior$warning_flags))
+  expect_equal(capped$version, "cohort_transition_v2")
+  expect_equal(capped$global_prior$n_zero_patient_summaries, 8)
+  expect_equal(capped$global_prior$n_observed_patient_summaries, 8)
+  expect_lte(abs(capped$global_prior$mu), 1e-8)
+  expect_gte(capped$global_prior$effective_prior_sd, 0.1)
 })
 
 test_that("low-exposure zero NN gets no cohort-prior pull in patient refit", {

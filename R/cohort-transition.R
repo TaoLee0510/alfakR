@@ -528,7 +528,7 @@ extract_cohort_transition_records <- function(fit_dirs,
                                               pm = 0.00005,
                                               grouping = c("gain_loss", "gain_loss_chr", "gain_loss_chr_burden", "exact_event"),
                                               cohort_transition_use_zero = TRUE,
-                                              cohort_transition_zero_min_expected_count = 1.0,
+                                              cohort_transition_zero_min_expected_count = 3.0,
                                               cohort_transition_zero_min_exposure = NULL,
                                               ...) {
   grouping <- match.arg(grouping)
@@ -726,6 +726,666 @@ cohort_transition_record_weights <- function(records,
     }
   }
   w
+}
+
+cohort_transition_empty_filter_diagnostics <- function() {
+  reasons <- c(
+    "low_exposure_zero",
+    "prior_dominated",
+    "boundary_dominated",
+    "missing_delta_se",
+    "large_delta_se",
+    "low_path_responsibility",
+    "missing_transition_group",
+    "non_one_step_or_complex",
+    "non_finite_delta",
+    "zero_not_informative"
+  )
+  stats::setNames(as.list(rep(0L, length(reasons))), reasons)
+}
+
+#' Filter cohort transition records before v2 prior learning
+#'
+#' The v2 prior treats observed transition effects and zero-censoring evidence
+#' separately. Bootstrap/path records that are prior dominated, boundary
+#' dominated, low-responsibility, or too uncertain are retained only in
+#' diagnostics unless the corresponding control explicitly permits them.
+#'
+#' @param records Raw transition records from `extract_cohort_transition_records()`.
+#' @param cohort_transition_use_prior_dominated_records Whether prior-dominated
+#'   records may be used as observed transition labels.
+#' @param cohort_transition_use_boundary_records Whether boundary records may be
+#'   used as observed transition labels.
+#' @param cohort_transition_max_delta_se Optional maximum allowed delta SE.
+#' @param cohort_transition_max_delta_se_quantile Quantile used to derive a
+#'   maximum delta SE when `cohort_transition_max_delta_se` is `NULL`.
+#' @param cohort_transition_min_path_responsibility Minimum path responsibility.
+#' @param cohort_transition_min_observed_count Minimum child count for observed
+#'   transition labels.
+#' @param cohort_transition_zero_min_expected_count Minimum parent-like expected
+#'   count for zero-censoring records.
+#' @param cohort_transition_zero_as_censoring_only Keep zero records as censoring
+#'   evidence only; they are never observed delta labels.
+#' @return A list with kept records, excluded records, and diagnostics.
+#' @export
+filter_cohort_transition_records <- function(records,
+                                             cohort_transition_use_prior_dominated_records = FALSE,
+                                             cohort_transition_use_boundary_records = FALSE,
+                                             cohort_transition_max_delta_se = NULL,
+                                             cohort_transition_max_delta_se_quantile = 0.75,
+                                             cohort_transition_min_path_responsibility = 0.05,
+                                             cohort_transition_min_observed_count = 1L,
+                                             cohort_transition_zero_min_expected_count = 3.0,
+                                             cohort_transition_zero_as_censoring_only = TRUE,
+                                             ...) {
+  validate_scalar_logical(cohort_transition_use_prior_dominated_records, "cohort_transition_use_prior_dominated_records")
+  validate_scalar_logical(cohort_transition_use_boundary_records, "cohort_transition_use_boundary_records")
+  validate_probability(cohort_transition_max_delta_se_quantile, "cohort_transition_max_delta_se_quantile", upper_inclusive = TRUE)
+  validate_nonnegative_finite(cohort_transition_min_path_responsibility, "cohort_transition_min_path_responsibility")
+  validate_nonnegative_integer(cohort_transition_min_observed_count, "cohort_transition_min_observed_count")
+  validate_nonnegative_finite(cohort_transition_zero_min_expected_count, "cohort_transition_zero_min_expected_count")
+  validate_scalar_logical(cohort_transition_zero_as_censoring_only, "cohort_transition_zero_as_censoring_only")
+  if (!is.null(cohort_transition_max_delta_se)) {
+    validate_positive_finite(cohort_transition_max_delta_se, "cohort_transition_max_delta_se")
+  }
+  if (!is.data.frame(records)) {
+    stop("`records` must be a data frame.", call. = FALSE)
+  }
+  if (!nrow(records)) {
+    empty_diag <- cohort_transition_empty_filter_diagnostics()
+    return(list(
+      kept_records = records,
+      excluded_records = records,
+      diagnostics = c(list(n_input_records = 0L, n_kept_records = 0L, n_excluded_records = 0L), empty_diag)
+    ))
+  }
+  records <- records
+  for (col in c("source_type", "transition_group", "delta_hat", "delta_se",
+                "path_responsibility", "child_observed_count", "expected_count_parent_like",
+                "child_is_zero", "prior_dominated_flag", "boundary_flag",
+                "transition_size", "zero_informativeness_score")) {
+    if (!col %in% names(records)) {
+      records[[col]] <- NA
+    }
+  }
+  child_is_zero_vec <- as.logical(records$child_is_zero)
+  child_is_zero_vec[is.na(child_is_zero_vec)] <- FALSE
+  observed_source <- records$source_type %in% c("observed", "fq_transition")
+  zero_source <- records$source_type == "informative_zero" |
+    (isTRUE(cohort_transition_zero_as_censoring_only) & child_is_zero_vec)
+  finite_observed_se <- records$delta_se[observed_source & is.finite(records$delta_se) & records$delta_se > 0]
+  derived_max_delta_se <- cohort_transition_max_delta_se
+  if (is.null(derived_max_delta_se) && length(finite_observed_se)) {
+    derived_max_delta_se <- as.numeric(stats::quantile(
+      finite_observed_se,
+      probs = cohort_transition_max_delta_se_quantile,
+      na.rm = TRUE,
+      names = FALSE,
+      type = 8
+    ))
+  }
+  if (!is.finite(derived_max_delta_se) || derived_max_delta_se <= 0) {
+    derived_max_delta_se <- Inf
+  }
+
+  reason <- rep(NA_character_, nrow(records))
+  missing_group <- is.na(records$transition_group) | !nzchar(as.character(records$transition_group))
+  reason[is.na(reason) & missing_group] <- "missing_transition_group"
+  complex_event <- is.finite(records$transition_size) & abs(records$transition_size) != 1
+  reason[is.na(reason) & complex_event] <- "non_one_step_or_complex"
+  low_path <- !is.finite(records$path_responsibility) |
+    records$path_responsibility < cohort_transition_min_path_responsibility
+  reason[is.na(reason) & low_path] <- "low_path_responsibility"
+
+  observed_label <- observed_source & !child_is_zero_vec
+  if (!isTRUE(cohort_transition_use_prior_dominated_records)) {
+    prior_dominated <- as.logical(records$prior_dominated_flag)
+    prior_dominated[is.na(prior_dominated)] <- FALSE
+    reason[is.na(reason) & observed_label & prior_dominated] <- "prior_dominated"
+  }
+  if (!isTRUE(cohort_transition_use_boundary_records)) {
+    boundary_dominated <- as.logical(records$boundary_flag)
+    boundary_dominated[is.na(boundary_dominated)] <- FALSE
+    reason[is.na(reason) & observed_label & boundary_dominated] <- "boundary_dominated"
+  }
+  low_count <- !is.finite(records$child_observed_count) |
+    records$child_observed_count < cohort_transition_min_observed_count
+  reason[is.na(reason) & observed_label & low_count] <- "zero_not_informative"
+  missing_se <- !is.finite(records$delta_se) | records$delta_se <= 0
+  reason[is.na(reason) & observed_label & missing_se] <- "missing_delta_se"
+  reason[is.na(reason) & observed_label & is.finite(records$delta_se) &
+           records$delta_se > derived_max_delta_se] <- "large_delta_se"
+  reason[is.na(reason) & observed_label & !is.finite(records$delta_hat)] <- "non_finite_delta"
+
+  zero_label <- zero_source | child_is_zero_vec
+  zero_low_exposure <- !is.finite(records$expected_count_parent_like) |
+    records$expected_count_parent_like < cohort_transition_zero_min_expected_count
+  reason[is.na(reason) & zero_label & zero_low_exposure] <- "low_exposure_zero"
+  reason[is.na(reason) & zero_label & !zero_low_exposure] <- NA_character_
+
+  recognized <- observed_label | zero_label
+  reason[is.na(reason) & !recognized] <- "zero_not_informative"
+  keep <- is.na(reason)
+  kept <- records[keep, , drop = FALSE]
+  excluded <- records[!keep, , drop = FALSE]
+  excluded$exclusion_reason <- reason[!keep]
+  kept$cohort_transition_evidence_type <- ifelse(
+    kept$source_type == "informative_zero" | as.logical(kept$child_is_zero),
+    "zero_censoring_evidence",
+    "observed_delta_evidence"
+  )
+  if (nrow(kept) && isTRUE(cohort_transition_zero_as_censoring_only)) {
+    zero_idx <- kept$cohort_transition_evidence_type == "zero_censoring_evidence"
+    kept$delta_hat[zero_idx] <- NA_real_
+  }
+
+  reason_counts <- table(factor(reason[!keep], names(cohort_transition_empty_filter_diagnostics())))
+  diagnostics <- c(
+    list(
+      n_input_records = as.integer(nrow(records)),
+      n_kept_records = as.integer(nrow(kept)),
+      n_excluded_records = as.integer(nrow(excluded)),
+      max_delta_se_used = derived_max_delta_se
+    ),
+    as.list(as.integer(reason_counts))
+  )
+  names(diagnostics)[seq_along(reason_counts) + 4L] <- names(reason_counts)
+  list(kept_records = kept, excluded_records = excluded, diagnostics = diagnostics)
+}
+
+cohort_transition_weighted_median <- function(x, w) {
+  ok <- is.finite(x) & is.finite(w) & w >= 0
+  if (!any(ok) || sum(w[ok]) <= 0) {
+    return(NA_real_)
+  }
+  x <- x[ok]
+  w <- w[ok]
+  ord <- order(x)
+  x <- x[ord]
+  w <- w[ord] / sum(w)
+  x[which(cumsum(w) >= 0.5)[1L]]
+}
+
+#' Aggregate raw cohort transition records to patient-level evidence
+#'
+#' Bootstrap/path-level rows are useful diagnostics but are not independent
+#' cohort patients. This helper collapses them to patient-level observed-delta
+#' and zero-censoring summaries before v2 prior fitting.
+#'
+#' @param records Filtered or raw transition records.
+#' @param grouping Transition grouping mode used for `transition_group`.
+#' @param cohort_transition_sd_floor Floor used in inverse-variance weights.
+#' @param cohort_transition_zero_weight_cap_ratio Cap on zero-censoring weight.
+#' @return A data frame with patient-level group summaries.
+#' @export
+aggregate_cohort_transition_records_by_patient <- function(records,
+                                                           grouping = c("gain_loss", "gain_loss_chr", "gain_loss_chr_burden", "exact_event"),
+                                                           cohort_transition_sd_floor = 0.05,
+                                                           cohort_transition_zero_weight_cap_ratio = 0.25,
+                                                           ...) {
+  grouping <- match.arg(grouping)
+  validate_positive_finite(cohort_transition_sd_floor, "cohort_transition_sd_floor")
+  validate_nonnegative_finite(cohort_transition_zero_weight_cap_ratio, "cohort_transition_zero_weight_cap_ratio")
+  if (!is.data.frame(records) || !nrow(records)) {
+    return(data.frame())
+  }
+  records <- cohort_transition_assign_groups(records, grouping)
+  for (col in c("cohort_transition_evidence_type", "source_type", "patient_id", "parent_karyotype",
+                "child_karyotype", "delta_hat", "delta_se", "path_responsibility",
+                "expected_count_parent_like", "zero_informativeness_score",
+                "replicate_id", "bootstrap_id")) {
+    if (!col %in% names(records)) records[[col]] <- NA
+  }
+  if (!"cohort_transition_evidence_type" %in% names(records) ||
+      all(is.na(records$cohort_transition_evidence_type))) {
+    records$cohort_transition_evidence_type <- ifelse(
+      records$source_type == "informative_zero" | as.logical(records$child_is_zero),
+      "zero_censoring_evidence",
+      "observed_delta_evidence"
+    )
+  }
+  key_cols <- c(
+    "patient_id",
+    "group_gain_loss",
+    "group_gain_loss_chr",
+    "group_gain_loss_chr_burden",
+    "group_exact_event",
+    "transition_group",
+    "cohort_transition_evidence_type"
+  )
+  split_key <- interaction(records[key_cols], drop = TRUE, sep = "\r")
+  rows <- lapply(split(records, split_key), function(df) {
+    evidence_type <- df$cohort_transition_evidence_type[1]
+    base <- df[1L, intersect(key_cols, names(df)), drop = FALSE]
+    if (identical(evidence_type, "observed_delta_evidence")) {
+      se <- pmax(as.numeric(df$delta_se), cohort_transition_sd_floor)
+      w <- as.numeric(df$path_responsibility) / (se^2)
+      w[!is.finite(w) | w < 0] <- 0
+      if (sum(w) <= 0) {
+        w <- rep(1, nrow(df))
+      }
+      delta <- as.numeric(df$delta_hat)
+      ok <- is.finite(delta) & is.finite(w) & w > 0
+      delta_mean <- if (any(ok)) stats::weighted.mean(delta[ok], w[ok]) else NA_real_
+      delta_median <- cohort_transition_weighted_median(delta, w)
+      delta_se <- if (sum(w[ok]) > 0) sqrt(1 / sum(w[ok])) else NA_real_
+      out <- data.frame(
+        base,
+        delta_patient_mean = delta_mean,
+        delta_patient_median = delta_median,
+        delta_patient_se = delta_se,
+        n_raw_records = nrow(df),
+        n_bootstrap_records = length(unique(df$bootstrap_id[!is.na(df$bootstrap_id)])),
+        n_unique_children = length(unique(df$child_karyotype)),
+        n_unique_parents = length(unique(df$parent_karyotype)),
+        total_path_responsibility = sum(df$path_responsibility, na.rm = TRUE),
+        observed_weight = sum(w[ok], na.rm = TRUE),
+        n_zero_records = 0L,
+        total_zero_weight = 0,
+        max_expected_count_parent_like = NA_real_,
+        mean_expected_count_parent_like = NA_real_,
+        zero_informativeness_score = NA_real_,
+        zero_censoring_weight = 0,
+        stringsAsFactors = FALSE
+      )
+    } else {
+      zero_w <- as.numeric(df$path_responsibility) * pmin(1, pmax(0, as.numeric(df$zero_informativeness_score)))
+      zero_w[!is.finite(zero_w) | zero_w < 0] <- 0
+      zero_cap <- cohort_transition_zero_weight_cap_ratio * max(1, length(unique(df$patient_id)))
+      if (sum(zero_w) > zero_cap && zero_cap >= 0) {
+        zero_w <- zero_w * (zero_cap / sum(zero_w))
+      }
+      out <- data.frame(
+        base,
+        delta_patient_mean = NA_real_,
+        delta_patient_median = NA_real_,
+        delta_patient_se = NA_real_,
+        n_raw_records = nrow(df),
+        n_bootstrap_records = length(unique(df$bootstrap_id[!is.na(df$bootstrap_id)])),
+        n_unique_children = length(unique(df$child_karyotype)),
+        n_unique_parents = length(unique(df$parent_karyotype)),
+        total_path_responsibility = sum(df$path_responsibility, na.rm = TRUE),
+        observed_weight = 0,
+        n_zero_records = nrow(df),
+        total_zero_weight = sum(zero_w, na.rm = TRUE),
+        max_expected_count_parent_like = max(df$expected_count_parent_like, na.rm = TRUE),
+        mean_expected_count_parent_like = mean(df$expected_count_parent_like, na.rm = TRUE),
+        zero_informativeness_score = mean(df$zero_informativeness_score, na.rm = TRUE),
+        zero_censoring_weight = sum(zero_w, na.rm = TRUE),
+        stringsAsFactors = FALSE
+      )
+    }
+    out
+  })
+  out <- do.call(rbind, rows)
+  rownames(out) <- NULL
+  out
+}
+
+compute_class_specific_borrowing <- function(effect_class,
+                                             cohort_transition_lambda_consistent_deleterious = 0.50,
+                                             cohort_transition_lambda_consistent_neutral = 0.25,
+                                             cohort_transition_lambda_consistent_beneficial = 0.15,
+                                             cohort_transition_lambda_context_dependent = 0.30,
+                                             cohort_transition_lambda_high_variable = 0.00,
+                                             cohort_transition_lambda_sparse_unknown = 0.00,
+                                             cohort_transition_lambda_global_fallback = 0.05,
+                                             cohort_transition_sd_multiplier_consistent_deleterious = 1.0,
+                                             cohort_transition_sd_multiplier_consistent_neutral = 1.5,
+                                             cohort_transition_sd_multiplier_consistent_beneficial = 2.0,
+                                             cohort_transition_sd_multiplier_context_dependent = 1.5,
+                                             cohort_transition_sd_multiplier_high_variable = 4.0,
+                                             cohort_transition_sd_multiplier_sparse_unknown = 4.0,
+                                             cohort_transition_sd_multiplier_global_fallback = 4.0) {
+  lambda <- switch(
+    effect_class,
+    consistent_deleterious = cohort_transition_lambda_consistent_deleterious,
+    consistent_neutral = cohort_transition_lambda_consistent_neutral,
+    consistent_beneficial = cohort_transition_lambda_consistent_beneficial,
+    context_dependent = cohort_transition_lambda_context_dependent,
+    high_variable = cohort_transition_lambda_high_variable,
+    sparse_unknown = cohort_transition_lambda_sparse_unknown,
+    global_fallback = cohort_transition_lambda_global_fallback,
+    cohort_transition_lambda_sparse_unknown
+  )
+  sd_multiplier <- switch(
+    effect_class,
+    consistent_deleterious = cohort_transition_sd_multiplier_consistent_deleterious,
+    consistent_neutral = cohort_transition_sd_multiplier_consistent_neutral,
+    consistent_beneficial = cohort_transition_sd_multiplier_consistent_beneficial,
+    context_dependent = cohort_transition_sd_multiplier_context_dependent,
+    high_variable = cohort_transition_sd_multiplier_high_variable,
+    sparse_unknown = cohort_transition_sd_multiplier_sparse_unknown,
+    global_fallback = cohort_transition_sd_multiplier_global_fallback,
+    cohort_transition_sd_multiplier_sparse_unknown
+  )
+  list(
+    cohort_lambda = lambda,
+    sd_multiplier = sd_multiplier,
+    use_for_zero = effect_class %in% c("consistent_deleterious", "consistent_neutral", "consistent_beneficial", "context_dependent"),
+    use_for_observed = FALSE,
+    use_for_low_information = effect_class %in% c("consistent_deleterious", "consistent_neutral", "context_dependent")
+  )
+}
+
+compute_transition_group_class <- function(k,
+                                           eff_k,
+                                           effective_observed,
+                                           mu,
+                                           se_mu,
+                                           tau,
+                                           i2,
+                                           sign_consistency,
+                                           cohort_transition_min_patients_consistent = 3L,
+                                           cohort_transition_min_effective_patients = 3,
+                                           cohort_transition_min_effective_observed = 3,
+                                           cohort_transition_effect_threshold = 0.02,
+                                           cohort_transition_sign_consistency_threshold = 0.75,
+                                           cohort_transition_high_heterogeneity_i2 = 0.50,
+                                           cohort_transition_high_between_patient_sd = 0.10) {
+  if (!is.finite(se_mu) || se_mu <= 0) se_mu <- Inf
+  p_beneficial <- if (is.finite(se_mu)) 1 - stats::pnorm(cohort_transition_effect_threshold, mean = mu, sd = se_mu) else 0
+  p_deleterious <- if (is.finite(se_mu)) stats::pnorm(-cohort_transition_effect_threshold, mean = mu, sd = se_mu) else 0
+  p_neutral <- if (is.finite(se_mu)) {
+    stats::pnorm(cohort_transition_effect_threshold, mean = mu, sd = se_mu) -
+      stats::pnorm(-cohort_transition_effect_threshold, mean = mu, sd = se_mu)
+  } else {
+    0
+  }
+  sparse <- k < cohort_transition_min_patients_consistent ||
+    eff_k < cohort_transition_min_effective_patients ||
+    effective_observed < cohort_transition_min_effective_observed
+  high_variable <- !sparse && (
+    (is.finite(i2) && i2 >= cohort_transition_high_heterogeneity_i2) ||
+      (is.finite(tau) && tau >= cohort_transition_high_between_patient_sd) ||
+      (is.finite(sign_consistency) && sign_consistency < cohort_transition_sign_consistency_threshold)
+  )
+  if (sparse) {
+    effect_class <- "sparse_unknown"
+  } else if (high_variable) {
+    effect_class <- "high_variable"
+  } else if (p_deleterious >= 0.8 && sign_consistency >= cohort_transition_sign_consistency_threshold) {
+    effect_class <- "consistent_deleterious"
+  } else if (p_beneficial >= 0.8 && sign_consistency >= cohort_transition_sign_consistency_threshold) {
+    effect_class <- "consistent_beneficial"
+  } else if (p_neutral >= 0.6 && tau < cohort_transition_high_between_patient_sd) {
+    effect_class <- "consistent_neutral"
+  } else {
+    effect_class <- "sparse_unknown"
+  }
+  heterogeneity_class <- if (sparse) {
+    "sparse_unknown"
+  } else if (high_variable) {
+    "high_variable"
+  } else if (is.finite(i2) && i2 < 0.25 && is.finite(tau) && tau < cohort_transition_high_between_patient_sd / 2) {
+    "low_heterogeneity"
+  } else {
+    "moderate_heterogeneity"
+  }
+  list(
+    effect_class = effect_class,
+    heterogeneity_class = heterogeneity_class,
+    p_beneficial = p_beneficial,
+    p_deleterious = p_deleterious,
+    p_neutral = p_neutral
+  )
+}
+
+#' Compute heterogeneity metrics for one transition group
+#'
+#' @param patient_group_summaries Patient-level summaries from
+#'   `aggregate_cohort_transition_records_by_patient()`.
+#' @param group_name Group label.
+#' @param group_level Grouping level.
+#' @param group_col Column containing `group_name`.
+#' @return A one-row data frame of heterogeneity metrics.
+#' @export
+compute_transition_group_heterogeneity <- function(patient_group_summaries,
+                                                   group_name,
+                                                   group_level,
+                                                   group_col,
+                                                   cohort_transition_sd_floor = 0.05,
+                                                   cohort_transition_effect_threshold = 0.02,
+                                                   ...) {
+  obs <- patient_group_summaries[
+    patient_group_summaries$cohort_transition_evidence_type == "observed_delta_evidence" &
+      patient_group_summaries[[group_col]] == group_name &
+      is.finite(patient_group_summaries$delta_patient_mean),
+    ,
+    drop = FALSE
+  ]
+  zero <- patient_group_summaries[
+    patient_group_summaries$cohort_transition_evidence_type == "zero_censoring_evidence" &
+      patient_group_summaries[[group_col]] == group_name,
+    ,
+    drop = FALSE
+  ]
+  k <- length(unique(obs$patient_id))
+  z_k <- length(unique(zero$patient_id))
+  if (!nrow(obs)) {
+    return(data.frame(
+      transition_group = group_name,
+      group = group_name,
+      group_level = group_level,
+      fallback_group = NA_character_,
+      n_patients_observed = 0L,
+      n_patients_zero = z_k,
+      effective_patients_observed = 0,
+      effective_patients_total = z_k,
+      weighted_mean_delta = 0,
+      weighted_se_delta = Inf,
+      weighted_sd_delta = NA_real_,
+      between_patient_sd = NA_real_,
+      tau_between_patient = NA_real_,
+      i2_heterogeneity = NA_real_,
+      sign_consistency = NA_real_,
+      n_positive_patients = 0L,
+      n_negative_patients = 0L,
+      n_near_zero_patients = 0L,
+      p_beneficial = 0,
+      p_deleterious = 0,
+      p_neutral = 0,
+      stringsAsFactors = FALSE
+    ))
+  }
+  delta <- obs$delta_patient_mean
+  se <- pmax(obs$delta_patient_se, cohort_transition_sd_floor)
+  w <- obs$observed_weight
+  w[!is.finite(w) | w <= 0] <- 1 / (se[!is.finite(w) | w <= 0]^2)
+  w[!is.finite(w) | w <= 0] <- 1
+  mu <- stats::weighted.mean(delta, w)
+  se_mu <- sqrt(1 / sum(w))
+  weighted_var <- sum(w * (delta - mu)^2) / max(sum(w), .Machine$double.eps)
+  weighted_sd <- sqrt(max(0, weighted_var))
+  mean_se2 <- stats::weighted.mean(se^2, w)
+  tau <- sqrt(max(0, weighted_var - mean_se2))
+  i2 <- tau^2 / (tau^2 + mean_se2)
+  if (!is.finite(i2)) i2 <- 0
+  eff_k <- sum(w)^2 / sum(w^2)
+  mu_sign <- if (abs(mu) <= cohort_transition_effect_threshold) 0 else sign(mu)
+  signs <- ifelse(abs(delta) <= cohort_transition_effect_threshold, 0, sign(delta))
+  sign_consistency <- if (mu_sign == 0) {
+    mean(signs == 0)
+  } else {
+    mean(signs == mu_sign)
+  }
+  data.frame(
+    transition_group = group_name,
+    group = group_name,
+    group_level = group_level,
+    fallback_group = NA_character_,
+    n_patients_observed = k,
+    n_patients_zero = z_k,
+    effective_patients_observed = eff_k,
+    effective_patients_total = eff_k + z_k,
+    weighted_mean_delta = mu,
+    weighted_se_delta = se_mu,
+    weighted_sd_delta = weighted_sd,
+    between_patient_sd = tau,
+    tau_between_patient = tau,
+    i2_heterogeneity = i2,
+    sign_consistency = sign_consistency,
+    n_positive_patients = sum(delta > cohort_transition_effect_threshold),
+    n_negative_patients = sum(delta < -cohort_transition_effect_threshold),
+    n_near_zero_patients = sum(abs(delta) <= cohort_transition_effect_threshold),
+    p_beneficial = 1 - stats::pnorm(cohort_transition_effect_threshold, mean = mu, sd = se_mu),
+    p_deleterious = stats::pnorm(-cohort_transition_effect_threshold, mean = mu, sd = se_mu),
+    p_neutral = stats::pnorm(cohort_transition_effect_threshold, mean = mu, sd = se_mu) -
+      stats::pnorm(-cohort_transition_effect_threshold, mean = mu, sd = se_mu),
+    stringsAsFactors = FALSE
+  )
+}
+
+#' Classify cohort transition groups for v2 selective borrowing
+#'
+#' @param patient_group_summaries Patient-level summaries.
+#' @return A data frame of group classes and recommended borrowing controls.
+#' @export
+classify_cohort_transition_groups <- function(patient_group_summaries,
+                                              cohort_transition_sd_floor = 0.05,
+                                              cohort_transition_patient_sd_floor = 0.10,
+                                              cohort_transition_min_patients_consistent = 3L,
+                                              cohort_transition_min_effective_patients = 3,
+                                              cohort_transition_min_effective_observed = 3,
+                                              cohort_transition_effect_threshold = 0.02,
+                                              cohort_transition_sign_consistency_threshold = 0.75,
+                                              cohort_transition_high_heterogeneity_i2 = 0.50,
+                                              cohort_transition_high_between_patient_sd = 0.10,
+                                              cohort_transition_context_heterogeneity_drop = 0.25,
+                                              ...) {
+  validate_positive_finite(cohort_transition_sd_floor, "cohort_transition_sd_floor")
+  validate_positive_finite(cohort_transition_patient_sd_floor, "cohort_transition_patient_sd_floor")
+  validate_positive_integer(cohort_transition_min_patients_consistent, "cohort_transition_min_patients_consistent")
+  validate_positive_finite(cohort_transition_min_effective_patients, "cohort_transition_min_effective_patients")
+  validate_positive_finite(cohort_transition_min_effective_observed, "cohort_transition_min_effective_observed")
+  if (!is.data.frame(patient_group_summaries) || !nrow(patient_group_summaries)) {
+    borrowing <- compute_class_specific_borrowing("global_fallback", ...)
+    return(data.frame(
+      transition_group = "global",
+      group = "global",
+      group_level = "global",
+      fallback_group = NA_character_,
+      n_patients_observed = 0L,
+      n_patients_zero = 0L,
+      effective_patients_observed = 0,
+      effective_patients_total = 0,
+      weighted_mean_delta = 0,
+      weighted_se_delta = Inf,
+      weighted_sd_delta = NA_real_,
+      between_patient_sd = NA_real_,
+      tau_between_patient = NA_real_,
+      i2_heterogeneity = NA_real_,
+      sign_consistency = NA_real_,
+      n_positive_patients = 0L,
+      n_negative_patients = 0L,
+      n_near_zero_patients = 0L,
+      p_beneficial = 0,
+      p_deleterious = 0,
+      p_neutral = 0,
+      effect_class = "global_fallback",
+      heterogeneity_class = "sparse_unknown",
+      recommended_lambda = borrowing$cohort_lambda,
+      recommended_sd_multiplier = borrowing$sd_multiplier,
+      recommended_use_for_zero = TRUE,
+      use_for_observed = FALSE,
+      use_for_low_information = TRUE,
+      warning_flags = "no_patient_group_summaries",
+      stringsAsFactors = FALSE
+    ))
+  }
+  level_map <- c(
+    gain_loss = "group_gain_loss",
+    gain_loss_chr = "group_gain_loss_chr",
+    gain_loss_chr_burden = "group_gain_loss_chr_burden",
+    exact_event = "group_exact_event"
+  )
+  rows <- list()
+  rows[[1L]] <- compute_transition_group_heterogeneity(
+    patient_group_summaries = transform(patient_group_summaries, global = "global"),
+    group_name = "global",
+    group_level = "global",
+    group_col = "global",
+    cohort_transition_sd_floor = cohort_transition_sd_floor,
+    cohort_transition_effect_threshold = cohort_transition_effect_threshold
+  )
+  for (level in names(level_map)) {
+    col <- level_map[[level]]
+    if (!col %in% names(patient_group_summaries)) next
+    groups <- sort(unique(patient_group_summaries[[col]][!is.na(patient_group_summaries[[col]]) & nzchar(patient_group_summaries[[col]])]))
+    for (group_name in groups) {
+      rows[[length(rows) + 1L]] <- compute_transition_group_heterogeneity(
+        patient_group_summaries = patient_group_summaries,
+        group_name = group_name,
+        group_level = level,
+        group_col = col,
+        cohort_transition_sd_floor = cohort_transition_sd_floor,
+        cohort_transition_effect_threshold = cohort_transition_effect_threshold
+      )
+    }
+  }
+  out <- do.call(rbind, rows)
+  for (i in seq_len(nrow(out))) {
+    if (out$group_level[i] == "global") {
+      cls <- list(
+        effect_class = "global_fallback",
+        heterogeneity_class = "sparse_unknown",
+        p_beneficial = out$p_beneficial[i],
+        p_deleterious = out$p_deleterious[i],
+        p_neutral = out$p_neutral[i]
+      )
+    } else {
+      cls <- compute_transition_group_class(
+        k = out$n_patients_observed[i],
+        eff_k = out$effective_patients_observed[i],
+        effective_observed = out$effective_patients_observed[i],
+        mu = out$weighted_mean_delta[i],
+        se_mu = out$weighted_se_delta[i],
+        tau = out$tau_between_patient[i],
+        i2 = out$i2_heterogeneity[i],
+        sign_consistency = out$sign_consistency[i],
+        cohort_transition_min_patients_consistent = cohort_transition_min_patients_consistent,
+        cohort_transition_min_effective_patients = cohort_transition_min_effective_patients,
+        cohort_transition_min_effective_observed = cohort_transition_min_effective_observed,
+        cohort_transition_effect_threshold = cohort_transition_effect_threshold,
+        cohort_transition_sign_consistency_threshold = cohort_transition_sign_consistency_threshold,
+        cohort_transition_high_heterogeneity_i2 = cohort_transition_high_heterogeneity_i2,
+        cohort_transition_high_between_patient_sd = cohort_transition_high_between_patient_sd
+      )
+    }
+    out$effect_class[i] <- cls$effect_class
+    out$heterogeneity_class[i] <- cls$heterogeneity_class
+    out$p_beneficial[i] <- cls$p_beneficial
+    out$p_deleterious[i] <- cls$p_deleterious
+    out$p_neutral[i] <- cls$p_neutral
+  }
+  # If a fine group is stable while its chromosome-level parent is variable,
+  # label it as context-dependent so refit diagnostics show why the finer
+  # context is preferred.
+  fine_idx <- which(out$group_level %in% c("gain_loss_chr_burden", "exact_event") &
+                      !out$effect_class %in% c("sparse_unknown", "high_variable"))
+  for (idx in fine_idx) {
+    parent_group <- sub("_burden_(low|neutral|high)$", "", out$group[idx])
+    parent <- out[out$group_level == "gain_loss_chr" & out$group == parent_group, , drop = FALSE]
+    if (nrow(parent) &&
+        parent$effect_class[1] == "high_variable" &&
+        is.finite(parent$i2_heterogeneity[1]) &&
+        is.finite(out$i2_heterogeneity[idx]) &&
+        parent$i2_heterogeneity[1] - out$i2_heterogeneity[idx] >= cohort_transition_context_heterogeneity_drop) {
+      out$effect_class[idx] <- "context_dependent"
+    }
+  }
+  borrow <- lapply(out$effect_class, compute_class_specific_borrowing, ...)
+  out$recommended_lambda <- vapply(borrow, `[[`, numeric(1), "cohort_lambda")
+  out$recommended_sd_multiplier <- vapply(borrow, `[[`, numeric(1), "sd_multiplier")
+  out$recommended_use_for_zero <- vapply(borrow, `[[`, logical(1), "use_for_zero")
+  out$use_for_observed <- vapply(borrow, `[[`, logical(1), "use_for_observed")
+  out$use_for_low_information <- vapply(borrow, `[[`, logical(1), "use_for_low_information")
+  out$warning_flags <- ""
+  out$warning_flags[out$effect_class == "consistent_beneficial"] <- "survivor_bias_warning"
+  out$warning_flags[out$effect_class == "sparse_unknown"] <- "sparse_unknown"
+  out$warning_flags[out$effect_class == "high_variable"] <- "high_variable"
+  rownames(out) <- NULL
+  out
 }
 
 cohort_transition_fit_group <- function(records,
@@ -996,18 +1656,18 @@ cohort_transition_build_prior_tables <- function(records,
 #' @param ... Reserved for future prior fitting controls.
 #' @return A cohort-transition prior object.
 #' @export
-learn_cohort_transition_prior <- function(records,
-                                          leave_one_patient_out = TRUE,
-                                          grouping = c("gain_loss", "gain_loss_chr", "gain_loss_chr_burden", "exact_event"),
-                                          cohort_transition_min_patients_per_group = 2L,
-                                          cohort_transition_min_effective_n = 3L,
-                                          cohort_transition_sd_floor = 1e-3,
-                                          cohort_transition_patient_sd_floor = 0.1,
-                                          cohort_transition_global_fallback = TRUE,
-                                          cohort_transition_zero_weight_cap_ratio = 1.0,
-                                          cohort_transition_zero_expected_count_cap = 10.0,
-                                          cohort_transition_zero_mean_shift_cap = 0.2,
-                                          ...) {
+learn_cohort_transition_prior_v1 <- function(records,
+                                             leave_one_patient_out = TRUE,
+                                             grouping = c("gain_loss", "gain_loss_chr", "gain_loss_chr_burden", "exact_event"),
+                                             cohort_transition_min_patients_per_group = 2L,
+                                             cohort_transition_min_effective_n = 3L,
+                                             cohort_transition_sd_floor = 1e-3,
+                                             cohort_transition_patient_sd_floor = 0.1,
+                                             cohort_transition_global_fallback = TRUE,
+                                             cohort_transition_zero_weight_cap_ratio = 1.0,
+                                             cohort_transition_zero_expected_count_cap = 10.0,
+                                             cohort_transition_zero_mean_shift_cap = 0.2,
+                                             ...) {
   grouping <- match.arg(grouping)
   validate_positive_integer(cohort_transition_min_patients_per_group, "cohort_transition_min_patients_per_group")
   validate_positive_finite(cohort_transition_min_effective_n, "cohort_transition_min_effective_n")
@@ -1137,6 +1797,523 @@ learn_cohort_transition_prior <- function(records,
   )
 }
 
+cohort_transition_build_prior_tables_v2 <- function(patient_group_summaries,
+                                                    grouping,
+                                                    group_classes,
+                                                    sd_floor,
+                                                    patient_sd_floor,
+                                                    global_fallback = TRUE) {
+  grouping <- match.arg(grouping, c("gain_loss", "gain_loss_chr", "gain_loss_chr_burden", "exact_event"))
+  validate_positive_finite(sd_floor, "cohort_transition_sd_floor")
+  validate_positive_finite(patient_sd_floor, "cohort_transition_patient_sd_floor")
+  if (!nrow(group_classes)) {
+    group_classes <- classify_cohort_transition_groups(
+      patient_group_summaries,
+      cohort_transition_sd_floor = sd_floor,
+      cohort_transition_patient_sd_floor = patient_sd_floor
+    )
+  }
+  classes <- group_classes
+  classes$mu <- classes$weighted_mean_delta
+  classes$sigma <- pmax(classes$between_patient_sd, sd_floor)
+  classes$sigma[!is.finite(classes$sigma)] <- sd_floor
+  classes$tau_between_patient[!is.finite(classes$tau_between_patient)] <- classes$sigma[!is.finite(classes$tau_between_patient)]
+  classes$sigma_with_patient_heterogeneity <- sqrt(classes$sigma^2 + patient_sd_floor^2)
+  classes$sd_floor_used <- classes$sigma <= sd_floor + sqrt(.Machine$double.eps)
+  classes$cohort_lambda <- classes$recommended_lambda
+  classes$sd_multiplier <- classes$recommended_sd_multiplier
+  classes$effective_prior_sd <- pmax(classes$sigma_with_patient_heterogeneity * classes$sd_multiplier, sd_floor)
+  classes$n_patients <- classes$n_patients_observed
+  classes$effective_patients <- classes$effective_patients_observed
+  classes$n_observed_patient_summaries <- classes$n_patients_observed
+  classes$n_zero_patient_summaries <- classes$n_patients_zero
+  classes$n_records_total <- NA_integer_
+  classes$n_observed_records <- classes$n_patients_observed
+  classes$n_zero_records <- classes$n_patients_zero
+  classes$effective_n <- classes$effective_patients_total
+  classes$level <- classes$group_level
+
+  global <- classes[classes$group_level == "global" & classes$group == "global", , drop = FALSE]
+  if (!nrow(global)) {
+    global <- classes[1L, , drop = FALSE]
+    global$group <- "global"
+    global$transition_group <- "global"
+    global$group_level <- "global"
+    global$level <- "global"
+    global$effect_class <- "global_fallback"
+    global$cohort_lambda <- 0.05
+    global$sd_multiplier <- 4
+    global$effective_prior_sd <- max(sqrt(sd_floor^2 + patient_sd_floor^2) * 4, sd_floor)
+  }
+
+  target_col <- cohort_transition_group_column(grouping)
+  target_groups <- if (is.data.frame(patient_group_summaries) && nrow(patient_group_summaries) &&
+                       target_col %in% names(patient_group_summaries)) {
+    sort(unique(patient_group_summaries[[target_col]][!is.na(patient_group_summaries[[target_col]]) &
+                                                        nzchar(patient_group_summaries[[target_col]])]))
+  } else {
+    character(0)
+  }
+  fallback_levels <- switch(
+    grouping,
+    exact_event = c("exact_event", "gain_loss_chr_burden", "gain_loss_chr", "gain_loss", "global"),
+    gain_loss_chr_burden = c("gain_loss_chr_burden", "gain_loss_chr", "gain_loss", "global"),
+    gain_loss_chr = c("gain_loss_chr", "gain_loss", "global"),
+    gain_loss = c("gain_loss", "global")
+  )
+  target_rows <- lapply(target_groups, function(group_name) {
+    exemplar <- patient_group_summaries[patient_group_summaries[[target_col]] == group_name, , drop = FALSE][1L, , drop = FALSE]
+    candidate_names <- list(
+      exact_event = exemplar$group_exact_event,
+      gain_loss_chr_burden = exemplar$group_gain_loss_chr_burden,
+      gain_loss_chr = exemplar$group_gain_loss_chr,
+      gain_loss = exemplar$group_gain_loss,
+      global = "global"
+    )
+    chosen <- NULL
+    requested_missing <- TRUE
+    for (level in fallback_levels) {
+      cand_name <- candidate_names[[level]]
+      cand <- classes[
+        classes$group_level == level &
+          classes$group == cand_name,
+        ,
+        drop = FALSE
+      ]
+      if (!nrow(cand)) next
+      if (level == grouping) requested_missing <- FALSE
+      usable <- cand$effect_class[1] %in% c(
+        "consistent_deleterious",
+        "consistent_neutral",
+        "consistent_beneficial",
+        "context_dependent",
+        "high_variable",
+        "sparse_unknown"
+      )
+      if (usable || (level == "global" && isTRUE(global_fallback))) {
+        chosen <- cand[1L, , drop = FALSE]
+        break
+      }
+    }
+    if (is.null(chosen)) {
+      chosen <- global[1L, , drop = FALSE]
+    }
+    fallback_multiplier <- 1
+    fallback_group <- NA_character_
+    if (!identical(chosen$group[1], group_name)) {
+      fallback_group <- chosen$group[1]
+      if (identical(chosen$group_level[1], "global")) {
+        fallback_multiplier <- 0.25
+        chosen$effect_class <- "global_fallback"
+        chosen$heterogeneity_class <- "sparse_unknown"
+      } else {
+        fallback_multiplier <- 0.5
+      }
+    }
+    chosen$requested_group <- group_name
+    chosen$fallback_group <- fallback_group
+    chosen$fallback_group_used <- fallback_group
+    chosen$fallback_multiplier <- fallback_multiplier
+    chosen$group <- group_name
+    chosen$transition_group <- group_name
+    chosen$cohort_lambda <- chosen$cohort_lambda * fallback_multiplier
+    chosen$effective_prior_sd <- chosen$effective_prior_sd / sqrt(max(fallback_multiplier, .Machine$double.eps))
+    chosen$effective_prior_sd <- if (identical(chosen$group_level[1], "global")) {
+      max(chosen$effective_prior_sd, chosen$sigma_with_patient_heterogeneity * 2)
+    } else {
+      chosen$effective_prior_sd
+    }
+    if (isTRUE(requested_missing)) {
+      chosen$warning_flags <- paste(unique(c(chosen$warning_flags, "requested_group_missing")), collapse = ";")
+    }
+    chosen
+  })
+  group_priors <- if (length(target_rows)) do.call(rbind, target_rows) else classes[FALSE, , drop = FALSE]
+  rownames(group_priors) <- NULL
+  rownames(classes) <- NULL
+  list(global_prior = global[1L, , drop = FALSE], group_priors = group_priors, all_group_priors = classes)
+}
+
+estimate_patient_transition_shift <- function(patient_records,
+                                              prior,
+                                              cohort_transition_patient_shift_min_records = 3L,
+                                              cohort_transition_patient_shift_shrinkage_sd = 0.10,
+                                              ...) {
+  validate_positive_integer(cohort_transition_patient_shift_min_records, "cohort_transition_patient_shift_min_records")
+  validate_positive_finite(cohort_transition_patient_shift_shrinkage_sd, "cohort_transition_patient_shift_shrinkage_sd")
+  if (!is.data.frame(patient_records) || !nrow(patient_records)) {
+    return(data.frame(
+      patient_delta_shift = 0,
+      patient_delta_shift_n_records = 0L,
+      patient_delta_shift_reliability = 0,
+      stringsAsFactors = FALSE
+    ))
+  }
+  summaries <- patient_records
+  if (!"delta_patient_mean" %in% names(summaries)) {
+    filtered <- filter_cohort_transition_records(patient_records, ...)
+    summaries <- aggregate_cohort_transition_records_by_patient(
+      filtered$kept_records,
+      grouping = prior$grouping,
+      cohort_transition_sd_floor = if (is.null(prior$diagnostics$sd_floor)) 0.05 else prior$diagnostics$sd_floor
+    )
+  }
+  obs <- summaries[
+    summaries$cohort_transition_evidence_type == "observed_delta_evidence" &
+      is.finite(summaries$delta_patient_mean),
+    ,
+    drop = FALSE
+  ]
+  if (nrow(obs) < cohort_transition_patient_shift_min_records) {
+    return(data.frame(
+      patient_delta_shift = 0,
+      patient_delta_shift_n_records = nrow(obs),
+      patient_delta_shift_reliability = 0,
+      stringsAsFactors = FALSE
+    ))
+  }
+  mu <- numeric(nrow(obs))
+  for (i in seq_len(nrow(obs))) {
+    row <- prior$group_priors[prior$group_priors$group == obs$transition_group[i], , drop = FALSE]
+    if (!nrow(row)) {
+      row <- prior$global_prior
+    }
+    mu[i] <- row$mu[1]
+  }
+  residual <- obs$delta_patient_mean - mu
+  se <- pmax(obs$delta_patient_se, 0.05)
+  w <- 1 / (se^2 + cohort_transition_patient_shift_shrinkage_sd^2)
+  w[!is.finite(w) | w <= 0] <- 1
+  raw_shift <- stats::weighted.mean(residual, w)
+  reliability <- sum(w) / (sum(w) + 1 / cohort_transition_patient_shift_shrinkage_sd^2)
+  shift <- raw_shift * reliability
+  data.frame(
+    patient_delta_shift = shift,
+    patient_delta_shift_n_records = nrow(obs),
+    patient_delta_shift_reliability = reliability,
+    stringsAsFactors = FALSE
+  )
+}
+
+learn_cohort_transition_prior_v2 <- function(records,
+                                             leave_one_patient_out = TRUE,
+                                             grouping = c("gain_loss", "gain_loss_chr", "gain_loss_chr_burden", "exact_event"),
+                                             cohort_transition_min_patients_per_group = 2L,
+                                             cohort_transition_min_effective_n = 3L,
+                                             cohort_transition_sd_floor = 0.05,
+                                             cohort_transition_patient_sd_floor = 0.10,
+                                             cohort_transition_global_fallback = TRUE,
+                                             cohort_transition_zero_weight_cap_ratio = 0.25,
+                                             cohort_transition_zero_expected_count_cap = 10.0,
+                                             cohort_transition_zero_mean_shift_cap = 0.2,
+                                             cohort_transition_use_prior_dominated_records = FALSE,
+                                             cohort_transition_use_boundary_records = FALSE,
+                                             cohort_transition_max_delta_se = NULL,
+                                             cohort_transition_max_delta_se_quantile = 0.75,
+                                             cohort_transition_min_path_responsibility = 0.05,
+                                             cohort_transition_min_observed_count = 1L,
+                                             cohort_transition_classify_groups = TRUE,
+                                             cohort_transition_min_patients_consistent = 3L,
+                                             cohort_transition_min_effective_patients = 3,
+                                             cohort_transition_min_effective_observed = 3,
+                                             cohort_transition_effect_threshold = 0.02,
+                                             cohort_transition_sign_consistency_threshold = 0.75,
+                                             cohort_transition_high_heterogeneity_i2 = 0.50,
+                                             cohort_transition_high_between_patient_sd = 0.10,
+                                             cohort_transition_context_heterogeneity_drop = 0.25,
+                                             cohort_transition_lambda_consistent_deleterious = 0.50,
+                                             cohort_transition_lambda_consistent_neutral = 0.25,
+                                             cohort_transition_lambda_consistent_beneficial = 0.15,
+                                             cohort_transition_lambda_context_dependent = 0.30,
+                                             cohort_transition_lambda_high_variable = 0.00,
+                                             cohort_transition_lambda_sparse_unknown = 0.00,
+                                             cohort_transition_lambda_global_fallback = 0.05,
+                                             cohort_transition_sd_multiplier_consistent_deleterious = 1.0,
+                                             cohort_transition_sd_multiplier_consistent_neutral = 1.5,
+                                             cohort_transition_sd_multiplier_consistent_beneficial = 2.0,
+                                             cohort_transition_sd_multiplier_context_dependent = 1.5,
+                                             cohort_transition_sd_multiplier_high_variable = 4.0,
+                                             cohort_transition_sd_multiplier_sparse_unknown = 4.0,
+                                             cohort_transition_sd_multiplier_global_fallback = 4.0,
+                                             cohort_transition_patient_shift = TRUE,
+                                             cohort_transition_patient_shift_min_records = 3L,
+                                             cohort_transition_patient_shift_shrinkage_sd = 0.10,
+                                             cohort_transition_zero_as_censoring_only = TRUE,
+                                             cohort_transition_zero_min_expected_count = 3.0,
+                                             ...) {
+  grouping <- match.arg(grouping)
+  validate_positive_finite(cohort_transition_sd_floor, "cohort_transition_sd_floor")
+  validate_positive_finite(cohort_transition_patient_sd_floor, "cohort_transition_patient_sd_floor")
+  validate_scalar_logical(cohort_transition_global_fallback, "cohort_transition_global_fallback")
+  validate_scalar_logical(cohort_transition_patient_shift, "cohort_transition_patient_shift")
+  if (!is.data.frame(records) || !nrow(records)) {
+    stop("`records` must contain at least one transition record.", call. = FALSE)
+  }
+  records <- cohort_transition_assign_groups(records, grouping)
+  patient_ids <- sort(unique(as.character(records$patient_id)))
+  filtered <- filter_cohort_transition_records(
+    records,
+    cohort_transition_use_prior_dominated_records = cohort_transition_use_prior_dominated_records,
+    cohort_transition_use_boundary_records = cohort_transition_use_boundary_records,
+    cohort_transition_max_delta_se = cohort_transition_max_delta_se,
+    cohort_transition_max_delta_se_quantile = cohort_transition_max_delta_se_quantile,
+    cohort_transition_min_path_responsibility = cohort_transition_min_path_responsibility,
+    cohort_transition_min_observed_count = cohort_transition_min_observed_count,
+    cohort_transition_zero_min_expected_count = cohort_transition_zero_min_expected_count,
+    cohort_transition_zero_as_censoring_only = cohort_transition_zero_as_censoring_only
+  )
+  summaries <- aggregate_cohort_transition_records_by_patient(
+    filtered$kept_records,
+    grouping = grouping,
+    cohort_transition_sd_floor = cohort_transition_sd_floor,
+    cohort_transition_zero_weight_cap_ratio = cohort_transition_zero_weight_cap_ratio
+  )
+  class_args <- list(
+    cohort_transition_sd_floor = cohort_transition_sd_floor,
+    cohort_transition_patient_sd_floor = cohort_transition_patient_sd_floor,
+    cohort_transition_min_patients_consistent = cohort_transition_min_patients_consistent,
+    cohort_transition_min_effective_patients = cohort_transition_min_effective_patients,
+    cohort_transition_min_effective_observed = cohort_transition_min_effective_observed,
+    cohort_transition_effect_threshold = cohort_transition_effect_threshold,
+    cohort_transition_sign_consistency_threshold = cohort_transition_sign_consistency_threshold,
+    cohort_transition_high_heterogeneity_i2 = cohort_transition_high_heterogeneity_i2,
+    cohort_transition_high_between_patient_sd = cohort_transition_high_between_patient_sd,
+    cohort_transition_context_heterogeneity_drop = cohort_transition_context_heterogeneity_drop,
+    cohort_transition_lambda_consistent_deleterious = cohort_transition_lambda_consistent_deleterious,
+    cohort_transition_lambda_consistent_neutral = cohort_transition_lambda_consistent_neutral,
+    cohort_transition_lambda_consistent_beneficial = cohort_transition_lambda_consistent_beneficial,
+    cohort_transition_lambda_context_dependent = cohort_transition_lambda_context_dependent,
+    cohort_transition_lambda_high_variable = cohort_transition_lambda_high_variable,
+    cohort_transition_lambda_sparse_unknown = cohort_transition_lambda_sparse_unknown,
+    cohort_transition_lambda_global_fallback = cohort_transition_lambda_global_fallback,
+    cohort_transition_sd_multiplier_consistent_deleterious = cohort_transition_sd_multiplier_consistent_deleterious,
+    cohort_transition_sd_multiplier_consistent_neutral = cohort_transition_sd_multiplier_consistent_neutral,
+    cohort_transition_sd_multiplier_consistent_beneficial = cohort_transition_sd_multiplier_consistent_beneficial,
+    cohort_transition_sd_multiplier_context_dependent = cohort_transition_sd_multiplier_context_dependent,
+    cohort_transition_sd_multiplier_high_variable = cohort_transition_sd_multiplier_high_variable,
+    cohort_transition_sd_multiplier_sparse_unknown = cohort_transition_sd_multiplier_sparse_unknown,
+    cohort_transition_sd_multiplier_global_fallback = cohort_transition_sd_multiplier_global_fallback
+  )
+  group_classes <- do.call(classify_cohort_transition_groups, c(list(patient_group_summaries = summaries), class_args))
+  tables <- cohort_transition_build_prior_tables_v2(
+    patient_group_summaries = summaries,
+    grouping = grouping,
+    group_classes = group_classes,
+    sd_floor = cohort_transition_sd_floor,
+    patient_sd_floor = cohort_transition_patient_sd_floor,
+    global_fallback = cohort_transition_global_fallback
+  )
+  prior_base <- list(
+    version = "cohort_transition_v2",
+    grouping = grouping,
+    global_prior = tables$global_prior,
+    group_priors = tables$group_priors,
+    all_group_priors = tables$all_group_priors,
+    patient_group_summaries = summaries,
+    group_classes = group_classes,
+    patient_ids = patient_ids,
+    leave_one_patient_out = isTRUE(leave_one_patient_out),
+    loo_priors = list(),
+    diagnostics = list(sd_floor = cohort_transition_sd_floor)
+  )
+  patient_shifts <- list()
+  if (isTRUE(cohort_transition_patient_shift)) {
+    for (patient_id in patient_ids) {
+      patient_summaries <- summaries[summaries$patient_id == patient_id, , drop = FALSE]
+      patient_shifts[[patient_id]] <- estimate_patient_transition_shift(
+        patient_summaries,
+        prior = prior_base,
+        cohort_transition_patient_shift_min_records = cohort_transition_patient_shift_min_records,
+        cohort_transition_patient_shift_shrinkage_sd = cohort_transition_patient_shift_shrinkage_sd
+      )
+    }
+  }
+
+  loo_priors <- list()
+  if (isTRUE(leave_one_patient_out)) {
+    for (patient_id in patient_ids) {
+      rec_loo <- records[records$patient_id != patient_id, , drop = FALSE]
+      if (!nrow(rec_loo)) {
+        loo_priors[[patient_id]] <- list(
+          contributing_patients = character(0),
+          group_priors = tables$group_priors[FALSE, , drop = FALSE],
+          global_prior = tables$global_prior[FALSE, , drop = FALSE],
+          all_group_priors = tables$all_group_priors[FALSE, , drop = FALSE],
+          patient_group_summaries = summaries[FALSE, , drop = FALSE],
+          group_classes = group_classes[FALSE, , drop = FALSE],
+          diagnostics = list(fallback_reason = "no_loo_records")
+        )
+        next
+      }
+      loo_filtered <- filter_cohort_transition_records(
+        rec_loo,
+        cohort_transition_use_prior_dominated_records = cohort_transition_use_prior_dominated_records,
+        cohort_transition_use_boundary_records = cohort_transition_use_boundary_records,
+        cohort_transition_max_delta_se = cohort_transition_max_delta_se,
+        cohort_transition_max_delta_se_quantile = cohort_transition_max_delta_se_quantile,
+        cohort_transition_min_path_responsibility = cohort_transition_min_path_responsibility,
+        cohort_transition_min_observed_count = cohort_transition_min_observed_count,
+        cohort_transition_zero_min_expected_count = cohort_transition_zero_min_expected_count,
+        cohort_transition_zero_as_censoring_only = cohort_transition_zero_as_censoring_only
+      )
+      loo_summaries <- aggregate_cohort_transition_records_by_patient(
+        loo_filtered$kept_records,
+        grouping = grouping,
+        cohort_transition_sd_floor = cohort_transition_sd_floor,
+        cohort_transition_zero_weight_cap_ratio = cohort_transition_zero_weight_cap_ratio
+      )
+      loo_classes <- do.call(classify_cohort_transition_groups, c(list(patient_group_summaries = loo_summaries), class_args))
+      loo_tables <- cohort_transition_build_prior_tables_v2(
+        patient_group_summaries = loo_summaries,
+        grouping = grouping,
+        group_classes = loo_classes,
+        sd_floor = cohort_transition_sd_floor,
+        patient_sd_floor = cohort_transition_patient_sd_floor,
+        global_fallback = cohort_transition_global_fallback
+      )
+      loo_priors[[patient_id]] <- list(
+        contributing_patients = sort(unique(as.character(rec_loo$patient_id))),
+        group_priors = loo_tables$group_priors,
+        global_prior = loo_tables$global_prior,
+        all_group_priors = loo_tables$all_group_priors,
+        patient_group_summaries = loo_summaries,
+        group_classes = loo_classes,
+        diagnostics = list(fallback_reason = NA_character_)
+      )
+    }
+  }
+
+  class_distribution <- table(group_classes$effect_class)
+  diagnostics <- list(
+    n_patients = length(patient_ids),
+    patient_ids = patient_ids,
+    grouping = grouping,
+    version = "cohort_transition_v2",
+    n_raw_transition_records = nrow(records),
+    n_transition_records_total = nrow(records),
+    n_patient_group_summaries = nrow(summaries),
+    n_records_excluded_by_reason = filtered$diagnostics[names(cohort_transition_empty_filter_diagnostics())],
+    n_prior_dominated_records_excluded = filtered$diagnostics$prior_dominated,
+    n_boundary_records_excluded = filtered$diagnostics$boundary_dominated,
+    n_observed_records = sum(records$source_type != "informative_zero", na.rm = TRUE),
+    n_zero_records = sum(records$child_is_zero, na.rm = TRUE),
+    n_zero_censoring_records = sum(filtered$kept_records$cohort_transition_evidence_type == "zero_censoring_evidence", na.rm = TRUE),
+    n_low_exposure_zero_excluded = filtered$diagnostics$low_exposure_zero,
+    n_zero_retained = sum(filtered$kept_records$cohort_transition_evidence_type == "zero_censoring_evidence", na.rm = TRUE),
+    n_zero_excluded_low_exposure = filtered$diagnostics$low_exposure_zero,
+    effective_zero_information = sum(summaries$zero_censoring_weight, na.rm = TRUE),
+    zero_to_observed_information_ratio = {
+      obs_w <- sum(summaries$observed_weight, na.rm = TRUE)
+      zero_w <- sum(summaries$zero_censoring_weight, na.rm = TRUE)
+      if (obs_w > 0) zero_w / obs_w else NA_real_
+    },
+    n_groups_sparse_unknown = sum(group_classes$effect_class == "sparse_unknown"),
+    n_groups_high_variable = sum(group_classes$effect_class == "high_variable"),
+    n_groups_context_dependent = sum(group_classes$effect_class == "context_dependent"),
+    n_groups_consistent_deleterious = sum(group_classes$effect_class == "consistent_deleterious"),
+    n_groups_consistent_neutral = sum(group_classes$effect_class == "consistent_neutral"),
+    n_groups_consistent_beneficial = sum(group_classes$effect_class == "consistent_beneficial"),
+    n_groups_using_global_fallback = sum(!is.na(tables$group_priors$fallback_group) &
+                                           tables$group_priors$fallback_group == "global"),
+    class_distribution = class_distribution,
+    lambda_distribution = summary(tables$all_group_priors$cohort_lambda),
+    prior_sd_distribution = summary(tables$all_group_priors$effective_prior_sd),
+    groups_estimated = unique(tables$group_priors$group),
+    groups_fallback_to_coarser = tables$group_priors$group[!is.na(tables$group_priors$fallback_group) &
+                                                            tables$group_priors$fallback_group != "global"],
+    groups_fallback_to_global = tables$group_priors$group[!is.na(tables$group_priors$fallback_group) &
+                                                           tables$group_priors$fallback_group == "global"],
+    mu_by_group = stats::setNames(tables$group_priors$mu, tables$group_priors$group),
+    sigma_by_group = stats::setNames(tables$group_priors$effective_prior_sd, tables$group_priors$group),
+    sigma_floor_used = any(tables$group_priors$sd_floor_used),
+    patient_heterogeneity_sd = cohort_transition_patient_sd_floor,
+    zero_likelihood_approximation = FALSE,
+    zero_as_censoring_only = isTRUE(cohort_transition_zero_as_censoring_only),
+    leave_one_patient_out_used = isTRUE(leave_one_patient_out),
+    patients_contributing_by_group = lapply(unique(tables$group_priors$group), function(group_name) {
+      sort(unique(summaries$patient_id[summaries$transition_group == group_name]))
+    }),
+    sd_floor = cohort_transition_sd_floor
+  )
+  names(diagnostics$patients_contributing_by_group) <- unique(tables$group_priors$group)
+
+  list(
+    version = "cohort_transition_v2",
+    grouping = grouping,
+    global_prior = tables$global_prior,
+    group_priors = tables$group_priors,
+    all_group_priors = tables$all_group_priors,
+    patient_group_summaries = summaries,
+    group_classes = group_classes,
+    patient_shifts = patient_shifts,
+    patient_ids = patient_ids,
+    leave_one_patient_out = isTRUE(leave_one_patient_out),
+    loo_priors = loo_priors,
+    diagnostics = diagnostics,
+    filter_diagnostics = filtered$diagnostics,
+    excluded_records = filtered$excluded_records
+  )
+}
+
+#' Learn a cohort-level transition-effect prior
+#'
+#' Version `"v2"` is the default and aggregates bootstrap/path records to
+#' patient-level evidence before classifying each transition group for
+#' selective borrowing. Version `"v1"` preserves the original direct cohort
+#' prior behavior for compatibility.
+#'
+#' @inheritParams extract_cohort_transition_records
+#' @param records Transition records produced by `extract_cohort_transition_records()`.
+#' @param cohort_transition_version Prior-learning version, `"v2"` or `"v1"`.
+#' @return A cohort-transition prior object.
+#' @export
+learn_cohort_transition_prior <- function(records,
+                                          leave_one_patient_out = TRUE,
+                                          grouping = c("gain_loss", "gain_loss_chr", "gain_loss_chr_burden", "exact_event"),
+                                          cohort_transition_version = c("v2", "v1"),
+                                          cohort_transition_min_patients_per_group = 2L,
+                                          cohort_transition_min_effective_n = 3L,
+                                          cohort_transition_sd_floor = 0.05,
+                                          cohort_transition_patient_sd_floor = 0.10,
+                                          cohort_transition_global_fallback = TRUE,
+                                          cohort_transition_zero_weight_cap_ratio = 0.25,
+                                          cohort_transition_zero_expected_count_cap = 10.0,
+                                          cohort_transition_zero_mean_shift_cap = 0.2,
+                                          ...) {
+  grouping <- match.arg(grouping)
+  cohort_transition_version <- match.arg(cohort_transition_version)
+  if (identical(cohort_transition_version, "v1")) {
+    return(learn_cohort_transition_prior_v1(
+      records = records,
+      leave_one_patient_out = leave_one_patient_out,
+      grouping = grouping,
+      cohort_transition_min_patients_per_group = cohort_transition_min_patients_per_group,
+      cohort_transition_min_effective_n = cohort_transition_min_effective_n,
+      cohort_transition_sd_floor = cohort_transition_sd_floor,
+      cohort_transition_patient_sd_floor = cohort_transition_patient_sd_floor,
+      cohort_transition_global_fallback = cohort_transition_global_fallback,
+      cohort_transition_zero_weight_cap_ratio = cohort_transition_zero_weight_cap_ratio,
+      cohort_transition_zero_expected_count_cap = cohort_transition_zero_expected_count_cap,
+      cohort_transition_zero_mean_shift_cap = cohort_transition_zero_mean_shift_cap,
+      ...
+    ))
+  }
+  learn_cohort_transition_prior_v2(
+    records = records,
+    leave_one_patient_out = leave_one_patient_out,
+    grouping = grouping,
+    cohort_transition_min_patients_per_group = cohort_transition_min_patients_per_group,
+    cohort_transition_min_effective_n = cohort_transition_min_effective_n,
+    cohort_transition_sd_floor = cohort_transition_sd_floor,
+    cohort_transition_patient_sd_floor = cohort_transition_patient_sd_floor,
+    cohort_transition_global_fallback = cohort_transition_global_fallback,
+    cohort_transition_zero_weight_cap_ratio = cohort_transition_zero_weight_cap_ratio,
+    cohort_transition_zero_expected_count_cap = cohort_transition_zero_expected_count_cap,
+    cohort_transition_zero_mean_shift_cap = cohort_transition_zero_mean_shift_cap,
+    ...
+  )
+}
+
 resolve_cohort_transition_prior_object <- function(cohort_transition_prior = NULL,
                                                    cohort_transition_prior_path = NULL,
                                                    cohort_transition_patient_id = NULL) {
@@ -1150,8 +2327,11 @@ resolve_cohort_transition_prior_object <- function(cohort_transition_prior = NUL
   if (is.null(prior)) {
     stop("`nn_prior = \"cohort_transition\"` requires `cohort_transition_prior` or `cohort_transition_prior_path`.", call. = FALSE)
   }
-  if (!is.list(prior) || !identical(prior$version, "cohort_transition_v1")) {
-    stop("`cohort_transition_prior` must be a cohort_transition_v1 prior object.", call. = FALSE)
+  if (!is.list(prior) || !(prior$version %in% c("cohort_transition_v1", "cohort_transition_v2"))) {
+    stop("`cohort_transition_prior` must be a cohort_transition_v1 or cohort_transition_v2 prior object.", call. = FALSE)
+  }
+  if (identical(prior$version, "cohort_transition_v1")) {
+    warning("Using a cohort_transition_v1 prior object; v2 selective borrowing is preferred.", call. = FALSE)
   }
   if (isTRUE(prior$leave_one_patient_out) && length(prior$loo_priors)) {
     if (is.null(cohort_transition_patient_id) || length(cohort_transition_patient_id) != 1L || !nzchar(cohort_transition_patient_id)) {
@@ -1169,12 +2349,18 @@ cohort_transition_prior_for_patient <- function(prior, patient_id = NULL) {
     if (!patient_id %in% names(prior$loo_priors)) {
       if (!patient_id %in% prior$patient_ids && nrow(prior$global_prior)) {
         return(list(
+          version = prior$version,
           grouping = prior$grouping,
           group_priors = prior$group_priors,
           global_prior = prior$global_prior,
+          all_group_priors = prior$all_group_priors,
+          group_classes = prior$group_classes,
           contributing_patients = prior$patient_ids,
           leave_one_patient_out = TRUE,
-          leave_one_patient_out_fallback = "patient_has_no_training_records"
+          leave_one_patient_out_fallback = "patient_has_no_training_records",
+          patient_delta_shift = 0,
+          patient_delta_shift_n_records = 0L,
+          patient_delta_shift_reliability = 0
         ))
       }
       stop(sprintf("No leave-one-patient-out cohort transition prior is available for patient `%s`.", patient_id), call. = FALSE)
@@ -1183,20 +2369,42 @@ cohort_transition_prior_for_patient <- function(prior, patient_id = NULL) {
     if (!nrow(loo$global_prior)) {
       stop(sprintf("Leave-one-patient-out prior for patient `%s` has no contributing records.", patient_id), call. = FALSE)
     }
+    shift <- if (!is.null(prior$patient_shifts) && patient_id %in% names(prior$patient_shifts)) {
+      prior$patient_shifts[[patient_id]]
+    } else {
+      data.frame(patient_delta_shift = 0, patient_delta_shift_n_records = 0L, patient_delta_shift_reliability = 0)
+    }
     return(list(
+      version = prior$version,
       grouping = prior$grouping,
       group_priors = loo$group_priors,
       global_prior = loo$global_prior,
+      all_group_priors = loo$all_group_priors,
+      group_classes = loo$group_classes,
       contributing_patients = loo$contributing_patients,
-      leave_one_patient_out = TRUE
+      leave_one_patient_out = TRUE,
+      patient_delta_shift = shift$patient_delta_shift[1],
+      patient_delta_shift_n_records = shift$patient_delta_shift_n_records[1],
+      patient_delta_shift_reliability = shift$patient_delta_shift_reliability[1]
     ))
   }
+  shift <- if (!is.null(prior$patient_shifts) && !is.null(patient_id) && patient_id %in% names(prior$patient_shifts)) {
+    prior$patient_shifts[[patient_id]]
+  } else {
+    data.frame(patient_delta_shift = 0, patient_delta_shift_n_records = 0L, patient_delta_shift_reliability = 0)
+  }
   list(
+    version = prior$version,
     grouping = prior$grouping,
     group_priors = prior$group_priors,
     global_prior = prior$global_prior,
+    all_group_priors = prior$all_group_priors,
+    group_classes = prior$group_classes,
     contributing_patients = prior$patient_ids,
-    leave_one_patient_out = FALSE
+    leave_one_patient_out = FALSE,
+    patient_delta_shift = shift$patient_delta_shift[1],
+    patient_delta_shift_n_records = shift$patient_delta_shift_n_records[1],
+    patient_delta_shift_reliability = shift$patient_delta_shift_reliability[1]
   )
 }
 
@@ -1208,18 +2416,45 @@ lookup_cohort_transition_group_prior <- function(prior_use, parent_karyotype, ch
     row <- prior_use$global_prior
     row$group <- group
     row$fallback_group <- "global"
+    row$fallback_multiplier <- 0.25
   }
   row <- row[1L, , drop = FALSE]
+  fallback_group <- if ("fallback_group" %in% names(row)) row$fallback_group[1] else NA_character_
+  if (!"cohort_lambda" %in% names(row)) row$cohort_lambda <- 1
+  if (!"sd_multiplier" %in% names(row)) row$sd_multiplier <- 1
+  if (!"effective_prior_sd" %in% names(row)) {
+    row$effective_prior_sd <- if ("sigma_with_patient_heterogeneity" %in% names(row)) {
+      row$sigma_with_patient_heterogeneity
+    } else {
+      row$sigma
+    }
+  }
+  if (!"effect_class" %in% names(row)) row$effect_class <- "legacy_v1"
+  if (!"heterogeneity_class" %in% names(row)) row$heterogeneity_class <- NA_character_
+  if (!"recommended_use_for_zero" %in% names(row)) row$recommended_use_for_zero <- TRUE
+  if (!"use_for_observed" %in% names(row)) row$use_for_observed <- TRUE
+  if (!"use_for_low_information" %in% names(row)) row$use_for_low_information <- TRUE
+  if (!"warning_flags" %in% names(row)) row$warning_flags <- ""
+  if (!"fallback_multiplier" %in% names(row)) {
+    row$fallback_multiplier <- if (!is.na(fallback_group) && identical(fallback_group, "global")) 0.25 else if (!is.na(fallback_group)) 0.5 else 1
+  }
   list(
     group = group,
     prior_group_used = row$group[1],
-    fallback_group_used = if ("fallback_group" %in% names(row)) row$fallback_group[1] else NA_character_,
+    fallback_group_used = fallback_group,
     mu = row$mu[1],
-    sd = if ("sigma_with_patient_heterogeneity" %in% names(row)) {
-      row$sigma_with_patient_heterogeneity[1]
-    } else {
-      row$sigma[1]
-    },
+    sd = row$effective_prior_sd[1],
+    raw_sd = if ("sigma_with_patient_heterogeneity" %in% names(row)) row$sigma_with_patient_heterogeneity[1] else row$sigma[1],
+    effect_class = row$effect_class[1],
+    heterogeneity_class = row$heterogeneity_class[1],
+    cohort_lambda = row$cohort_lambda[1],
+    sd_multiplier = row$sd_multiplier[1],
+    effective_prior_sd = row$effective_prior_sd[1],
+    fallback_multiplier = row$fallback_multiplier[1],
+    class_warning_flags = row$warning_flags[1],
+    use_for_zero = isTRUE(row$recommended_use_for_zero[1]),
+    use_for_observed = isTRUE(row$use_for_observed[1]),
+    use_for_low_information = isTRUE(row$use_for_low_information[1]),
     parsed = parsed
   )
 }
@@ -1394,6 +2629,244 @@ fit_cohort_transition_nn_child <- function(item,
   list(f_map = f_map, diagnostics = do.call(rbind, rows))
 }
 
+should_apply_cohort_transition_to_node <- function(item,
+                                                   child_name,
+                                                   nn_present = NULL,
+                                                   two_shell_node_diagnostics = NULL,
+                                                   cohort_transition_apply_to = c("zero_only", "low_information", "all")) {
+  cohort_transition_apply_to <- match.arg(cohort_transition_apply_to)
+  child_observed_count <- sum(item$child_obs, na.rm = TRUE)
+  child_is_zero <- is.finite(child_observed_count) && child_observed_count <= 0
+  if (!is.null(nn_present) && length(nn_present) == 1L && isTRUE(!nn_present)) {
+    child_is_zero <- TRUE
+  }
+  boundary <- prior_dominated <- FALSE
+  if (is.data.frame(two_shell_node_diagnostics) && nrow(two_shell_node_diagnostics)) {
+    if ("objective_boundary_flag" %in% names(two_shell_node_diagnostics)) {
+      boundary <- isTRUE(two_shell_node_diagnostics$objective_boundary_flag[1])
+    }
+    if ("prior_dominated_flag" %in% names(two_shell_node_diagnostics)) {
+      prior_dominated <- isTRUE(two_shell_node_diagnostics$prior_dominated_flag[1])
+    }
+  }
+  low_information <- child_is_zero || boundary || prior_dominated
+  if (identical(cohort_transition_apply_to, "all")) {
+    return(list(apply = TRUE, reason = NA_character_, child_is_zero = child_is_zero, low_information = low_information))
+  }
+  if (identical(cohort_transition_apply_to, "zero_only")) {
+    if (child_is_zero) {
+      return(list(apply = TRUE, reason = NA_character_, child_is_zero = child_is_zero, low_information = low_information))
+    }
+    return(list(apply = FALSE, reason = "observed_nn_skipped_by_zero_only", child_is_zero = child_is_zero, low_information = low_information))
+  }
+  if (low_information) {
+    return(list(apply = TRUE, reason = NA_character_, child_is_zero = child_is_zero, low_information = low_information))
+  }
+  list(apply = FALSE, reason = "sufficient_patient_information", child_is_zero = child_is_zero, low_information = low_information)
+}
+
+apply_cohort_transition_overlay <- function(item,
+                                            child_name,
+                                            build_opt_fc,
+                                            search_interval,
+                                            prior_use,
+                                            f_two_shell_baseline,
+                                            nn_present = NULL,
+                                            two_shell_node_diagnostics = NULL,
+                                            cohort_transition_apply_to = c("zero_only", "low_information", "all"),
+                                            cohort_transition_lambda = 0.25,
+                                            cohort_transition_max_borrowing_fraction = 0.5,
+                                            cohort_transition_max_abs_delta_shift = NULL,
+                                            cohort_transition_sd_floor = 0.05,
+                                            cohort_transition_patient_sd_floor = 0.10) {
+  cohort_transition_apply_to <- match.arg(cohort_transition_apply_to)
+  validate_nonnegative_finite(cohort_transition_lambda, "cohort_transition_lambda")
+  validate_probability(cohort_transition_max_borrowing_fraction, "cohort_transition_max_borrowing_fraction", upper_inclusive = TRUE)
+  validate_positive_finite(cohort_transition_sd_floor, "cohort_transition_sd_floor")
+  validate_positive_finite(cohort_transition_patient_sd_floor, "cohort_transition_patient_sd_floor")
+  if (!is.null(cohort_transition_max_abs_delta_shift)) {
+    validate_positive_finite(cohort_transition_max_abs_delta_shift, "cohort_transition_max_abs_delta_shift")
+  }
+
+  direct_objective <- build_opt_fc(item, do_prior_param = FALSE)
+  n_parents <- length(item$parent_fitness)
+  if (n_parents == 0L) {
+    return(list(f_final = f_two_shell_baseline, diagnostics = data.frame()))
+  }
+  parent_karyotypes <- item$nj
+  if (is.null(parent_karyotypes) || length(parent_karyotypes) != n_parents ||
+      any(is.na(parent_karyotypes)) || any(!nzchar(parent_karyotypes))) {
+    parent_karyotypes <- names(item$parent_fitness)
+  }
+  path_weights <- normalize_nn_weights(item$parent_opportunity_weights, fallback_n = n_parents)
+  path_weights[!is.finite(path_weights) | path_weights < 0] <- 0
+  if (sum(path_weights) <= 0) path_weights <- rep(1 / n_parents, n_parents)
+  priors <- lapply(seq_len(n_parents), function(idx) {
+    lookup_cohort_transition_group_prior(prior_use, parent_karyotypes[idx], child_name)
+  })
+  parent_fit <- as.numeric(item$parent_fitness)
+  patient_shift <- prior_use$patient_delta_shift
+  if (!is.finite(patient_shift)) patient_shift <- 0
+  prior_mu <- vapply(priors, `[[`, numeric(1), "mu") + patient_shift
+  prior_sd <- pmax(vapply(priors, `[[`, numeric(1), "effective_prior_sd"), cohort_transition_sd_floor, cohort_transition_patient_sd_floor)
+  class_lambda <- vapply(priors, `[[`, numeric(1), "cohort_lambda")
+  effect_class <- vapply(priors, `[[`, character(1), "effect_class")
+  use_for_zero <- vapply(priors, `[[`, logical(1), "use_for_zero")
+  use_for_observed <- vapply(priors, `[[`, logical(1), "use_for_observed")
+  use_for_low_information <- vapply(priors, `[[`, logical(1), "use_for_low_information")
+  expected_parent_like <- as.numeric(item$projected_exposure)
+  if (length(expected_parent_like) != 1L || !is.finite(expected_parent_like)) expected_parent_like <- NA_real_
+  zero_info <- compute_zero_informativeness_score(expected_parent_like)
+  selector <- should_apply_cohort_transition_to_node(
+    item = item,
+    child_name = child_name,
+    nn_present = nn_present,
+    two_shell_node_diagnostics = two_shell_node_diagnostics,
+    cohort_transition_apply_to = cohort_transition_apply_to
+  )
+  child_observed_count <- sum(item$child_obs, na.rm = TRUE)
+  child_is_zero <- selector$child_is_zero
+  non_identifiable_zero <- isTRUE(child_is_zero) &&
+    (!is.finite(expected_parent_like) || expected_parent_like < 0.5)
+  direct_se <- estimate_scalar_objective_se(
+    objective_fn = direct_objective,
+    optimum = if (is.finite(f_two_shell_baseline)) f_two_shell_baseline else mean(search_interval),
+    search_interval = search_interval,
+    se_floor = max(cohort_transition_sd_floor, cohort_transition_patient_sd_floor)
+  )
+  if (!is.finite(f_two_shell_baseline)) {
+    opt <- run_optimise_checked(
+      direct_objective,
+      interval = search_interval,
+      context = sprintf("optimise nearest-neighbour direct baseline for cohort overlay child %s", child_name)
+    )
+    f_two_shell_baseline <- if (is.null(opt)) NA_real_ else opt$minimum
+  }
+  anchor_sd <- max(cohort_transition_sd_floor, cohort_transition_patient_sd_floor, direct_se, na.rm = TRUE)
+  if (!is.finite(anchor_sd) || anchor_sd <= 0) anchor_sd <- max(cohort_transition_sd_floor, cohort_transition_patient_sd_floor)
+  anchor_info <- if (is.finite(f_two_shell_baseline)) 1 / anchor_sd^2 else 0
+  zero_multiplier <- if (isTRUE(child_is_zero)) {
+    pmin(1, pmax(0, zero_info$zero_informativeness_score[1]))
+  } else {
+    1
+  }
+  if (!is.finite(zero_multiplier)) zero_multiplier <- 0
+  if (isTRUE(non_identifiable_zero)) zero_multiplier <- 0
+  patient_reliability <- prior_use$patient_delta_shift_reliability
+  if (!is.finite(patient_reliability)) patient_reliability <- 0
+  patient_reliability_multiplier <- pmax(0.25, 1 - 0.5 * pmin(1, patient_reliability))
+  class_allows <- if (isTRUE(child_is_zero)) {
+    use_for_zero
+  } else if (identical(cohort_transition_apply_to, "all")) {
+    rep(TRUE, length(use_for_observed))
+  } else {
+    use_for_low_information
+  }
+  class_allows[effect_class %in% c("high_variable", "sparse_unknown")] <- FALSE
+  effective_lambda <- cohort_transition_lambda * class_lambda * zero_multiplier * patient_reliability_multiplier
+  effective_lambda[!class_allows] <- 0
+  effective_lambda[!is.finite(effective_lambda) | effective_lambda < 0] <- 0
+  prior_info_path <- effective_lambda * path_weights / (prior_sd^2)
+  prior_info_path[!is.finite(prior_info_path) | prior_info_path < 0] <- 0
+  prior_info <- sum(prior_info_path)
+  prior_targets <- parent_fit + prior_mu
+  f_overlay <- f_final <- f_two_shell_baseline
+  guardrail_hit <- FALSE
+  skipped_reason <- selector$reason
+  update_applied <- FALSE
+  if (isTRUE(selector$apply) && prior_info > 0 && is.finite(f_two_shell_baseline) && anchor_info > 0) {
+    f_overlay <- (anchor_info * f_two_shell_baseline + sum(prior_info_path * prior_targets)) /
+      (anchor_info + prior_info)
+    borrowing <- prior_info / (prior_info + anchor_info)
+    if (!is.finite(borrowing)) borrowing <- NA_real_
+    max_shift <- cohort_transition_max_abs_delta_shift
+    if (is.null(max_shift)) {
+      max_shift <- max(cohort_transition_patient_sd_floor, min(0.25, stats::median(prior_sd, na.rm = TRUE)))
+    }
+    shift <- f_overlay - f_two_shell_baseline
+    if (is.finite(shift) && abs(shift) > max_shift) {
+      f_overlay <- f_two_shell_baseline + sign(shift) * max_shift
+      guardrail_hit <- TRUE
+    }
+    if (is.finite(borrowing) && borrowing > cohort_transition_max_borrowing_fraction) {
+      f_final <- f_two_shell_baseline
+      guardrail_hit <- TRUE
+      skipped_reason <- "borrowing_fraction_guardrail"
+    } else {
+      f_final <- f_overlay
+      update_applied <- is.finite(f_final) && abs(f_final - f_two_shell_baseline) > sqrt(.Machine$double.eps)
+      if (!isTRUE(update_applied)) skipped_reason <- "overlay_shift_negligible"
+    }
+  } else if (isTRUE(selector$apply) && prior_info <= 0) {
+    skipped_reason <- "group_class_disallows_borrowing"
+  } else if (isTRUE(selector$apply) && isTRUE(non_identifiable_zero)) {
+    skipped_reason <- "non_identifiable_low_exposure_zero"
+  }
+  borrowing <- if (prior_info + anchor_info > 0) prior_info / (prior_info + anchor_info) else NA_real_
+  if (!is.finite(borrowing)) borrowing <- NA_real_
+  rows <- lapply(seq_len(n_parents), function(idx) {
+    pr <- priors[[idx]]
+    data.frame(
+      karyotype = child_name,
+      parent_karyotype = parent_karyotypes[idx],
+      child_karyotype = child_name,
+      child_is_zero = child_is_zero,
+      child_observed_count = child_observed_count,
+      expected_count_parent_like = zero_info$expected_count_parent_like,
+      zero_informativeness_score = zero_info$zero_informativeness_score,
+      transition_group = pr$group,
+      prior_group_used = pr$prior_group_used,
+      fallback_group_used = pr$fallback_group_used,
+      effect_class = pr$effect_class,
+      heterogeneity_class = pr$heterogeneity_class,
+      cohort_lambda = pr$cohort_lambda,
+      effective_lambda = effective_lambda[idx],
+      cohort_delta_mu = prior_mu[idx],
+      cohort_delta_sd = pr$sd,
+      effective_prior_sd = prior_sd[idx],
+      patient_delta_shift = patient_shift,
+      patient_delta_shift_n_records = prior_use$patient_delta_shift_n_records,
+      patient_delta_shift_reliability = prior_use$patient_delta_shift_reliability,
+      parent_fitness = parent_fit[idx],
+      f_two_shell_baseline = f_two_shell_baseline,
+      f_cohort_overlay = f_overlay,
+      f_final = f_final,
+      f_delta_from_two_shell = f_final - f_two_shell_baseline,
+      delta_two_shell_baseline = f_two_shell_baseline - parent_fit[idx],
+      delta_cohort_overlay = f_overlay - parent_fit[idx],
+      delta_final = f_final - parent_fit[idx],
+      f_map = f_final,
+      f_mean = f_final,
+      f_median = f_final,
+      f_upper_80 = NA_real_,
+      f_upper_90 = NA_real_,
+      f_upper_95 = NA_real_,
+      delta_map = f_final - parent_fit[idx],
+      delta_mean = f_final - parent_fit[idx],
+      delta_upper_95 = NA_real_,
+      posterior_delta_map = f_final - parent_fit[idx],
+      posterior_delta_mean = f_final - parent_fit[idx],
+      posterior_delta_upper_95 = NA_real_,
+      posterior_fitness_map = f_final,
+      posterior_fitness_upper_95 = NA_real_,
+      projected_exposure = expected_parent_like,
+      path_responsibility = path_weights[idx],
+      cohort_update_applied = update_applied,
+      cohort_update_skipped_reason = if (is.na(skipped_reason)) NA_character_ else skipped_reason,
+      guardrail_hit = guardrail_hit,
+      cohort_borrowing_fraction = borrowing,
+      patient_likelihood_fraction = if (is.finite(borrowing)) 1 - borrowing else NA_real_,
+      prior_dominated_flag = isTRUE(child_is_zero) && is.finite(borrowing) && borrowing > 0.8,
+      cohort_prior_dominated_flag = isTRUE(child_is_zero) && is.finite(borrowing) && borrowing > cohort_transition_max_borrowing_fraction,
+      non_identifiable_zero_flag = non_identifiable_zero,
+      borrowing_fraction_uses_curvature_proxy = TRUE,
+      class_warning_flags = pr$class_warning_flags,
+      stringsAsFactors = FALSE
+    )
+  })
+  list(f_final = f_final, diagnostics = do.call(rbind, rows))
+}
+
 #' Refit one patient with a cohort transition prior
 #'
 #' @param patient One patient input accepted by `alfak()`.
@@ -1440,12 +2913,15 @@ refit_patient_with_cohort_transition_prior <- function(patient,
 #' or incomplete patient directory is backed up with a `__corrupt_<timestamp>`
 #' suffix and rerun only for that patient when `rerun_corrupt_two_shell = TRUE`.
 #'
-#' The cohort model is fit on transition effects, not absolute fitness:
-#' `Delta = child fitness - parent fitness`. Informative zero nearest
-#' neighbours are used as censoring evidence only when their projected
-#' parent-like expected count or explicit exposure threshold is large enough.
-#' Low-exposure zeros are excluded from prior fitting, and zero evidence is
-#' capped so it cannot dominate observed transitions. With
+#' The v2 cohort model is fit on patient-level transition effects, not absolute
+#' fitness: `Delta = child fitness - parent fitness`. Raw bootstrap/path records
+#' are first aggregated within patient and transition group so repeated paths do
+#' not count as independent patients. Transition groups are classified for
+#' cross-patient consistency before borrowing; high-variable and sparse groups
+#' get weak or zero borrowing. Informative zero nearest neighbours are retained
+#' as censoring evidence and are never converted into fake observed delta
+#' labels. Low-exposure zeros are excluded from prior fitting, and zero evidence
+#' cannot create a narrow group-specific prior by itself. With
 #' `cohort_transition_leave_one_patient_out = TRUE`, patient `p` is refit with
 #' priors learned from the other patients; this avoids borrowing that patient's
 #' own two-shell transition effects back into its refit.
@@ -1469,6 +2945,18 @@ refit_patient_with_cohort_transition_prior <- function(patient,
 #' @param base_nn_prior Upstream prior mode used when rerunning base fits.
 #' @param minobs,nboot,n0,nb,pm,passage_times,allow_noninteger_counts,correct_efflux Arguments forwarded to `alfak()`.
 #' @param cohort_transition_grouping Transition grouping mode.
+#' @param cohort_transition_version Cohort-transition implementation version.
+#'   `"v2"` is the default heterogeneity-aware selective-borrowing overlay.
+#' @param cohort_transition_apply_to Which NN nodes can receive the v2 overlay.
+#'   The default `"zero_only"` leaves observed NN estimates at the
+#'   patient-specific two-shell baseline.
+#' @param cohort_transition_overlay_base Baseline used by v2, by default
+#'   `"empirical_two_shell"`.
+#' @param cohort_transition_lambda Global multiplier for v2 cohort borrowing.
+#' @param cohort_transition_max_borrowing_fraction Maximum borrowing fraction
+#'   allowed before a v2 update is skipped.
+#' @param cohort_transition_max_abs_delta_shift Optional maximum absolute change
+#'   from the two-shell baseline.
 #' @param cohort_transition_leave_one_patient_out Store LOO priors and use them
 #'   during patient refits.
 #' @param cohort_transition_use_zero Whether informative zero NN records are used
@@ -1487,6 +2975,18 @@ refit_patient_with_cohort_transition_prior <- function(patient,
 #' @param cohort_transition_sd_floor Minimum transition prior SD.
 #' @param cohort_transition_patient_sd_floor Patient heterogeneity SD floor.
 #' @param cohort_transition_global_fallback Whether group priors can fall back to global.
+#' @param cohort_transition_use_prior_dominated_records,cohort_transition_use_boundary_records Whether such records can train v2 priors.
+#' @param cohort_transition_max_delta_se,cohort_transition_max_delta_se_quantile Delta-SE screens for v2 observed records.
+#' @param cohort_transition_min_path_responsibility Minimum path responsibility.
+#' @param cohort_transition_min_observed_count Minimum observed child count.
+#' @param cohort_transition_classify_groups Whether v2 groups are classified.
+#' @param cohort_transition_min_patients_consistent,cohort_transition_min_effective_patients,cohort_transition_min_effective_observed Minimum patient-level evidence thresholds.
+#' @param cohort_transition_effect_threshold,cohort_transition_sign_consistency_threshold,cohort_transition_high_heterogeneity_i2,cohort_transition_high_between_patient_sd,cohort_transition_context_heterogeneity_drop Group classification controls.
+#' @param cohort_transition_lambda_consistent_deleterious,cohort_transition_lambda_consistent_neutral,cohort_transition_lambda_consistent_beneficial,cohort_transition_lambda_context_dependent,cohort_transition_lambda_high_variable,cohort_transition_lambda_sparse_unknown,cohort_transition_lambda_global_fallback Class-specific v2 borrowing strengths.
+#' @param cohort_transition_sd_multiplier_consistent_deleterious,cohort_transition_sd_multiplier_consistent_neutral,cohort_transition_sd_multiplier_consistent_beneficial,cohort_transition_sd_multiplier_context_dependent,cohort_transition_sd_multiplier_high_variable,cohort_transition_sd_multiplier_sparse_unknown,cohort_transition_sd_multiplier_global_fallback Class-specific v2 SD multipliers.
+#' @param cohort_transition_patient_shift,cohort_transition_patient_shift_min_records,cohort_transition_patient_shift_shrinkage_sd Patient-specific transition shift controls.
+#' @param cohort_transition_zero_as_censoring_only Treat zeros as censoring
+#'   evidence only, never fake observed delta labels.
 #' @param cohort_transition_save_diagnostics Save cohort diagnostic RDS files.
 #' @param ... Additional arguments forwarded to `alfak()`.
 #' @return Invisibly, a list with status tables, records, prior, diagnostics, and patient output paths.
@@ -1535,22 +3035,64 @@ alfak_cohort_transition <- function(patients,
                                     allow_noninteger_counts = FALSE,
                                     correct_efflux = FALSE,
                                     cohort_transition_grouping = c("gain_loss", "gain_loss_chr", "gain_loss_chr_burden", "exact_event"),
+                                    cohort_transition_version = c("v2", "v1"),
+                                    cohort_transition_apply_to = c("zero_only", "low_information", "all"),
+                                    cohort_transition_overlay_base = c("empirical_two_shell", "direct"),
+                                    cohort_transition_lambda = 0.25,
+                                    cohort_transition_max_borrowing_fraction = 0.5,
+                                    cohort_transition_max_abs_delta_shift = NULL,
                                     cohort_transition_leave_one_patient_out = TRUE,
                                     cohort_transition_use_zero = TRUE,
                                     cohort_transition_zero_min_exposure = NULL,
-                                    cohort_transition_zero_min_expected_count = 1.0,
-                                    cohort_transition_zero_weight_cap_ratio = 1.0,
+                                    cohort_transition_zero_min_expected_count = 3.0,
+                                    cohort_transition_zero_weight_cap_ratio = 0.25,
                                     cohort_transition_zero_expected_count_cap = 10.0,
                                     cohort_transition_zero_mean_shift_cap = 0.2,
                                     cohort_transition_min_patients_per_group = 2L,
                                     cohort_transition_min_effective_n = 3L,
-                                    cohort_transition_sd_floor = 1e-3,
-                                    cohort_transition_patient_sd_floor = 0.1,
+                                    cohort_transition_sd_floor = 0.05,
+                                    cohort_transition_patient_sd_floor = 0.10,
                                     cohort_transition_global_fallback = TRUE,
+                                    cohort_transition_use_prior_dominated_records = FALSE,
+                                    cohort_transition_use_boundary_records = FALSE,
+                                    cohort_transition_max_delta_se = NULL,
+                                    cohort_transition_max_delta_se_quantile = 0.75,
+                                    cohort_transition_min_path_responsibility = 0.05,
+                                    cohort_transition_min_observed_count = 1L,
+                                    cohort_transition_classify_groups = TRUE,
+                                    cohort_transition_min_patients_consistent = 3L,
+                                    cohort_transition_min_effective_patients = 3,
+                                    cohort_transition_min_effective_observed = 3,
+                                    cohort_transition_effect_threshold = 0.02,
+                                    cohort_transition_sign_consistency_threshold = 0.75,
+                                    cohort_transition_high_heterogeneity_i2 = 0.50,
+                                    cohort_transition_high_between_patient_sd = 0.10,
+                                    cohort_transition_context_heterogeneity_drop = 0.25,
+                                    cohort_transition_lambda_consistent_deleterious = 0.50,
+                                    cohort_transition_lambda_consistent_neutral = 0.25,
+                                    cohort_transition_lambda_consistent_beneficial = 0.15,
+                                    cohort_transition_lambda_context_dependent = 0.30,
+                                    cohort_transition_lambda_high_variable = 0.00,
+                                    cohort_transition_lambda_sparse_unknown = 0.00,
+                                    cohort_transition_lambda_global_fallback = 0.05,
+                                    cohort_transition_sd_multiplier_consistent_deleterious = 1.0,
+                                    cohort_transition_sd_multiplier_consistent_neutral = 1.5,
+                                    cohort_transition_sd_multiplier_consistent_beneficial = 2.0,
+                                    cohort_transition_sd_multiplier_context_dependent = 1.5,
+                                    cohort_transition_sd_multiplier_high_variable = 4.0,
+                                    cohort_transition_sd_multiplier_sparse_unknown = 4.0,
+                                    cohort_transition_sd_multiplier_global_fallback = 4.0,
+                                    cohort_transition_patient_shift = TRUE,
+                                    cohort_transition_patient_shift_min_records = 3L,
+                                    cohort_transition_patient_shift_shrinkage_sd = 0.10,
+                                    cohort_transition_zero_as_censoring_only = TRUE,
                                     cohort_transition_save_diagnostics = TRUE,
                                     ...) {
   two_shell_integrity_check <- match.arg(two_shell_integrity_check)
   cohort_transition_grouping <- match.arg(cohort_transition_grouping)
+  cohort_transition_version <- match.arg(cohort_transition_version)
+  cohort_transition_apply_to <- match.arg(cohort_transition_apply_to)
+  cohort_transition_overlay_base <- match.arg(cohort_transition_overlay_base)
   dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
   if (is.null(patient_ids)) {
     stop("`patient_ids` must be supplied when `patients` is unnamed.", call. = FALSE)
@@ -1601,6 +3143,7 @@ alfak_cohort_transition <- function(patients,
     records = records,
     leave_one_patient_out = cohort_transition_leave_one_patient_out,
     grouping = cohort_transition_grouping,
+    cohort_transition_version = cohort_transition_version,
     cohort_transition_min_patients_per_group = cohort_transition_min_patients_per_group,
     cohort_transition_min_effective_n = cohort_transition_min_effective_n,
     cohort_transition_sd_floor = cohort_transition_sd_floor,
@@ -1608,7 +3151,41 @@ alfak_cohort_transition <- function(patients,
     cohort_transition_global_fallback = cohort_transition_global_fallback,
     cohort_transition_zero_weight_cap_ratio = cohort_transition_zero_weight_cap_ratio,
     cohort_transition_zero_expected_count_cap = cohort_transition_zero_expected_count_cap,
-    cohort_transition_zero_mean_shift_cap = cohort_transition_zero_mean_shift_cap
+    cohort_transition_zero_mean_shift_cap = cohort_transition_zero_mean_shift_cap,
+    cohort_transition_use_prior_dominated_records = cohort_transition_use_prior_dominated_records,
+    cohort_transition_use_boundary_records = cohort_transition_use_boundary_records,
+    cohort_transition_max_delta_se = cohort_transition_max_delta_se,
+    cohort_transition_max_delta_se_quantile = cohort_transition_max_delta_se_quantile,
+    cohort_transition_min_path_responsibility = cohort_transition_min_path_responsibility,
+    cohort_transition_min_observed_count = cohort_transition_min_observed_count,
+    cohort_transition_classify_groups = cohort_transition_classify_groups,
+    cohort_transition_min_patients_consistent = cohort_transition_min_patients_consistent,
+    cohort_transition_min_effective_patients = cohort_transition_min_effective_patients,
+    cohort_transition_min_effective_observed = cohort_transition_min_effective_observed,
+    cohort_transition_effect_threshold = cohort_transition_effect_threshold,
+    cohort_transition_sign_consistency_threshold = cohort_transition_sign_consistency_threshold,
+    cohort_transition_high_heterogeneity_i2 = cohort_transition_high_heterogeneity_i2,
+    cohort_transition_high_between_patient_sd = cohort_transition_high_between_patient_sd,
+    cohort_transition_context_heterogeneity_drop = cohort_transition_context_heterogeneity_drop,
+    cohort_transition_lambda_consistent_deleterious = cohort_transition_lambda_consistent_deleterious,
+    cohort_transition_lambda_consistent_neutral = cohort_transition_lambda_consistent_neutral,
+    cohort_transition_lambda_consistent_beneficial = cohort_transition_lambda_consistent_beneficial,
+    cohort_transition_lambda_context_dependent = cohort_transition_lambda_context_dependent,
+    cohort_transition_lambda_high_variable = cohort_transition_lambda_high_variable,
+    cohort_transition_lambda_sparse_unknown = cohort_transition_lambda_sparse_unknown,
+    cohort_transition_lambda_global_fallback = cohort_transition_lambda_global_fallback,
+    cohort_transition_sd_multiplier_consistent_deleterious = cohort_transition_sd_multiplier_consistent_deleterious,
+    cohort_transition_sd_multiplier_consistent_neutral = cohort_transition_sd_multiplier_consistent_neutral,
+    cohort_transition_sd_multiplier_consistent_beneficial = cohort_transition_sd_multiplier_consistent_beneficial,
+    cohort_transition_sd_multiplier_context_dependent = cohort_transition_sd_multiplier_context_dependent,
+    cohort_transition_sd_multiplier_high_variable = cohort_transition_sd_multiplier_high_variable,
+    cohort_transition_sd_multiplier_sparse_unknown = cohort_transition_sd_multiplier_sparse_unknown,
+    cohort_transition_sd_multiplier_global_fallback = cohort_transition_sd_multiplier_global_fallback,
+    cohort_transition_patient_shift = cohort_transition_patient_shift,
+    cohort_transition_patient_shift_min_records = cohort_transition_patient_shift_min_records,
+    cohort_transition_patient_shift_shrinkage_sd = cohort_transition_patient_shift_shrinkage_sd,
+    cohort_transition_zero_as_censoring_only = cohort_transition_zero_as_censoring_only,
+    cohort_transition_zero_min_expected_count = cohort_transition_zero_min_expected_count
   )
   diagnostics <- prior$diagnostics
   diagnostics$two_shell_root <- two_shell_root
@@ -1618,6 +3195,11 @@ alfak_cohort_transition <- function(patients,
   if (isTRUE(cohort_transition_save_diagnostics)) {
     saveRDS(records, file.path(outdir, "cohort_transition_records.Rds"))
     saveRDS(prior, file.path(outdir, "cohort_transition_prior.Rds"))
+    if (identical(prior$version, "cohort_transition_v2")) {
+      saveRDS(prior$patient_group_summaries, file.path(outdir, "cohort_transition_patient_group_summaries.Rds"))
+      saveRDS(prior$group_classes, file.path(outdir, "cohort_transition_group_classes.Rds"))
+      saveRDS(prior, file.path(outdir, "cohort_transition_prior_v2.Rds"))
+    }
     saveRDS(diagnostics, file.path(outdir, "cohort_transition_diagnostics.Rds"))
   }
 
@@ -1639,6 +3221,14 @@ alfak_cohort_transition <- function(patients,
           passage_times = passage_times,
           allow_noninteger_counts = allow_noninteger_counts,
           correct_efflux = correct_efflux,
+          cohort_transition_version = cohort_transition_version,
+          cohort_transition_apply_to = cohort_transition_apply_to,
+          cohort_transition_overlay_base = cohort_transition_overlay_base,
+          cohort_transition_lambda = cohort_transition_lambda,
+          cohort_transition_max_borrowing_fraction = cohort_transition_max_borrowing_fraction,
+          cohort_transition_max_abs_delta_shift = cohort_transition_max_abs_delta_shift,
+          cohort_transition_sd_floor = cohort_transition_sd_floor,
+          cohort_transition_patient_sd_floor = cohort_transition_patient_sd_floor,
           ...
         )
         list(ok = TRUE, error_message = NA_character_, xval = res)

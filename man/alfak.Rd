@@ -21,7 +21,13 @@ alfak(
   cohort_transition_prior = NULL,
   cohort_transition_prior_path = NULL,
   cohort_transition_patient_id = NULL,
-  cohort_transition_sd_floor = 0.001,
+  cohort_transition_version = c("v2", "v1"),
+  cohort_transition_apply_to = c("zero_only", "low_information", "all"),
+  cohort_transition_overlay_base = c("empirical_two_shell", "direct"),
+  cohort_transition_lambda = 0.25,
+  cohort_transition_max_borrowing_fraction = 0.5,
+  cohort_transition_max_abs_delta_shift = NULL,
+  cohort_transition_sd_floor = 0.05,
   cohort_transition_patient_sd_floor = 0.1,
   nn_prior_sd = NULL,
   nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
@@ -131,7 +137,10 @@ one-step behaviour.
 two-shell fits. It requires \code{cohort_transition_prior} or
 \code{cohort_transition_prior_path}, keeps the current patient's frequent
 karyotype fitness estimates patient-specific, and does not pool raw patient
-counts or absolute cohort fitness values.
+counts or absolute cohort fitness values. Version \code{"v2"} first preserves an
+\code{empirical_two_shell} patient-specific baseline, then applies a weak,
+heterogeneity-aware overlay only to selected zero or low-information nearest
+neighbours by default.
 \code{"none"} disables the latent-neighbour prior contribution.
 \code{"empirical"} opt-in uses the empirical child-minus-parent prior estimated
 from observed neighbours.
@@ -143,12 +152,36 @@ Default is \code{"empirical_censored"}.}
 supplied. If both are supplied, this object is used and a warning is issued.}
 
 \item{cohort_transition_prior_path}{Optional path to a saved
-\code{cohort_transition_v1} prior object.}
+\code{cohort_transition_v1} or \code{cohort_transition_v2} prior object.}
 
 \item{cohort_transition_patient_id}{Patient identifier for single-patient
 cohort-transition refits. Required when the prior contains
 leave-one-patient-out priors so the target patient's own two-shell
 transitions can be excluded from its prior.}
+
+\item{cohort_transition_version}{Cohort-transition implementation version.
+\code{"v2"} is the default heterogeneity-aware selective-borrowing overlay;
+\code{"v1"} preserves the original direct cohort-prior behavior.}
+
+\item{cohort_transition_apply_to}{Which nearest-neighbour nodes can receive
+the v2 overlay. The default \code{"zero_only"} leaves observed NN estimates at
+their patient-specific \code{empirical_two_shell} baseline.}
+
+\item{cohort_transition_overlay_base}{Baseline used by v2. The default
+\code{"empirical_two_shell"} runs the same patient-specific two-shell path first
+and then applies the cohort overlay. \code{"direct"} uses the direct NN estimate
+as the anchor.}
+
+\item{cohort_transition_lambda}{Global multiplier for v2 cohort borrowing.
+Class-specific lambdas stored in the prior are multiplied by this value.}
+
+\item{cohort_transition_max_borrowing_fraction}{Maximum allowed v2 cohort
+borrowing fraction before the update is skipped and marked as cohort-prior
+dominated.}
+
+\item{cohort_transition_max_abs_delta_shift}{Optional maximum absolute change
+from the two-shell baseline. If \code{NULL}, a conservative data-derived cap is
+used.}
 
 \item{cohort_transition_sd_floor}{Minimum transition-prior standard
 deviation used by \code{nn_prior = "cohort_transition"}.}

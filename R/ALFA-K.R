@@ -83,11 +83,25 @@
 #'   `nn_prior = "cohort_transition"` unless `cohort_transition_prior_path` is
 #'   supplied. If both are supplied, this object is used and a warning is issued.
 #' @param cohort_transition_prior_path Optional path to a saved
-#'   `cohort_transition_v1` prior object.
+#'   `cohort_transition_v1` or `cohort_transition_v2` prior object.
 #' @param cohort_transition_patient_id Patient identifier for single-patient
 #'   cohort-transition refits. Required when the prior contains
 #'   leave-one-patient-out priors so the target patient's own two-shell
 #'   transitions can be excluded from its prior.
+#' @param cohort_transition_version Cohort-transition implementation version.
+#'   `"v2"` is the default heterogeneity-aware selective-borrowing overlay;
+#'   `"v1"` preserves the original direct cohort-prior behavior.
+#' @param cohort_transition_apply_to Which NN nodes can receive the v2 overlay.
+#'   The default `"zero_only"` leaves observed NN estimates at their
+#'   patient-specific `empirical_two_shell` baseline.
+#' @param cohort_transition_overlay_base Baseline used by v2. The default
+#'   `"empirical_two_shell"` runs the same patient-specific two-shell path first
+#'   and then applies the cohort overlay.
+#' @param cohort_transition_lambda Global multiplier for v2 cohort borrowing.
+#' @param cohort_transition_max_borrowing_fraction Maximum allowed v2 cohort
+#'   borrowing fraction before the update is skipped and marked dominated.
+#' @param cohort_transition_max_abs_delta_shift Optional maximum absolute change
+#'   from the two-shell baseline.
 #' @param cohort_transition_sd_floor Minimum transition-prior standard
 #'   deviation used by `nn_prior = "cohort_transition"`.
 #' @param cohort_transition_patient_sd_floor Minimum patient-heterogeneity
@@ -291,7 +305,13 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
                   cohort_transition_prior = NULL,
                   cohort_transition_prior_path = NULL,
                   cohort_transition_patient_id = NULL,
-                  cohort_transition_sd_floor = 1e-3,
+                  cohort_transition_version = c("v2", "v1"),
+                  cohort_transition_apply_to = c("zero_only", "low_information", "all"),
+                  cohort_transition_overlay_base = c("empirical_two_shell", "direct"),
+                  cohort_transition_lambda = 0.25,
+                  cohort_transition_max_borrowing_fraction = 0.5,
+                  cohort_transition_max_abs_delta_shift = NULL,
+                  cohort_transition_sd_floor = 0.05,
                   cohort_transition_patient_sd_floor = 0.1,
                   nn_prior_sd = NULL,
                   nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
@@ -333,6 +353,14 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
   validate_scalar_logical(nn_two_shell_save_diagnostics, "nn_two_shell_save_diagnostics")
   nn_prior <- validate_nn_prior_mode(nn_prior)
   cohort_transition_prior <- if (identical(nn_prior, "cohort_transition")) {
+    cohort_transition_version <- match.arg(cohort_transition_version)
+    cohort_transition_apply_to <- match.arg(cohort_transition_apply_to)
+    cohort_transition_overlay_base <- match.arg(cohort_transition_overlay_base)
+    validate_nonnegative_finite(cohort_transition_lambda, "cohort_transition_lambda")
+    validate_probability(cohort_transition_max_borrowing_fraction, "cohort_transition_max_borrowing_fraction", upper_inclusive = TRUE)
+    if (!is.null(cohort_transition_max_abs_delta_shift)) {
+      validate_positive_finite(cohort_transition_max_abs_delta_shift, "cohort_transition_max_abs_delta_shift")
+    }
     validate_positive_finite(cohort_transition_sd_floor, "cohort_transition_sd_floor")
     validate_positive_finite(cohort_transition_patient_sd_floor, "cohort_transition_patient_sd_floor")
     resolve_cohort_transition_prior_object(
@@ -341,6 +369,9 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
       cohort_transition_patient_id = cohort_transition_patient_id
     )
   } else {
+    cohort_transition_version <- cohort_transition_version[1]
+    cohort_transition_apply_to <- cohort_transition_apply_to[1]
+    cohort_transition_overlay_base <- cohort_transition_overlay_base[1]
     cohort_transition_prior
   }
   nn_prior_fit_subset <- validate_nn_prior_fit_subset(nn_prior_fit_subset)
@@ -387,6 +418,12 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
                                      nn_prior = nn_prior,
                                      cohort_transition_prior = cohort_transition_prior,
                                      cohort_transition_patient_id = cohort_transition_patient_id,
+                                     cohort_transition_version = cohort_transition_version,
+                                     cohort_transition_apply_to = cohort_transition_apply_to,
+                                     cohort_transition_overlay_base = cohort_transition_overlay_base,
+                                     cohort_transition_lambda = cohort_transition_lambda,
+                                     cohort_transition_max_borrowing_fraction = cohort_transition_max_borrowing_fraction,
+                                     cohort_transition_max_abs_delta_shift = cohort_transition_max_abs_delta_shift,
                                      cohort_transition_sd_floor = cohort_transition_sd_floor,
                                      cohort_transition_patient_sd_floor = cohort_transition_patient_sd_floor,
                                      nn_prior_sd = nn_prior_sd,
@@ -3706,7 +3743,13 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
                                     nn_prior = c("empirical_censored", "empirical_censored_weighted", "empirical_two_shell", "cohort_transition", "none", "empirical"),
                                     cohort_transition_prior = NULL,
                                     cohort_transition_patient_id = NULL,
-                                    cohort_transition_sd_floor = 1e-3,
+                                    cohort_transition_version = c("v2", "v1"),
+                                    cohort_transition_apply_to = c("zero_only", "low_information", "all"),
+                                    cohort_transition_overlay_base = c("empirical_two_shell", "direct"),
+                                    cohort_transition_lambda = 0.25,
+                                    cohort_transition_max_borrowing_fraction = 0.5,
+                                    cohort_transition_max_abs_delta_shift = NULL,
+                                    cohort_transition_sd_floor = 0.05,
                                     cohort_transition_patient_sd_floor = 0.1,
                                     nn_prior_sd = NULL,
                                     nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
@@ -3743,6 +3786,14 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
   nn_prior <- validate_nn_prior_mode(nn_prior)
   cohort_transition_prior_use <- NULL
   if (identical(nn_prior, "cohort_transition")) {
+    cohort_transition_version <- match.arg(cohort_transition_version)
+    cohort_transition_apply_to <- match.arg(cohort_transition_apply_to)
+    cohort_transition_overlay_base <- match.arg(cohort_transition_overlay_base)
+    validate_nonnegative_finite(cohort_transition_lambda, "cohort_transition_lambda")
+    validate_probability(cohort_transition_max_borrowing_fraction, "cohort_transition_max_borrowing_fraction", upper_inclusive = TRUE)
+    if (!is.null(cohort_transition_max_abs_delta_shift)) {
+      validate_positive_finite(cohort_transition_max_abs_delta_shift, "cohort_transition_max_abs_delta_shift")
+    }
     validate_positive_finite(cohort_transition_sd_floor, "cohort_transition_sd_floor")
     validate_positive_finite(cohort_transition_patient_sd_floor, "cohort_transition_patient_sd_floor")
     cohort_transition_prior <- resolve_cohort_transition_prior_object(
@@ -3754,6 +3805,10 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
       cohort_transition_prior,
       patient_id = cohort_transition_patient_id
     )
+  } else {
+    cohort_transition_version <- cohort_transition_version[1]
+    cohort_transition_apply_to <- cohort_transition_apply_to[1]
+    cohort_transition_overlay_base <- cohort_transition_overlay_base[1]
   }
   nn_prior_fit_subset <- validate_nn_prior_fit_subset(nn_prior_fit_subset)
   nn_prior_two_step_support <- validate_nn_prior_two_step_support(nn_prior_two_step_support)
@@ -3810,7 +3865,12 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
     effective_mass_reference = 0,
     exposure_reference = NA_real_
   )
-  if (nn_prior %in% c("empirical_censored_weighted", "empirical_two_shell") && length(nn_info_list) > 0) {
+  cohort_transition_uses_two_shell_baseline <- identical(nn_prior, "cohort_transition") &&
+    identical(cohort_transition_version, "v2") &&
+    identical(cohort_transition_overlay_base, "empirical_two_shell")
+  if ((nn_prior %in% c("empirical_censored_weighted", "empirical_two_shell") ||
+       isTRUE(cohort_transition_uses_two_shell_baseline)) &&
+      length(nn_info_list) > 0) {
     weighted_sample_pooled_prior <- tryCatch(
       {
         sample_state <- prepare_bootstrap_nn_dataset_state(
@@ -3882,7 +3942,8 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
     names(fc) <- names(nn_child_contexts) # Pre-name fc
 	    nn_prior_diag <- new_nn_prior_diagnostics(
 	      nn_prior_mode_requested = nn_prior,
-	      nn_prior_fit_subset_used = if (nn_prior %in% c("empirical_censored_weighted", "empirical_two_shell")) nn_prior_fit_subset else NA_character_
+	      nn_prior_fit_subset_used = if (nn_prior %in% c("empirical_censored_weighted", "empirical_two_shell") ||
+                                       isTRUE(cohort_transition_uses_two_shell_baseline)) nn_prior_fit_subset else NA_character_
 	    )
 	    nn_prior_diag$replicate_id <- as.integer(b_iter_idx)
 	    nn_prior_diag$n_frequent_parents <- as.integer(length(fpar))
@@ -3936,7 +3997,10 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	    use_empirical_censored_weighted_prior <- nn_prior == "empirical_censored_weighted"
 	    use_empirical_two_shell_prior <- nn_prior == "empirical_two_shell"
 	    use_cohort_transition_prior <- nn_prior == "cohort_transition"
-	    use_weighted_like_prior <- use_empirical_censored_weighted_prior || use_empirical_two_shell_prior
+	    use_cohort_transition_v2_overlay <- use_cohort_transition_prior && identical(cohort_transition_version, "v2")
+	    run_two_shell_baseline <- use_empirical_two_shell_prior ||
+        (use_cohort_transition_v2_overlay && identical(cohort_transition_overlay_base, "empirical_two_shell"))
+	    use_weighted_like_prior <- use_empirical_censored_weighted_prior || run_two_shell_baseline
 	    weighted_prior_config <- NULL
 	    weighted_sample_pooled_prior_use <- NULL
 	    two_shell_inward_prior_fit <- NULL
@@ -3994,7 +4058,7 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
     }
 
     nn_cohort_transition_node_diagnostics <- data.frame()
-    if (use_cohort_transition_prior && length(nn_child_contexts) > 0) {
+    if (use_cohort_transition_prior && identical(cohort_transition_version, "v1") && length(nn_child_contexts) > 0) {
       node_rows <- vector("list", length(nn_child_contexts))
       names(node_rows) <- names(nn_child_contexts)
       for (child_name in names(nn_child_contexts)) {
@@ -4136,7 +4200,7 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	          error = NULL
 	        ),
 	        error = function(e) {
-	          if (use_empirical_two_shell_prior) {
+	          if (isTRUE(run_two_shell_baseline)) {
 	            list(fit = NULL, error = conditionMessage(e))
 	          } else {
 	            stop(e)
@@ -4256,7 +4320,7 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	    }
 
 	    nn_two_shell_node_diagnostics <- data.frame()
-	    if (use_empirical_two_shell_prior) {
+	    if (isTRUE(run_two_shell_baseline)) {
 	      if (is.null(two_shell_inward_prior_fit) ||
 	          !is.finite(two_shell_inward_prior_fit$prior_mean) ||
 	          !is.finite(two_shell_inward_prior_fit$prior_sd) ||
@@ -4311,9 +4375,10 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	      nn_prior_diag[names(two_shell_res$diagnostics)] <- two_shell_res$diagnostics
 	      if (is.na(two_shell_res$diagnostics$fallback_reason) ||
 	          !nzchar(two_shell_res$diagnostics$fallback_reason)) {
-	        nn_prior_diag$nn_prior_mode_used <- "empirical_two_shell"
-	        nn_prior_diag$nn_prior_source_used <- "two_shell"
-	      } else if (identical(nn_prior_diag$nn_prior_mode_used, "empirical_two_shell")) {
+	        nn_prior_diag$nn_prior_mode_used <- if (use_cohort_transition_prior) "cohort_transition" else "empirical_two_shell"
+	        nn_prior_diag$nn_prior_source_used <- if (use_cohort_transition_prior) "cohort_transition_two_shell_baseline" else "two_shell"
+	      } else if (identical(nn_prior_diag$nn_prior_mode_used, "empirical_two_shell") ||
+                   (use_cohort_transition_prior && identical(nn_prior_diag$nn_prior_mode_used, "cohort_transition"))) {
 	        nn_prior_diag$nn_prior_mode_used <- "empirical_censored_weighted"
 	        nn_prior_diag$nn_prior_source_used <- "fallback_inward"
 	      }
@@ -4321,6 +4386,72 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	      nn_prior_diag$sigma01 <- two_shell_res$diagnostics$sigma01
 	      nn_prior_diag$prior_mu_hat <- two_shell_res$diagnostics$mu01
 	      nn_prior_diag$prior_sigma_hat <- two_shell_res$diagnostics$sigma01
+	    }
+
+	    if (use_cohort_transition_prior && identical(cohort_transition_version, "v2") && length(nn_child_contexts) > 0) {
+	      node_rows <- vector("list", length(nn_child_contexts))
+	      names(node_rows) <- names(nn_child_contexts)
+	      for (child_name in names(nn_child_contexts)) {
+	        two_shell_row <- nn_two_shell_node_diagnostics[FALSE, , drop = FALSE]
+	        if (nrow(nn_two_shell_node_diagnostics) && "karyotype" %in% names(nn_two_shell_node_diagnostics)) {
+	          two_shell_row <- nn_two_shell_node_diagnostics[nn_two_shell_node_diagnostics$karyotype == child_name, , drop = FALSE]
+	          if (nrow(two_shell_row) > 1L) two_shell_row <- two_shell_row[1L, , drop = FALSE]
+	        }
+	        overlay_res <- apply_cohort_transition_overlay(
+	          item = nn_child_contexts[[child_name]],
+	          child_name = child_name,
+	          build_opt_fc = build_opt_fc,
+	          search_interval = search_interval,
+	          prior_use = cohort_transition_prior_use,
+	          f_two_shell_baseline = fc[child_name],
+	          nn_present = nn_present[child_name],
+	          two_shell_node_diagnostics = two_shell_row,
+	          cohort_transition_apply_to = cohort_transition_apply_to,
+	          cohort_transition_lambda = cohort_transition_lambda,
+	          cohort_transition_max_borrowing_fraction = cohort_transition_max_borrowing_fraction,
+	          cohort_transition_max_abs_delta_shift = cohort_transition_max_abs_delta_shift,
+	          cohort_transition_sd_floor = cohort_transition_sd_floor,
+	          cohort_transition_patient_sd_floor = cohort_transition_patient_sd_floor
+	        )
+	        if (is.finite(overlay_res$f_final) &&
+              nrow(overlay_res$diagnostics) &&
+              any(overlay_res$diagnostics$cohort_update_applied, na.rm = TRUE)) {
+	          fc[child_name] <- overlay_res$f_final
+	        }
+	        node_rows[[child_name]] <- overlay_res$diagnostics
+	      }
+	      nn_cohort_transition_node_diagnostics <- do.call(rbind, node_rows)
+	      if (!is.null(nn_cohort_transition_node_diagnostics) && nrow(nn_cohort_transition_node_diagnostics)) {
+	        nn_cohort_transition_node_diagnostics$replicate_id <- as.integer(b_iter_idx)
+	        nn_cohort_transition_node_diagnostics <- nn_cohort_transition_node_diagnostics[
+	          c("replicate_id", setdiff(names(nn_cohort_transition_node_diagnostics), "replicate_id"))
+	        ]
+	        rownames(nn_cohort_transition_node_diagnostics) <- NULL
+	      } else {
+	        nn_cohort_transition_node_diagnostics <- data.frame()
+	      }
+	      nn_prior_diag$nn_prior_mode_used <- "cohort_transition"
+	      nn_prior_diag$nn_prior_source_used <- if (isTRUE(cohort_transition_prior_use$leave_one_patient_out)) {
+	        "cohort_transition_v2_leave_one_patient_out_overlay"
+	      } else {
+	        "cohort_transition_v2_full_overlay"
+	      }
+	      nn_prior_diag$cohort_transition_version <- "v2"
+	      nn_prior_diag$cohort_transition_apply_to <- cohort_transition_apply_to
+	      nn_prior_diag$cohort_transition_overlay_base <- cohort_transition_overlay_base
+	      nn_prior_diag$cohort_transition_lambda <- cohort_transition_lambda
+	      nn_prior_diag$n_cohort_overlay_nodes_updated <- sum(
+	        nn_cohort_transition_node_diagnostics$cohort_update_applied,
+	        na.rm = TRUE
+	      )
+	      nn_prior_diag$prior_mu_hat <- cohort_transition_prior_use$global_prior$mu[1]
+	      nn_prior_diag$prior_sigma_hat <- if ("effective_prior_sd" %in% names(cohort_transition_prior_use$global_prior)) {
+	        cohort_transition_prior_use$global_prior$effective_prior_sd[1]
+	      } else {
+	        cohort_transition_prior_use$global_prior$sigma_with_patient_heterogeneity[1]
+	      }
+	      nn_prior_diag$n_zero_children_retained <- as.integer(sum(!nn_present))
+	      nn_prior_diag$sum_zero_weight_final <- as.numeric(sum(!nn_present))
 	    }
 
 	    list(f_initial = f_qp,

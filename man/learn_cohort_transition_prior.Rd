@@ -8,12 +8,13 @@ learn_cohort_transition_prior(
   records,
   leave_one_patient_out = TRUE,
   grouping = c("gain_loss", "gain_loss_chr", "gain_loss_chr_burden", "exact_event"),
+  cohort_transition_version = c("v2", "v1"),
   cohort_transition_min_patients_per_group = 2L,
   cohort_transition_min_effective_n = 3L,
-  cohort_transition_sd_floor = 0.001,
+  cohort_transition_sd_floor = 0.05,
   cohort_transition_patient_sd_floor = 0.1,
   cohort_transition_global_fallback = TRUE,
-  cohort_transition_zero_weight_cap_ratio = 1,
+  cohort_transition_zero_weight_cap_ratio = 0.25,
   cohort_transition_zero_expected_count_cap = 10,
   cohort_transition_zero_mean_shift_cap = 0.2,
   ...
@@ -25,6 +26,10 @@ learn_cohort_transition_prior(
 \item{leave_one_patient_out}{Whether to store leave-one-patient-out priors.}
 
 \item{grouping}{Transition grouping mode.}
+
+\item{cohort_transition_version}{Prior-learning version. \code{"v2"} is the
+default and fits heterogeneity-aware patient-level selective borrowing;
+\code{"v1"} preserves the original direct cohort-prior behavior.}
 
 \item{cohort_transition_min_patients_per_group}{Minimum number of patients
 required before using a group-specific prior without fallback.}
@@ -54,11 +59,16 @@ to add unbounded pressure to the cohort transition mean.}
 censoring evidence can impose on a group mean away from the observed
 transition-effect mean. Set \code{NULL} to disable.}
 
-\item{...}{Reserved for future prior fitting controls.}
+\item{...}{Additional v2 filtering, classification, borrowing, zero-censoring,
+and patient-shift controls.}
 }
 \value{
 A cohort-transition prior object.
 }
 \description{
-Learn a cohort-level transition-effect prior
+Version \code{"v2"} aggregates bootstrap/path records to patient-level
+transition-effect evidence before classifying transition groups. The prior is
+learned on \code{Delta = child fitness - parent fitness}, not absolute fitness,
+and informative zero NN are retained as censoring evidence rather than fake
+observed delta labels.
 }

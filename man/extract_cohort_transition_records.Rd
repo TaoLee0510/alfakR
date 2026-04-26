@@ -10,7 +10,7 @@ extract_cohort_transition_records(
   pm = 5e-05,
   grouping = c("gain_loss", "gain_loss_chr", "gain_loss_chr_burden", "exact_event"),
   cohort_transition_use_zero = TRUE,
-  cohort_transition_zero_min_expected_count = 1,
+  cohort_transition_zero_min_expected_count = 3,
   cohort_transition_zero_min_exposure = NULL,
   ...
 )
