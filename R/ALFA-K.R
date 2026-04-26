@@ -68,10 +68,33 @@
 #'   alternate repeated smoothing passes. If supported two-step evidence is
 #'   absent or too small, the replicate falls back to the weighted censored
 #'   one-step behaviour.
+#'   `"cohort_transition"` uses a cohort-level prior on transition effects,
+#'   `child fitness - parent fitness`, learned from upstream patient-specific
+#'   two-shell fits. It requires `cohort_transition_prior` or
+#'   `cohort_transition_prior_path`, keeps the current patient's frequent
+#'   karyotype fitness estimates patient-specific, and does not pool raw patient
+#'   counts or absolute cohort fitness values.
 #'   `"none"` disables the latent-neighbour prior contribution.
 #'   `"empirical"` opt-in uses the empirical child-minus-parent prior estimated
 #'   from observed neighbours.
 #'   Default is `"empirical_censored"`.
+#' @param cohort_transition_prior Optional prior object returned by
+#'   `learn_cohort_transition_prior()`. Required when
+#'   `nn_prior = "cohort_transition"` unless `cohort_transition_prior_path` is
+#'   supplied. If both are supplied, this object is used and a warning is issued.
+#' @param cohort_transition_prior_path Optional path to a saved
+#'   `cohort_transition_v1` prior object.
+#' @param cohort_transition_patient_id Patient identifier for single-patient
+#'   cohort-transition refits. Required when the prior contains
+#'   leave-one-patient-out priors so the target patient's own two-shell
+#'   transitions can be excluded from its prior.
+#' @param cohort_transition_sd_floor Minimum transition-prior standard
+#'   deviation used by `nn_prior = "cohort_transition"`.
+#' @param cohort_transition_patient_sd_floor Minimum patient-heterogeneity
+#'   standard deviation added to cohort transition priors. The default is
+#'   intentionally conservative because cohort records can contain many
+#'   bootstrap/path rows that should not become an overconfident patient-level
+#'   prior.
 #' @param nn_prior_sd Optional numeric scalar. If supplied, this overrides the
 #'   empirically estimated prior standard deviation for latent-neighbour fitting.
 #' @param nn_prior_sd_floor Numeric scalar giving the minimum standard deviation
@@ -264,7 +287,12 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
                   allow_noninteger_counts = FALSE,
                   correct_efflux=FALSE,
                   landscape_data_output = FALSE,
-                  nn_prior = c("empirical_censored", "empirical_censored_weighted", "empirical_two_shell", "none", "empirical"),
+                  nn_prior = c("empirical_censored", "empirical_censored_weighted", "empirical_two_shell", "cohort_transition", "none", "empirical"),
+                  cohort_transition_prior = NULL,
+                  cohort_transition_prior_path = NULL,
+                  cohort_transition_patient_id = NULL,
+                  cohort_transition_sd_floor = 1e-3,
+                  cohort_transition_patient_sd_floor = 0.1,
                   nn_prior_sd = NULL,
                   nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
                   nn_prior_grid_n = ALFAK_NN_PRIOR_CENSORED_GRID_POINTS,
@@ -304,6 +332,17 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
   validate_scalar_logical(landscape_data_output, "landscape_data_output")
   validate_scalar_logical(nn_two_shell_save_diagnostics, "nn_two_shell_save_diagnostics")
   nn_prior <- validate_nn_prior_mode(nn_prior)
+  cohort_transition_prior <- if (identical(nn_prior, "cohort_transition")) {
+    validate_positive_finite(cohort_transition_sd_floor, "cohort_transition_sd_floor")
+    validate_positive_finite(cohort_transition_patient_sd_floor, "cohort_transition_patient_sd_floor")
+    resolve_cohort_transition_prior_object(
+      cohort_transition_prior = cohort_transition_prior,
+      cohort_transition_prior_path = cohort_transition_prior_path,
+      cohort_transition_patient_id = cohort_transition_patient_id
+    )
+  } else {
+    cohort_transition_prior
+  }
   nn_prior_fit_subset <- validate_nn_prior_fit_subset(nn_prior_fit_subset)
   nn_prior_two_step_support <- validate_nn_prior_two_step_support(nn_prior_two_step_support)
   krig_bootstrap_mode <- validate_krig_bootstrap_mode(krig_bootstrap_mode)
@@ -346,6 +385,10 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
                                      allow_noninteger_counts = allow_noninteger_counts,
                                      passage_times = passage_times,correct_efflux=correct_efflux,
                                      nn_prior = nn_prior,
+                                     cohort_transition_prior = cohort_transition_prior,
+                                     cohort_transition_patient_id = cohort_transition_patient_id,
+                                     cohort_transition_sd_floor = cohort_transition_sd_floor,
+                                     cohort_transition_patient_sd_floor = cohort_transition_patient_sd_floor,
                                      nn_prior_sd = nn_prior_sd,
                                      nn_prior_sd_floor = nn_prior_sd_floor,
                                      nn_prior_grid_n = nn_prior_grid_n,
@@ -378,6 +421,19 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
         node = fq_boot$nn_two_shell_node_diagnostics
       ),
       file = file.path(outdir, "nn_prior_diagnostics.Rds")
+    )
+  }
+  if (nn_prior == "cohort_transition") {
+    saveRDS(
+      list(
+        replicate = fq_boot$nn_prior_diagnostics,
+        node = fq_boot$nn_cohort_transition_node_diagnostics
+      ),
+      file = file.path(outdir, "nn_prior_diagnostics.Rds")
+    )
+    saveRDS(
+      fq_boot$nn_cohort_transition_node_diagnostics,
+      file = file.path(outdir, "cohort_transition_patient_diagnostics.Rds")
     )
   }
 
@@ -650,7 +706,7 @@ sd_or_na <- function(x) {
 #' @keywords internal
 #' @noRd
 validate_nn_prior_mode <- function(nn_prior) {
-  match.arg(nn_prior, c("empirical_censored", "empirical_censored_weighted", "empirical_two_shell", "none", "empirical"))
+  match.arg(nn_prior, c("empirical_censored", "empirical_censored_weighted", "empirical_two_shell", "cohort_transition", "none", "empirical"))
 }
 
 #' Validate weighted nearest-neighbour prior subset mode
@@ -3647,7 +3703,11 @@ find_birth_times <- function(opt_res, time_range, minF) {
 #' @noRd
 solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, pm = 0.00005,
                                     n0, nb, passage_times = NULL, allow_noninteger_counts = FALSE, correct_efflux=FALSE,
-                                    nn_prior = c("empirical_censored", "empirical_censored_weighted", "empirical_two_shell", "none", "empirical"),
+                                    nn_prior = c("empirical_censored", "empirical_censored_weighted", "empirical_two_shell", "cohort_transition", "none", "empirical"),
+                                    cohort_transition_prior = NULL,
+                                    cohort_transition_patient_id = NULL,
+                                    cohort_transition_sd_floor = 1e-3,
+                                    cohort_transition_patient_sd_floor = 0.1,
                                     nn_prior_sd = NULL,
                                     nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
                                     nn_prior_grid_n = ALFAK_NN_PRIOR_CENSORED_GRID_POINTS,
@@ -3681,6 +3741,20 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
   validate_scalar_logical(allow_noninteger_counts, "allow_noninteger_counts")
   validate_scalar_logical(correct_efflux, "correct_efflux")
   nn_prior <- validate_nn_prior_mode(nn_prior)
+  cohort_transition_prior_use <- NULL
+  if (identical(nn_prior, "cohort_transition")) {
+    validate_positive_finite(cohort_transition_sd_floor, "cohort_transition_sd_floor")
+    validate_positive_finite(cohort_transition_patient_sd_floor, "cohort_transition_patient_sd_floor")
+    cohort_transition_prior <- resolve_cohort_transition_prior_object(
+      cohort_transition_prior = cohort_transition_prior,
+      cohort_transition_prior_path = NULL,
+      cohort_transition_patient_id = cohort_transition_patient_id
+    )
+    cohort_transition_prior_use <- cohort_transition_prior_for_patient(
+      cohort_transition_prior,
+      patient_id = cohort_transition_patient_id
+    )
+  }
   nn_prior_fit_subset <- validate_nn_prior_fit_subset(nn_prior_fit_subset)
   nn_prior_two_step_support <- validate_nn_prior_two_step_support(nn_prior_two_step_support)
   validate_nn_prior_controls(
@@ -3861,6 +3935,7 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	    use_empirical_censored_prior <- nn_prior == "empirical_censored"
 	    use_empirical_censored_weighted_prior <- nn_prior == "empirical_censored_weighted"
 	    use_empirical_two_shell_prior <- nn_prior == "empirical_two_shell"
+	    use_cohort_transition_prior <- nn_prior == "cohort_transition"
 	    use_weighted_like_prior <- use_empirical_censored_weighted_prior || use_empirical_two_shell_prior
 	    weighted_prior_config <- NULL
 	    weighted_sample_pooled_prior_use <- NULL
@@ -3918,7 +3993,45 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
       }
     }
 
-    if (use_empirical_prior && any(!nn_present) && length(fc_prior_vals) > 0 && !all(is.na(fc_prior_vals))) {
+    nn_cohort_transition_node_diagnostics <- data.frame()
+    if (use_cohort_transition_prior && length(nn_child_contexts) > 0) {
+      node_rows <- vector("list", length(nn_child_contexts))
+      names(node_rows) <- names(nn_child_contexts)
+      for (child_name in names(nn_child_contexts)) {
+        fit_res <- fit_cohort_transition_nn_child(
+          item = nn_child_contexts[[child_name]],
+          child_name = child_name,
+          build_opt_fc = build_opt_fc,
+          search_interval = search_interval,
+          prior_use = cohort_transition_prior_use,
+          sd_floor = max(cohort_transition_sd_floor, cohort_transition_patient_sd_floor)
+        )
+        if (is.finite(fit_res$f_map)) {
+          fc[child_name] <- fit_res$f_map
+        }
+        node_rows[[child_name]] <- fit_res$diagnostics
+      }
+      nn_cohort_transition_node_diagnostics <- do.call(rbind, node_rows)
+      if (!is.null(nn_cohort_transition_node_diagnostics) && nrow(nn_cohort_transition_node_diagnostics)) {
+        nn_cohort_transition_node_diagnostics$replicate_id <- as.integer(b_iter_idx)
+        nn_cohort_transition_node_diagnostics <- nn_cohort_transition_node_diagnostics[
+          c("replicate_id", setdiff(names(nn_cohort_transition_node_diagnostics), "replicate_id"))
+        ]
+        rownames(nn_cohort_transition_node_diagnostics) <- NULL
+      } else {
+        nn_cohort_transition_node_diagnostics <- data.frame()
+      }
+      nn_prior_diag$nn_prior_mode_used <- "cohort_transition"
+      nn_prior_diag$nn_prior_source_used <- if (isTRUE(cohort_transition_prior_use$leave_one_patient_out)) {
+        "cohort_transition_leave_one_patient_out"
+      } else {
+        "cohort_transition_full"
+      }
+      nn_prior_diag$prior_mu_hat <- cohort_transition_prior_use$global_prior$mu[1]
+      nn_prior_diag$prior_sigma_hat <- cohort_transition_prior_use$global_prior$sigma_with_patient_heterogeneity[1]
+      nn_prior_diag$n_zero_children_retained <- as.integer(sum(!nn_present))
+      nn_prior_diag$sum_zero_weight_final <- as.numeric(sum(!nn_present))
+    } else if (use_empirical_prior && any(!nn_present) && length(fc_prior_vals) > 0 && !all(is.na(fc_prior_vals))) {
       mean_fc_prior_val <- mean(fc_prior_vals, na.rm = TRUE) # Renamed mean_fc_prior
       if (is.null(nn_prior_sd)) {
         sd_fc_prior_val <- stats::sd(fc_prior_vals, na.rm = TRUE)
@@ -4216,7 +4329,8 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	         x0_final = x0_final,
 	         f_nn = fc,
 	         nn_prior_diagnostics = nn_prior_diag,
-	         nn_two_shell_node_diagnostics = nn_two_shell_node_diagnostics)
+	         nn_two_shell_node_diagnostics = nn_two_shell_node_diagnostics,
+	         nn_cohort_transition_node_diagnostics = nn_cohort_transition_node_diagnostics)
   }
 
   # Run bootstrap iterations serially using lapply
@@ -4250,6 +4364,17 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	  } else {
 	    rownames(nn_two_shell_node_diagnostics) <- NULL
 	  }
+	  nn_cohort_transition_node_diagnostics <- do.call(rbind, lapply(boot_list, function(x) {
+	    if (is.null(x$nn_cohort_transition_node_diagnostics) || !nrow(x$nn_cohort_transition_node_diagnostics)) {
+	      return(NULL)
+	    }
+	    x$nn_cohort_transition_node_diagnostics
+	  }))
+	  if (is.null(nn_cohort_transition_node_diagnostics)) {
+	    nn_cohort_transition_node_diagnostics <- data.frame()
+	  } else {
+	    rownames(nn_cohort_transition_node_diagnostics) <- NULL
+	  }
 
   # Set column names if matrices are not empty and fq/names(nn_info_list) are not empty
   if(length(fq) > 0) {
@@ -4268,7 +4393,8 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	       final_frequencies = x0_final_mat,
 	       nn_fitness = f_nn_mat,
 	       nn_prior_diagnostics = nn_prior_diagnostics,
-	       nn_two_shell_node_diagnostics = nn_two_shell_node_diagnostics)
+	       nn_two_shell_node_diagnostics = nn_two_shell_node_diagnostics,
+	       nn_cohort_transition_node_diagnostics = nn_cohort_transition_node_diagnostics)
 	}
 
 #' Fit Kriging model to fitness data (Internal function)

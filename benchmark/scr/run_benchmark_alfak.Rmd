@@ -14,7 +14,7 @@ params:
   patient_subset: !r character(0)
   minobs_values: [5, 10, 20]
   pm_values: [5e-05]
-  parameter_labels: ["nn_prior_empirical_censored", "nn_prior_empirical_censored_weighted", "nn_prior_empirical_two_shell", "nn_prior_none", "nn_prior_empirical"]
+  parameter_labels: ["nn_prior_empirical_censored", "nn_prior_empirical_censored_weighted", "nn_prior_empirical_two_shell", "nn_prior_none", "nn_prior_empirical", "nn_prior_cohort_transition"]
   n_cores: 9
   nboot: 45
   n0: 100000

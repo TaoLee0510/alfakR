@@ -153,6 +153,12 @@ build_benchmark_context <- function(params, repo_dir = resolve_repo_dir()) {
       paste(allowed_parameter_labels, collapse = ", ")
     )
   }
+  if ("nn_prior_cohort_transition" %in% parameter_labels_use) {
+    parameter_labels_use <- c(
+      parameter_labels_use[parameter_labels_use != "nn_prior_cohort_transition"],
+      "nn_prior_cohort_transition"
+    )
+  }
 
   selected_grid_n_use <- suppressWarnings(as.integer(params$nn_prior_grid_n))
   if (!is.finite(selected_grid_n_use) || selected_grid_n_use < 3L) {
@@ -1558,16 +1564,37 @@ run_benchmark_pipeline <- function(ctx) {
 
   parameter_results_path <- file.path(ctx$tables_dir, "parameter_fit_results")
   if (ctx$run_benchmark_use && nrow(parameter_tasks_tbl)) {
-    parameter_results_all_tbl <- run_task_table_parallel(
-      task_tbl = parameter_tasks_tbl,
+    regular_task_tbl <- parameter_tasks_tbl %>%
+      dplyr::filter(nn_prior != "cohort_transition")
+    cohort_task_tbl <- parameter_tasks_tbl %>%
+      dplyr::filter(nn_prior == "cohort_transition")
+
+    regular_results_tbl <- run_task_table_parallel(
+      task_tbl = regular_task_tbl,
       n_cores = ctx$n_cores_use,
       diploid_state = ctx$diploid_state
     )
+    cohort_results_tbl <- run_cohort_transition_tasks(
+      task_tbl = cohort_task_tbl,
+      base_results_tbl = regular_results_tbl,
+      fit_root = ctx$fit_dir,
+      nboot = ctx$nboot_use,
+      n0 = ctx$n0_use,
+      nb = ctx$nb_use,
+      correct_efflux = ctx$correct_efflux_use,
+      diploid_state = ctx$diploid_state,
+      force_refit = ctx$force_refit_use
+    )
+    parameter_results_all_tbl <- dplyr::bind_rows(regular_results_tbl, cohort_results_tbl)
   } else {
     parameter_results_all_tbl <- load_saved_table(parameter_results_path)
     if (is.null(parameter_results_all_tbl)) {
       parameter_results_all_tbl <- tibble::tibble()
     }
+    parameter_results_all_tbl <- adopt_existing_task_outputs(
+      task_tbl = parameter_tasks_tbl,
+      fit_results_tbl = parameter_results_all_tbl
+    )
   }
 
   parameter_results_all_tbl <- reconcile_fit_results_tbl(

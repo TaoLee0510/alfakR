@@ -17,7 +17,12 @@ alfak(
   correct_efflux = FALSE,
   landscape_data_output = FALSE,
   nn_prior = c("empirical_censored", "empirical_censored_weighted",
-    "empirical_two_shell", "none", "empirical"),
+    "empirical_two_shell", "cohort_transition", "none", "empirical"),
+  cohort_transition_prior = NULL,
+  cohort_transition_prior_path = NULL,
+  cohort_transition_patient_id = NULL,
+  cohort_transition_sd_floor = 0.001,
+  cohort_transition_patient_sd_floor = 0.1,
   nn_prior_sd = NULL,
   nn_prior_sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
   nn_prior_grid_n = ALFAK_NN_PRIOR_CENSORED_GRID_POINTS,
@@ -121,10 +126,38 @@ prior, and an uncertainty-inflated outward two-step prior. It does not
 alternate repeated smoothing passes. If supported two-step evidence is
 absent or too small, the replicate falls back to the weighted censored
 one-step behaviour.
+\code{"cohort_transition"} uses a cohort-level prior on transition effects,
+\verb{child fitness - parent fitness}, learned from upstream patient-specific
+two-shell fits. It requires \code{cohort_transition_prior} or
+\code{cohort_transition_prior_path}, keeps the current patient's frequent
+karyotype fitness estimates patient-specific, and does not pool raw patient
+counts or absolute cohort fitness values.
 \code{"none"} disables the latent-neighbour prior contribution.
 \code{"empirical"} opt-in uses the empirical child-minus-parent prior estimated
 from observed neighbours.
 Default is \code{"empirical_censored"}.}
+
+\item{cohort_transition_prior}{Optional prior object returned by
+\code{learn_cohort_transition_prior()}. Required when
+\code{nn_prior = "cohort_transition"} unless \code{cohort_transition_prior_path} is
+supplied. If both are supplied, this object is used and a warning is issued.}
+
+\item{cohort_transition_prior_path}{Optional path to a saved
+\code{cohort_transition_v1} prior object.}
+
+\item{cohort_transition_patient_id}{Patient identifier for single-patient
+cohort-transition refits. Required when the prior contains
+leave-one-patient-out priors so the target patient's own two-shell
+transitions can be excluded from its prior.}
+
+\item{cohort_transition_sd_floor}{Minimum transition-prior standard
+deviation used by \code{nn_prior = "cohort_transition"}.}
+
+\item{cohort_transition_patient_sd_floor}{Minimum patient-heterogeneity
+standard deviation added to cohort transition priors. The default is
+intentionally conservative because cohort records can contain many
+bootstrap/path rows that should not become an overconfident patient-level
+prior.}
 
 \item{nn_prior_sd}{Optional numeric scalar. If supplied, this overrides the
 empirically estimated prior standard deviation for latent-neighbour fitting.}

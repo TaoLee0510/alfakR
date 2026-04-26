@@ -64,6 +64,73 @@ weighted_prior_cache_matches <- function(cached,
     same_optional_numeric(cached$nn_prior_two_step_cap_floor, nn_prior_two_step_cap_floor)
 }
 
+build_existing_fit_row <- function(patient_id,
+                                   outdir,
+                                   pm,
+                                   minobs,
+                                   benchmark_seed,
+                                   parameter_label,
+                                   nn_prior,
+                                   nn_prior_grid_n,
+                                   nn_prior_fit_subset,
+                                   nn_prior_zero_exposure_quantile,
+                                   nn_prior_zero_weight_scale,
+                                   nn_prior_zero_weight_cap_ratio,
+                                   nn_prior_zero_birth_fallback_weight,
+                                   nn_prior_zero_birth_child_floor,
+                                   nn_prior_zero_birth_child_shape,
+                                   nn_prior_zero_birth_replicate_floor,
+                                   nn_prior_zero_birth_replicate_shape,
+                                   nn_prior_two_step_support,
+                                   nn_prior_two_step_support_min,
+                                   nn_prior_two_step_cap_floor,
+                                   warning_log_path,
+                                   landscape_path,
+                                   bootstrap_path,
+                                   posterior_path,
+                                   xval_path) {
+  warning_lines <- if (file.exists(warning_log_path)) readLines(warning_log_path, warn = FALSE) else character()
+  xval_obj <- safe_read_rds(xval_path)
+
+  c(
+    list(
+      patient_id = patient_id,
+      outdir = outdir,
+      pm = pm,
+      pm_label = pm_to_label(pm),
+      minobs = minobs,
+      benchmark_seed = benchmark_seed,
+      parameter_label = parameter_label,
+      nn_prior = nn_prior,
+      nn_prior_grid_n = nn_prior_grid_n,
+      nn_prior_fit_subset = nn_prior_fit_subset,
+      nn_prior_zero_exposure_quantile = nn_prior_zero_exposure_quantile,
+      nn_prior_zero_weight_scale = nn_prior_zero_weight_scale,
+      nn_prior_zero_weight_cap_ratio = nn_prior_zero_weight_cap_ratio,
+      nn_prior_zero_birth_fallback_weight = nn_prior_zero_birth_fallback_weight,
+      nn_prior_zero_birth_child_floor = nn_prior_zero_birth_child_floor,
+      nn_prior_zero_birth_child_shape = nn_prior_zero_birth_child_shape,
+      nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
+      nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape,
+      nn_prior_two_step_support = nn_prior_two_step_support,
+      nn_prior_two_step_support_min = nn_prior_two_step_support_min,
+      nn_prior_two_step_cap_floor = nn_prior_two_step_cap_floor,
+      status = "ok",
+      cached = TRUE,
+      error_message = NA_character_,
+      elapsed_sec = NA_real_,
+      warning_count = length(warning_lines),
+      lambda_endpoint_warning_count = sum(grepl("^Grid searches over lambda", warning_lines)),
+      warning_messages = if (length(warning_lines)) paste(warning_lines, collapse = " || ") else NA_character_,
+      landscape_path = if (file.exists(landscape_path)) landscape_path else NA_character_,
+      bootstrap_path = if (file.exists(bootstrap_path)) bootstrap_path else NA_character_,
+      posterior_path = if (file.exists(posterior_path)) posterior_path else NA_character_,
+      xval_path = if (file.exists(xval_path)) xval_path else NA_character_
+    ),
+    extract_xval_metrics(xval_obj)
+  )
+}
+
 extract_xval_metrics <- function(xv) {
   metrics <- list(
     xval_r2 = NA_real_,
@@ -375,8 +442,48 @@ run_alfak_fit <- function(patient_id,
     }
   }
 
+  if (!force_refit && has_complete_alfak_outputs(outdir)) {
+    cached <- build_existing_fit_row(
+      patient_id = patient_id,
+      outdir = outdir,
+      pm = pm,
+      minobs = minobs,
+      benchmark_seed = benchmark_seed,
+      parameter_label = parameter_label,
+      nn_prior = nn_prior,
+      nn_prior_grid_n = nn_prior_grid_n,
+      nn_prior_fit_subset = nn_prior_fit_subset,
+      nn_prior_zero_exposure_quantile = nn_prior_zero_exposure_quantile,
+      nn_prior_zero_weight_scale = nn_prior_zero_weight_scale,
+      nn_prior_zero_weight_cap_ratio = nn_prior_zero_weight_cap_ratio,
+      nn_prior_zero_birth_fallback_weight = nn_prior_zero_birth_fallback_weight,
+      nn_prior_zero_birth_child_floor = nn_prior_zero_birth_child_floor,
+      nn_prior_zero_birth_child_shape = nn_prior_zero_birth_child_shape,
+      nn_prior_zero_birth_replicate_floor = nn_prior_zero_birth_replicate_floor,
+      nn_prior_zero_birth_replicate_shape = nn_prior_zero_birth_replicate_shape,
+      nn_prior_two_step_support = nn_prior_two_step_support,
+      nn_prior_two_step_support_min = nn_prior_two_step_support_min,
+      nn_prior_two_step_cap_floor = nn_prior_two_step_cap_floor,
+      warning_log_path = warning_log_path,
+      landscape_path = landscape_path,
+      bootstrap_path = bootstrap_path,
+      posterior_path = posterior_path,
+      xval_path = xval_path
+    )
+    saveRDS(cached, summary_path)
+    alfak_log("ALFA-K adopted existing outputs: ", task_tag)
+    return(tibble::as_tibble(cached))
+  }
+
   alfak_log("ALFA-K start: ", task_tag)
   dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+
+  if (identical(nn_prior, "cohort_transition")) {
+    stop(
+      "Benchmark does not generate `nn_prior = \"cohort_transition\"` fits directly. ",
+      "Place precomputed cohort-transition outputs in `", outdir, "` and rerun with `force_refit = FALSE`."
+    )
+  }
 
   yi <- readRDS(input_rds)
   yi$x <- as.data.frame(yi$x)
@@ -687,6 +794,387 @@ run_task_table_parallel <- function(task_tbl, n_cores, diploid_state) {
   }
 
   dplyr::bind_rows(res)
+}
+
+build_task_error_rows <- function(task_tbl, error_message) {
+  if (is.null(task_tbl) || !nrow(task_tbl)) {
+    return(tibble::tibble())
+  }
+
+  error_message <- as.character(error_message)
+  if (length(error_message) == 1L) {
+    error_message <- rep(error_message, nrow(task_tbl))
+  }
+  if (length(error_message) != nrow(task_tbl)) {
+    stop("`error_message` must have length 1 or match `task_tbl` rows.", call. = FALSE)
+  }
+
+  dplyr::bind_rows(lapply(seq_len(nrow(task_tbl)), function(i) {
+    rr <- task_tbl[i, , drop = FALSE]
+    outdir <- as.character(rr$outdir)
+    tibble::tibble(
+      patient_id = as.character(rr$patient_id),
+      outdir = outdir,
+      pm = as.numeric(rr$pm),
+      pm_label = pm_to_label(as.numeric(rr$pm)),
+      minobs = as.integer(rr$minobs),
+      benchmark_seed = as.integer(rr$benchmark_seed),
+      parameter_label = as.character(rr$parameter_label),
+      nn_prior = as.character(rr$nn_prior),
+      nn_prior_grid_n = as.integer(rr$nn_prior_grid_n),
+      nn_prior_fit_subset = as.character(rr$nn_prior_fit_subset),
+      nn_prior_zero_exposure_quantile = as.numeric(rr$nn_prior_zero_exposure_quantile),
+      nn_prior_zero_weight_scale = as.numeric(rr$nn_prior_zero_weight_scale),
+      nn_prior_zero_weight_cap_ratio = as.numeric(rr$nn_prior_zero_weight_cap_ratio),
+      nn_prior_zero_birth_fallback_weight = as.numeric(rr$nn_prior_zero_birth_fallback_weight),
+      nn_prior_zero_birth_child_floor = as.numeric(rr$nn_prior_zero_birth_child_floor),
+      nn_prior_zero_birth_child_shape = as.numeric(rr$nn_prior_zero_birth_child_shape),
+      nn_prior_zero_birth_replicate_floor = as.numeric(rr$nn_prior_zero_birth_replicate_floor),
+      nn_prior_zero_birth_replicate_shape = as.numeric(rr$nn_prior_zero_birth_replicate_shape),
+      nn_prior_two_step_support = as.character(rr$nn_prior_two_step_support),
+      nn_prior_two_step_support_min = as.numeric(rr$nn_prior_two_step_support_min),
+      nn_prior_two_step_cap_floor = as.numeric(rr$nn_prior_two_step_cap_floor),
+      status = "error",
+      cached = FALSE,
+      error_message = error_message[[i]],
+      elapsed_sec = NA_real_,
+      warning_count = 0L,
+      lambda_endpoint_warning_count = 0L,
+      warning_messages = NA_character_,
+      xval_r2 = NA_real_,
+      xval_cor = NA_real_,
+      xval_rmse = NA_real_,
+      xval_mae = NA_real_,
+      n_xval = NA_integer_,
+      landscape_path = if (file.exists(file.path(outdir, "landscape.Rds"))) file.path(outdir, "landscape.Rds") else NA_character_,
+      bootstrap_path = if (file.exists(file.path(outdir, "bootstrap_res.Rds"))) file.path(outdir, "bootstrap_res.Rds") else NA_character_,
+      posterior_path = if (file.exists(file.path(outdir, "landscape_posterior_samples.Rds"))) file.path(outdir, "landscape_posterior_samples.Rds") else NA_character_,
+      xval_path = if (file.exists(file.path(outdir, "xval.Rds"))) file.path(outdir, "xval.Rds") else NA_character_
+    )
+  }))
+}
+
+read_benchmark_patient_input <- function(input_rds, diploid_state) {
+  yi <- readRDS(input_rds)
+  yi$x <- as.data.frame(yi$x)
+  if (diploid_state %in% rownames(yi$x)) {
+    yi$x <- yi$x[rownames(yi$x) != diploid_state, , drop = FALSE]
+  }
+  if (!nrow(yi$x)) {
+    stop("All rows were filtered out for input: ", input_rds, call. = FALSE)
+  }
+  yi
+}
+
+build_cohort_patient_list <- function(task_tbl, diploid_state) {
+  patients <- lapply(task_tbl$input_rds, read_benchmark_patient_input, diploid_state = diploid_state)
+  names(patients) <- as.character(task_tbl$patient_id)
+  patients
+}
+
+lookup_cohort_refit_errors <- function(cohort_outdir, task_tbl) {
+  status_tbl <- safe_read_rds(file.path(cohort_outdir, "cohort_transition_refit_status.Rds"))
+  if (is.null(status_tbl) || !is.data.frame(status_tbl) || !"patient_id" %in% names(status_tbl)) {
+    return(rep("cohort_transition did not produce complete outputs.", nrow(task_tbl)))
+  }
+
+  status_tbl <- tibble::as_tibble(status_tbl) %>%
+    dplyr::mutate(patient_id = as.character(patient_id)) %>%
+    dplyr::select(patient_id, dplyr::any_of("error_message"))
+  if (!"error_message" %in% names(status_tbl)) {
+    status_tbl$error_message <- NA_character_
+  }
+
+  task_tbl %>%
+    dplyr::mutate(.row_id = dplyr::row_number()) %>%
+    dplyr::left_join(status_tbl, by = "patient_id") %>%
+    dplyr::arrange(.row_id) %>%
+    dplyr::transmute(
+      error_message = dplyr::if_else(
+        !is.na(error_message) & nzchar(error_message),
+        as.character(error_message),
+        "cohort_transition did not produce complete outputs."
+      )
+    ) %>%
+    dplyr::pull(error_message)
+}
+
+run_cohort_transition_task_group <- function(task_tbl,
+                                             base_results_tbl,
+                                             fit_root,
+                                             nboot,
+                                             n0,
+                                             nb,
+                                             correct_efflux,
+                                             diploid_state,
+                                             force_refit) {
+  if (!nrow(task_tbl)) {
+    return(tibble::tibble())
+  }
+
+  minobs_value <- as.integer(task_tbl$minobs[[1]])
+  pm_value <- as.numeric(task_tbl$pm[[1]])
+
+  if (!force_refit) {
+    adopted_tbl <- adopt_existing_task_outputs(task_tbl)
+    if (nrow(adopted_tbl) == nrow(task_tbl)) {
+      return(adopted_tbl)
+    }
+  }
+
+  base_result_ok_tbl <- if (
+    !is.null(base_results_tbl) &&
+      nrow(base_results_tbl) &&
+      all(c("parameter_label", "status", "patient_id", "minobs", "pm") %in% names(base_results_tbl))
+  ) {
+    base_results_tbl %>%
+      dplyr::filter(
+        parameter_label == "nn_prior_empirical_two_shell",
+        status == "ok",
+        minobs == minobs_value,
+        abs(pm - pm_value) <= max(1e-12, abs(pm_value) * 1e-8)
+      ) %>%
+      dplyr::select(patient_id, minobs, pm)
+  } else {
+    tibble::tibble(patient_id = character(), minobs = integer(), pm = numeric())
+  }
+  base_disk_ok_tbl <- task_tbl %>%
+    dplyr::transmute(
+      patient_id,
+      minobs,
+      pm,
+      base_outdir = purrr::pmap_chr(
+        list(patient_id, minobs, pm),
+        ~ task_outdir_parameter(fit_root, ..1, ..2, ..3, "nn_prior_empirical_two_shell")
+      )
+    ) %>%
+    dplyr::filter(vapply(base_outdir, has_complete_alfak_outputs, logical(1))) %>%
+    dplyr::select(patient_id, minobs, pm)
+  base_ok_tbl <- dplyr::bind_rows(base_result_ok_tbl, base_disk_ok_tbl) %>%
+    dplyr::distinct(patient_id, minobs, pm)
+
+  eligible_task_tbl <- task_tbl %>%
+    dplyr::semi_join(base_ok_tbl, by = c("patient_id", "minobs", "pm"))
+  missing_base_task_tbl <- task_tbl %>%
+    dplyr::anti_join(base_ok_tbl, by = c("patient_id", "minobs", "pm"))
+
+  missing_base_rows <- build_task_error_rows(
+    missing_base_task_tbl,
+    "Missing successful nn_prior_empirical_two_shell prerequisite for cohort_transition."
+  )
+  if (!nrow(eligible_task_tbl)) {
+    return(missing_base_rows)
+  }
+
+  cohort_outdir <- dirname(as.character(eligible_task_tbl$outdir[[1]]))
+  two_shell_root <- file.path(fit_root, "nn_prior_empirical_two_shell")
+  cohort_started_at <- Sys.time()
+  cohort_error <- NULL
+
+  patients <- tryCatch(
+    build_cohort_patient_list(eligible_task_tbl, diploid_state = diploid_state),
+    error = function(e) {
+      cohort_error <<- conditionMessage(e)
+      NULL
+    }
+  )
+  if (is.null(patients)) {
+    return(dplyr::bind_rows(
+      missing_base_rows,
+      build_task_error_rows(eligible_task_tbl, cohort_error)
+    ))
+  }
+
+  alfak_log(
+    "ALFA-K cohort_transition start: minobs=", minobs_value,
+    " | pm=", pm_to_label(pm_value),
+    " | patients=", nrow(eligible_task_tbl)
+  )
+  cohort_result <- tryCatch(
+    {
+      set.seed(as.integer(eligible_task_tbl$benchmark_seed[[1]]))
+      alfakR::alfak_cohort_transition(
+        patients = patients,
+        patient_ids = as.character(eligible_task_tbl$patient_id),
+        outdir = cohort_outdir,
+        two_shell_root = two_shell_root,
+        two_shell_pm = pm_value,
+        two_shell_minobs = minobs_value,
+        two_shell_pm_tag = paste0("pm_", pm_to_label(pm_value)),
+        two_shell_minobs_tag = paste0("MINOBS_", minobs_value),
+        reuse_two_shell = TRUE,
+        rerun_missing_two_shell = FALSE,
+        rerun_corrupt_two_shell = FALSE,
+        two_shell_integrity_check = "strict",
+        base_nn_prior = "empirical_two_shell",
+        minobs = minobs_value,
+        nboot = nboot,
+        n0 = n0,
+        nb = nb,
+        pm = pm_value,
+        passage_times = NULL,
+        allow_noninteger_counts = FALSE,
+        correct_efflux = correct_efflux,
+        nn_prior_grid_n = as.integer(eligible_task_tbl$nn_prior_grid_n[[1]]),
+        nn_prior_fit_subset = as.character(eligible_task_tbl$nn_prior_fit_subset[[1]]),
+        nn_prior_zero_exposure_quantile = as.numeric(eligible_task_tbl$nn_prior_zero_exposure_quantile[[1]]),
+        nn_prior_zero_weight_scale = as.numeric(eligible_task_tbl$nn_prior_zero_weight_scale[[1]]),
+        nn_prior_zero_weight_cap_ratio = if (is.na(eligible_task_tbl$nn_prior_zero_weight_cap_ratio[[1]])) NULL else as.numeric(eligible_task_tbl$nn_prior_zero_weight_cap_ratio[[1]]),
+        nn_prior_zero_birth_fallback_weight = if (is.na(eligible_task_tbl$nn_prior_zero_birth_fallback_weight[[1]])) NULL else as.numeric(eligible_task_tbl$nn_prior_zero_birth_fallback_weight[[1]]),
+        nn_prior_zero_birth_child_floor = as.numeric(eligible_task_tbl$nn_prior_zero_birth_child_floor[[1]]),
+        nn_prior_zero_birth_child_shape = as.numeric(eligible_task_tbl$nn_prior_zero_birth_child_shape[[1]]),
+        nn_prior_zero_birth_replicate_floor = as.numeric(eligible_task_tbl$nn_prior_zero_birth_replicate_floor[[1]]),
+        nn_prior_zero_birth_replicate_shape = as.numeric(eligible_task_tbl$nn_prior_zero_birth_replicate_shape[[1]]),
+        nn_prior_two_step_support = as.character(eligible_task_tbl$nn_prior_two_step_support[[1]]),
+        nn_prior_two_step_support_min = as.numeric(eligible_task_tbl$nn_prior_two_step_support_min[[1]]),
+        nn_prior_two_step_cap_floor = as.numeric(eligible_task_tbl$nn_prior_two_step_cap_floor[[1]])
+      )
+    },
+    error = function(e) {
+      cohort_error <<- conditionMessage(e)
+      NULL
+    }
+  )
+  elapsed_sec <- as.numeric(difftime(Sys.time(), cohort_started_at, units = "secs"))
+
+  if (is.null(cohort_result)) {
+    alfak_log(
+      "ALFA-K cohort_transition error: minobs=", minobs_value,
+      " | pm=", pm_to_label(pm_value),
+      " | ", cohort_error
+    )
+    return(dplyr::bind_rows(
+      missing_base_rows,
+      build_task_error_rows(eligible_task_tbl, cohort_error)
+    ))
+  }
+
+  adopted_tbl <- adopt_existing_task_outputs(eligible_task_tbl)
+  if (nrow(adopted_tbl)) {
+    adopted_tbl$elapsed_sec <- elapsed_sec / max(1L, nrow(adopted_tbl))
+  }
+  adopted_key_tbl <- if (
+    nrow(adopted_tbl) &&
+      all(c("patient_id", "minobs", "pm", "parameter_label", "nn_prior") %in% names(adopted_tbl))
+  ) {
+    adopted_tbl %>%
+      dplyr::select(patient_id, minobs, pm, parameter_label, nn_prior)
+  } else {
+    tibble::tibble(
+      patient_id = character(),
+      minobs = integer(),
+      pm = numeric(),
+      parameter_label = character(),
+      nn_prior = character()
+    )
+  }
+
+  incomplete_task_tbl <- eligible_task_tbl %>%
+    dplyr::anti_join(
+      adopted_key_tbl,
+      by = c("patient_id", "minobs", "pm", "parameter_label", "nn_prior")
+    )
+  incomplete_rows <- build_task_error_rows(
+    incomplete_task_tbl,
+    lookup_cohort_refit_errors(cohort_outdir, incomplete_task_tbl)
+  )
+
+  alfak_log(
+    "ALFA-K cohort_transition done: minobs=", minobs_value,
+    " | pm=", pm_to_label(pm_value),
+    " | ok=", nrow(adopted_tbl),
+    " | error=", nrow(incomplete_rows) + nrow(missing_base_rows)
+  )
+
+  dplyr::bind_rows(missing_base_rows, adopted_tbl, incomplete_rows)
+}
+
+run_cohort_transition_tasks <- function(task_tbl,
+                                        base_results_tbl,
+                                        fit_root,
+                                        nboot,
+                                        n0,
+                                        nb,
+                                        correct_efflux,
+                                        diploid_state,
+                                        force_refit) {
+  cohort_task_tbl <- task_tbl %>%
+    dplyr::filter(nn_prior == "cohort_transition") %>%
+    dplyr::arrange(minobs, pm, factor(patient_id, levels = sort_pid_levels(patient_id)))
+  if (!nrow(cohort_task_tbl)) {
+    return(tibble::tibble())
+  }
+
+  cohort_task_tbl %>%
+    dplyr::group_split(pm, minobs, .keep = TRUE) %>%
+    lapply(
+      run_cohort_transition_task_group,
+      base_results_tbl = base_results_tbl,
+      fit_root = fit_root,
+      nboot = nboot,
+      n0 = n0,
+      nb = nb,
+      correct_efflux = correct_efflux,
+      diploid_state = diploid_state,
+      force_refit = force_refit
+    ) %>%
+    dplyr::bind_rows()
+}
+
+adopt_existing_task_outputs <- function(task_tbl, fit_results_tbl = NULL) {
+  if (is.null(task_tbl) || !nrow(task_tbl)) {
+    return(if (is.null(fit_results_tbl)) tibble::tibble() else tibble::as_tibble(fit_results_tbl))
+  }
+
+  key_cols <- c("patient_id", "minobs", "pm", "parameter_label", "nn_prior")
+  fit_results_tbl <- if (is.null(fit_results_tbl)) tibble::tibble() else tibble::as_tibble(fit_results_tbl)
+
+  adopted_tbl <- dplyr::bind_rows(lapply(seq_len(nrow(task_tbl)), function(i) {
+    rr <- task_tbl[i, , drop = FALSE]
+    if (!has_complete_alfak_outputs(rr$outdir)) {
+      return(NULL)
+    }
+
+    tibble::as_tibble(build_existing_fit_row(
+      patient_id = rr$patient_id,
+      outdir = rr$outdir,
+      pm = rr$pm,
+      minobs = rr$minobs,
+      benchmark_seed = rr$benchmark_seed,
+      parameter_label = rr$parameter_label,
+      nn_prior = rr$nn_prior,
+      nn_prior_grid_n = rr$nn_prior_grid_n,
+      nn_prior_fit_subset = rr$nn_prior_fit_subset,
+      nn_prior_zero_exposure_quantile = rr$nn_prior_zero_exposure_quantile,
+      nn_prior_zero_weight_scale = rr$nn_prior_zero_weight_scale,
+      nn_prior_zero_weight_cap_ratio = rr$nn_prior_zero_weight_cap_ratio,
+      nn_prior_zero_birth_fallback_weight = rr$nn_prior_zero_birth_fallback_weight,
+      nn_prior_zero_birth_child_floor = rr$nn_prior_zero_birth_child_floor,
+      nn_prior_zero_birth_child_shape = rr$nn_prior_zero_birth_child_shape,
+      nn_prior_zero_birth_replicate_floor = rr$nn_prior_zero_birth_replicate_floor,
+      nn_prior_zero_birth_replicate_shape = rr$nn_prior_zero_birth_replicate_shape,
+      nn_prior_two_step_support = rr$nn_prior_two_step_support,
+      nn_prior_two_step_support_min = rr$nn_prior_two_step_support_min,
+      nn_prior_two_step_cap_floor = rr$nn_prior_two_step_cap_floor,
+      warning_log_path = file.path(rr$outdir, "fit_warnings.log"),
+      landscape_path = file.path(rr$outdir, "landscape.Rds"),
+      bootstrap_path = file.path(rr$outdir, "bootstrap_res.Rds"),
+      posterior_path = file.path(rr$outdir, "landscape_posterior_samples.Rds"),
+      xval_path = file.path(rr$outdir, "xval.Rds")
+    ))
+  }))
+
+  if (!nrow(adopted_tbl)) {
+    return(fit_results_tbl)
+  }
+
+  if (!nrow(fit_results_tbl)) {
+    return(adopted_tbl)
+  }
+
+  fit_results_tbl %>%
+    dplyr::anti_join(adopted_tbl %>% dplyr::select(dplyr::all_of(key_cols)), by = key_cols) %>%
+    dplyr::bind_rows(adopted_tbl)
 }
 
 summarize_fit_results <- function(fit_results_tbl, group_cols) {
