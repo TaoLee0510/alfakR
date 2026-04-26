@@ -1,6 +1,7 @@
 // [[Rcpp::plugins(cpp17)]]
 #include <Rcpp.h>
 #include <cmath>
+#include <map>
 #include <vector>
 
 namespace {
@@ -46,6 +47,69 @@ double fexp_stable_cpp(double fc, double fp, double pij_value, double tt, double
 
 bool is_integer_valued_scalar(double x) {
   return std::floor(x) == x;
+}
+
+void validate_neighbor_projection_inputs(const Rcpp::NumericVector& parent_fitness,
+                                         const Rcpp::NumericVector& pij_values,
+                                         const Rcpp::NumericVector& parent_birth_times,
+                                         const Rcpp::NumericVector& timepoints,
+                                         const Rcpp::NumericMatrix& parent_xfit,
+                                         double tol) {
+  const int n_parents = parent_fitness.size();
+  const int n_time = timepoints.size();
+  if (!R_finite(tol) || tol <= 0.0) {
+    Rcpp::stop("`tol` must be a positive finite value.");
+  }
+  if (pij_values.size() != n_parents || parent_birth_times.size() != n_parents ||
+      parent_xfit.nrow() != n_parents || parent_xfit.ncol() != n_time) {
+    Rcpp::stop("Parent inputs must have matching lengths/rows and parent_xfit columns must match timepoints.");
+  }
+  for (int p = 0; p < n_parents; ++p) {
+    if (!R_finite(parent_fitness[p]) || !R_finite(pij_values[p]) || pij_values[p] < 0.0 ||
+        !R_finite(parent_birth_times[p])) {
+      Rcpp::stop("Parent fitness, transition probabilities, and birth times must be finite; pij values must be non-negative.");
+    }
+  }
+  for (int t = 0; t < n_time; ++t) {
+    if (!R_finite(timepoints[t])) {
+      Rcpp::stop("`timepoints` must contain only finite values.");
+    }
+    for (int p = 0; p < n_parents; ++p) {
+      if (!R_finite(parent_xfit(p, t))) {
+        Rcpp::stop("`parent_xfit` must contain only finite values.");
+      }
+    }
+  }
+}
+
+double finite_positive_sum(const Rcpp::NumericVector& x) {
+  double total = 0.0;
+  for (double v : x) {
+    if (!R_finite(v) || v < 0.0) {
+      return R_NaReal;
+    }
+    total += v;
+  }
+  return total;
+}
+
+double weighted_mean_or_nan(const Rcpp::NumericVector& x, const Rcpp::NumericVector& w) {
+  if (x.size() != w.size()) {
+    return R_NaReal;
+  }
+  double sw = 0.0;
+  double sx = 0.0;
+  for (int i = 0; i < x.size(); ++i) {
+    if (!R_finite(x[i]) || !R_finite(w[i]) || w[i] < 0.0) {
+      return R_NaReal;
+    }
+    sw += w[i];
+    sx += w[i] * x[i];
+  }
+  if (!(sw > 0.0) || !R_finite(sw)) {
+    return R_NaReal;
+  }
+  return sx / sw;
 }
 
 } // namespace
@@ -249,6 +313,313 @@ double alfak_neighbor_objective_cpp(double fc_param,
   }
 
   return -loglik;
+}
+
+// [[Rcpp::export]]
+Rcpp::NumericVector alfak_nn_project_trajectory_cpp(double fc_param,
+                                                    Rcpp::NumericVector parent_fitness,
+                                                    Rcpp::NumericVector pij_values,
+                                                    Rcpp::NumericVector parent_birth_times,
+                                                    Rcpp::NumericVector timepoints,
+                                                    Rcpp::NumericMatrix parent_xfit,
+                                                    double tol) {
+  const int n_parents = parent_fitness.size();
+  const int n_time = timepoints.size();
+  if (!R_finite(fc_param)) {
+    Rcpp::stop("`fc_param` must be finite.");
+  }
+  validate_neighbor_projection_inputs(parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, tol);
+  Rcpp::NumericVector projected(n_time);
+  if (n_parents == 0) {
+    return projected;
+  }
+  for (int t = 0; t < n_time; ++t) {
+    double value = 0.0;
+    for (int p = 0; p < n_parents; ++p) {
+      double tt = std::max(0.0, timepoints[t] - parent_birth_times[p]);
+      value += fexp_stable_cpp(fc_param, parent_fitness[p], pij_values[p], tt, tol) * parent_xfit(p, t);
+    }
+    if (!R_finite(value)) {
+      value = 0.0;
+    }
+    projected[t] = std::max(0.0, std::min(1.0, value));
+  }
+  return projected;
+}
+
+// [[Rcpp::export]]
+double alfak_nn_project_exposure_cpp(double fc_param,
+                                     Rcpp::NumericVector parent_fitness,
+                                     Rcpp::NumericVector pij_values,
+                                     Rcpp::NumericVector parent_birth_times,
+                                     Rcpp::NumericVector timepoints,
+                                     Rcpp::NumericMatrix parent_xfit,
+                                     Rcpp::NumericVector ntot,
+                                     double tol) {
+  const int n_time = timepoints.size();
+  if (ntot.size() != n_time) {
+    Rcpp::stop("`ntot` and `timepoints` must have matching lengths.");
+  }
+  Rcpp::NumericVector projected = alfak_nn_project_trajectory_cpp(
+    fc_param, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, tol
+  );
+  double exposure = 0.0;
+  for (int t = 0; t < n_time; ++t) {
+    if (!R_finite(ntot[t]) || ntot[t] < 0.0) {
+      Rcpp::stop("`ntot` must contain only finite non-negative values.");
+    }
+    exposure += ntot[t] * projected[t];
+  }
+  return exposure;
+}
+
+// [[Rcpp::export]]
+Rcpp::NumericVector alfak_parent_opportunity_weights_cpp(Rcpp::NumericVector pij_values,
+                                                         Rcpp::NumericVector parent_birth_times,
+                                                         Rcpp::NumericVector timepoints,
+                                                         Rcpp::NumericMatrix parent_xfit,
+                                                         Rcpp::NumericVector ntot) {
+  const int n_parents = pij_values.size();
+  const int n_time = timepoints.size();
+  if (parent_birth_times.size() != n_parents || parent_xfit.nrow() != n_parents ||
+      parent_xfit.ncol() != n_time || ntot.size() != n_time) {
+    Rcpp::stop("Malformed parent inputs for opportunity weights.");
+  }
+  Rcpp::NumericVector parent_weights(n_parents);
+  if (n_parents == 0) {
+    return parent_weights;
+  }
+  for (int p = 0; p < n_parents; ++p) {
+    if (!R_finite(pij_values[p]) || pij_values[p] < 0.0 || !R_finite(parent_birth_times[p])) {
+      Rcpp::stop("`pij_values` and `parent_birth_times` must be finite; pij values must be non-negative.");
+    }
+    double total = 0.0;
+    for (int t = 0; t < n_time; ++t) {
+      if (!R_finite(timepoints[t]) || !R_finite(ntot[t]) || ntot[t] < 0.0 ||
+          !R_finite(parent_xfit(p, t))) {
+        Rcpp::stop("`timepoints`, `ntot`, and `parent_xfit` must contain finite values; ntot must be non-negative.");
+      }
+      if (timepoints[t] >= parent_birth_times[p]) {
+        total += ntot[t] * parent_xfit(p, t);
+      }
+    }
+    parent_weights[p] = pij_values[p] * total;
+  }
+  double sum_parent_weights = finite_positive_sum(parent_weights);
+  if (R_finite(sum_parent_weights) && sum_parent_weights > 0.0) {
+    return parent_weights;
+  }
+  double sum_pij = finite_positive_sum(pij_values);
+  if (R_finite(sum_pij) && sum_pij > 0.0) {
+    return Rcpp::clone(pij_values);
+  }
+  return Rcpp::NumericVector(n_parents, 1.0);
+}
+
+// [[Rcpp::export]]
+double alfak_weighted_parent_mean_cpp(Rcpp::NumericVector parent_fitness,
+                                      Rcpp::NumericVector weights,
+                                      double fallback_mean) {
+  if (parent_fitness.size() == 0) {
+    return fallback_mean;
+  }
+  double mean = weighted_mean_or_nan(parent_fitness, weights);
+  if (R_finite(mean)) {
+    return mean;
+  }
+  return fallback_mean;
+}
+
+// [[Rcpp::export]]
+Rcpp::NumericVector alfak_neighbor_loglik_grid_cpp(Rcpp::NumericVector fc_grid,
+                                                   Rcpp::NumericVector parent_fitness,
+                                                   Rcpp::NumericVector pij_values,
+                                                   Rcpp::NumericVector parent_birth_times,
+                                                   Rcpp::NumericVector timepoints,
+                                                   Rcpp::NumericMatrix parent_xfit,
+                                                   Rcpp::NumericVector child_obs,
+                                                   Rcpp::NumericVector ntot,
+                                                   double tol) {
+  const int n_grid = fc_grid.size();
+  const int n_parents = parent_fitness.size();
+  const int n_time = timepoints.size();
+  validate_neighbor_projection_inputs(parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, tol);
+  if (child_obs.size() != n_time || ntot.size() != n_time) {
+    Rcpp::stop("`child_obs`, `ntot`, and `timepoints` must have matching lengths.");
+  }
+  for (int t = 0; t < n_time; ++t) {
+    if (!R_finite(child_obs[t]) || child_obs[t] < 0.0 || !is_integer_valued_scalar(child_obs[t]) ||
+        !R_finite(ntot[t]) || ntot[t] < 0.0 || !is_integer_valued_scalar(ntot[t]) ||
+        child_obs[t] > ntot[t]) {
+      Rcpp::stop("`child_obs` and `ntot` must be valid non-negative integer counts with child_obs <= ntot.");
+    }
+  }
+  Rcpp::NumericVector loglik(n_grid);
+  for (int g = 0; g < n_grid; ++g) {
+    double fc = fc_grid[g];
+    if (!R_finite(fc)) {
+      loglik[g] = R_NegInf;
+      continue;
+    }
+    double total_ll = 0.0;
+    for (int t = 0; t < n_time; ++t) {
+      double xc_est = 0.0;
+      for (int p = 0; p < n_parents; ++p) {
+        double tt = std::max(0.0, timepoints[t] - parent_birth_times[p]);
+        xc_est += fexp_stable_cpp(fc, parent_fitness[p], pij_values[p], tt, tol) * parent_xfit(p, t);
+      }
+      if (!R_finite(xc_est)) {
+        total_ll += -1e9;
+        continue;
+      }
+      xc_est = std::max(0.0, std::min(1.0, xc_est));
+      double ll = R::dbinom(child_obs[t], ntot[t], xc_est, true);
+      total_ll += R_finite(ll) ? ll : -1e9;
+    }
+    loglik[g] = total_ll;
+  }
+  return loglik;
+}
+
+// [[Rcpp::export]]
+double alfak_nn_prior_marginal_negloglik_cpp(Rcpp::NumericMatrix loglik_mat,
+                                             Rcpp::NumericVector fc_grid,
+                                             Rcpp::NumericVector log_weights,
+                                             Rcpp::NumericVector parent_means,
+                                             Rcpp::NumericVector child_weights,
+                                             double mu,
+                                             double sigma) {
+  const int n_children = loglik_mat.nrow();
+  const int n_grid = loglik_mat.ncol();
+  if (!R_finite(mu) || !R_finite(sigma) || sigma <= 0.0) {
+    return 1e9;
+  }
+  if (fc_grid.size() != n_grid || log_weights.size() != n_grid ||
+      parent_means.size() != n_children || child_weights.size() != n_children) {
+    Rcpp::stop("Marginal likelihood inputs have incompatible dimensions.");
+  }
+  double total = 0.0;
+  std::vector<double> vals(n_grid);
+  for (int i = 0; i < n_children; ++i) {
+    if (!R_finite(parent_means[i]) || !R_finite(child_weights[i]) || child_weights[i] < 0.0) {
+      return 1e9;
+    }
+    if (child_weights[i] == 0.0) {
+      continue;
+    }
+    bool any_finite = false;
+    double max_val = R_NegInf;
+    for (int g = 0; g < n_grid; ++g) {
+      if (!R_finite(fc_grid[g]) || !R_finite(log_weights[g])) {
+        return 1e9;
+      }
+      double log_prior = R::dnorm(fc_grid[g] - parent_means[i], mu, sigma, true);
+      double val = loglik_mat(i, g) + log_prior + log_weights[g];
+      vals[g] = val;
+      if (R_finite(val)) {
+        any_finite = true;
+        if (val > max_val) {
+          max_val = val;
+        }
+      }
+    }
+    if (!any_finite) {
+      return 1e9;
+    }
+    double accum = 0.0;
+    for (int g = 0; g < n_grid; ++g) {
+      if (R_finite(vals[g])) {
+        accum += std::exp(vals[g] - max_val);
+      }
+    }
+    if (!(accum > 0.0) || !R_finite(accum)) {
+      return 1e9;
+    }
+    total -= child_weights[i] * (max_val + std::log(accum));
+  }
+  if (!R_finite(total)) {
+    return 1e9;
+  }
+  return total;
+}
+
+// [[Rcpp::export]]
+Rcpp::List alfak_two_shell_path_responsibilities_cpp(Rcpp::CharacterVector descendant,
+                                                     Rcpp::NumericVector parent_anchor_exposure,
+                                                     Rcpp::NumericVector transition_probability) {
+  const int n = descendant.size();
+  if (parent_anchor_exposure.size() != n || transition_probability.size() != n) {
+    Rcpp::stop("Two-shell path responsibility inputs must be aligned.");
+  }
+  Rcpp::NumericVector path_supply(n);
+  Rcpp::NumericVector path_responsibility(n);
+  std::map<std::string, std::vector<int>> groups;
+  for (int i = 0; i < n; ++i) {
+    double supply = parent_anchor_exposure[i] * transition_probability[i];
+    if (!R_finite(supply) || supply < 0.0) {
+      supply = 0.0;
+    }
+    path_supply[i] = supply;
+    groups[Rcpp::as<std::string>(descendant[i])].push_back(i);
+  }
+  for (const auto& entry : groups) {
+    const std::vector<int>& idx = entry.second;
+    double total = 0.0;
+    for (int i : idx) {
+      total += path_supply[i];
+    }
+    if (R_finite(total) && total > 0.0) {
+      for (int i : idx) {
+        path_responsibility[i] = path_supply[i] / total;
+      }
+    } else if (!idx.empty()) {
+      double equal = 1.0 / static_cast<double>(idx.size());
+      for (int i : idx) {
+        path_responsibility[i] = equal;
+      }
+    }
+  }
+  return Rcpp::List::create(
+    Rcpp::Named("path_supply") = path_supply,
+    Rcpp::Named("path_responsibility") = path_responsibility
+  );
+}
+
+// [[Rcpp::export]]
+Rcpp::NumericVector alfak_group_cap_weights_cpp(Rcpp::CharacterVector group,
+                                                Rcpp::NumericVector raw_weights,
+                                                Rcpp::NumericVector cap_by_row) {
+  const int n = group.size();
+  if (raw_weights.size() != n || cap_by_row.size() != n) {
+    Rcpp::stop("Group cap inputs must be aligned.");
+  }
+  Rcpp::NumericVector out = Rcpp::clone(raw_weights);
+  std::map<std::string, std::vector<int>> groups;
+  for (int i = 0; i < n; ++i) {
+    if (!R_finite(out[i]) || out[i] < 0.0) {
+      out[i] = 0.0;
+    }
+    groups[Rcpp::as<std::string>(group[i])].push_back(i);
+  }
+  for (const auto& entry : groups) {
+    const std::vector<int>& idx = entry.second;
+    double raw_sum = 0.0;
+    double cap = R_NaReal;
+    for (int i : idx) {
+      raw_sum += out[i];
+      if (!R_finite(cap) && R_finite(cap_by_row[i])) {
+        cap = cap_by_row[i];
+      }
+    }
+    if (!R_finite(cap) || cap < 0.0 || !R_finite(raw_sum) || raw_sum <= 0.0 || raw_sum <= cap) {
+      continue;
+    }
+    double multiplier = cap / raw_sum;
+    for (int i : idx) {
+      out[i] *= multiplier;
+    }
+  }
+  return out;
 }
 
 // [[Rcpp::export]]

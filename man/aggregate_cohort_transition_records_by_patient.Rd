@@ -20,6 +20,8 @@ aggregate_cohort_transition_records_by_patient(
 \item{cohort_transition_sd_floor}{Floor used in inverse-variance weights.}
 
 \item{cohort_transition_zero_weight_cap_ratio}{Cap on zero-censoring weight.}
+
+\item{...}{Reserved for future aggregation controls.}
 }
 \value{
 A data frame with patient-level group summaries.

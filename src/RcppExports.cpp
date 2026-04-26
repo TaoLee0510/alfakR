@@ -83,6 +83,131 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// alfak_nn_project_trajectory_cpp
+Rcpp::NumericVector alfak_nn_project_trajectory_cpp(double fc_param, Rcpp::NumericVector parent_fitness, Rcpp::NumericVector pij_values, Rcpp::NumericVector parent_birth_times, Rcpp::NumericVector timepoints, Rcpp::NumericMatrix parent_xfit, double tol);
+RcppExport SEXP _alfakR_alfak_nn_project_trajectory_cpp(SEXP fc_paramSEXP, SEXP parent_fitnessSEXP, SEXP pij_valuesSEXP, SEXP parent_birth_timesSEXP, SEXP timepointsSEXP, SEXP parent_xfitSEXP, SEXP tolSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type fc_param(fc_paramSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type parent_fitness(parent_fitnessSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type pij_values(pij_valuesSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type parent_birth_times(parent_birth_timesSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type timepoints(timepointsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type parent_xfit(parent_xfitSEXP);
+    Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
+    rcpp_result_gen = Rcpp::wrap(alfak_nn_project_trajectory_cpp(fc_param, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, tol));
+    return rcpp_result_gen;
+END_RCPP
+}
+// alfak_nn_project_exposure_cpp
+double alfak_nn_project_exposure_cpp(double fc_param, Rcpp::NumericVector parent_fitness, Rcpp::NumericVector pij_values, Rcpp::NumericVector parent_birth_times, Rcpp::NumericVector timepoints, Rcpp::NumericMatrix parent_xfit, Rcpp::NumericVector ntot, double tol);
+RcppExport SEXP _alfakR_alfak_nn_project_exposure_cpp(SEXP fc_paramSEXP, SEXP parent_fitnessSEXP, SEXP pij_valuesSEXP, SEXP parent_birth_timesSEXP, SEXP timepointsSEXP, SEXP parent_xfitSEXP, SEXP ntotSEXP, SEXP tolSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type fc_param(fc_paramSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type parent_fitness(parent_fitnessSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type pij_values(pij_valuesSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type parent_birth_times(parent_birth_timesSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type timepoints(timepointsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type parent_xfit(parent_xfitSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type ntot(ntotSEXP);
+    Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
+    rcpp_result_gen = Rcpp::wrap(alfak_nn_project_exposure_cpp(fc_param, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, ntot, tol));
+    return rcpp_result_gen;
+END_RCPP
+}
+// alfak_parent_opportunity_weights_cpp
+Rcpp::NumericVector alfak_parent_opportunity_weights_cpp(Rcpp::NumericVector pij_values, Rcpp::NumericVector parent_birth_times, Rcpp::NumericVector timepoints, Rcpp::NumericMatrix parent_xfit, Rcpp::NumericVector ntot);
+RcppExport SEXP _alfakR_alfak_parent_opportunity_weights_cpp(SEXP pij_valuesSEXP, SEXP parent_birth_timesSEXP, SEXP timepointsSEXP, SEXP parent_xfitSEXP, SEXP ntotSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type pij_values(pij_valuesSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type parent_birth_times(parent_birth_timesSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type timepoints(timepointsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type parent_xfit(parent_xfitSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type ntot(ntotSEXP);
+    rcpp_result_gen = Rcpp::wrap(alfak_parent_opportunity_weights_cpp(pij_values, parent_birth_times, timepoints, parent_xfit, ntot));
+    return rcpp_result_gen;
+END_RCPP
+}
+// alfak_weighted_parent_mean_cpp
+double alfak_weighted_parent_mean_cpp(Rcpp::NumericVector parent_fitness, Rcpp::NumericVector weights, double fallback_mean);
+RcppExport SEXP _alfakR_alfak_weighted_parent_mean_cpp(SEXP parent_fitnessSEXP, SEXP weightsSEXP, SEXP fallback_meanSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type parent_fitness(parent_fitnessSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type weights(weightsSEXP);
+    Rcpp::traits::input_parameter< double >::type fallback_mean(fallback_meanSEXP);
+    rcpp_result_gen = Rcpp::wrap(alfak_weighted_parent_mean_cpp(parent_fitness, weights, fallback_mean));
+    return rcpp_result_gen;
+END_RCPP
+}
+// alfak_neighbor_loglik_grid_cpp
+Rcpp::NumericVector alfak_neighbor_loglik_grid_cpp(Rcpp::NumericVector fc_grid, Rcpp::NumericVector parent_fitness, Rcpp::NumericVector pij_values, Rcpp::NumericVector parent_birth_times, Rcpp::NumericVector timepoints, Rcpp::NumericMatrix parent_xfit, Rcpp::NumericVector child_obs, Rcpp::NumericVector ntot, double tol);
+RcppExport SEXP _alfakR_alfak_neighbor_loglik_grid_cpp(SEXP fc_gridSEXP, SEXP parent_fitnessSEXP, SEXP pij_valuesSEXP, SEXP parent_birth_timesSEXP, SEXP timepointsSEXP, SEXP parent_xfitSEXP, SEXP child_obsSEXP, SEXP ntotSEXP, SEXP tolSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type fc_grid(fc_gridSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type parent_fitness(parent_fitnessSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type pij_values(pij_valuesSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type parent_birth_times(parent_birth_timesSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type timepoints(timepointsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type parent_xfit(parent_xfitSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type child_obs(child_obsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type ntot(ntotSEXP);
+    Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
+    rcpp_result_gen = Rcpp::wrap(alfak_neighbor_loglik_grid_cpp(fc_grid, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, child_obs, ntot, tol));
+    return rcpp_result_gen;
+END_RCPP
+}
+// alfak_nn_prior_marginal_negloglik_cpp
+double alfak_nn_prior_marginal_negloglik_cpp(Rcpp::NumericMatrix loglik_mat, Rcpp::NumericVector fc_grid, Rcpp::NumericVector log_weights, Rcpp::NumericVector parent_means, Rcpp::NumericVector child_weights, double mu, double sigma);
+RcppExport SEXP _alfakR_alfak_nn_prior_marginal_negloglik_cpp(SEXP loglik_matSEXP, SEXP fc_gridSEXP, SEXP log_weightsSEXP, SEXP parent_meansSEXP, SEXP child_weightsSEXP, SEXP muSEXP, SEXP sigmaSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type loglik_mat(loglik_matSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type fc_grid(fc_gridSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type log_weights(log_weightsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type parent_means(parent_meansSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type child_weights(child_weightsSEXP);
+    Rcpp::traits::input_parameter< double >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
+    rcpp_result_gen = Rcpp::wrap(alfak_nn_prior_marginal_negloglik_cpp(loglik_mat, fc_grid, log_weights, parent_means, child_weights, mu, sigma));
+    return rcpp_result_gen;
+END_RCPP
+}
+// alfak_two_shell_path_responsibilities_cpp
+Rcpp::List alfak_two_shell_path_responsibilities_cpp(Rcpp::CharacterVector descendant, Rcpp::NumericVector parent_anchor_exposure, Rcpp::NumericVector transition_probability);
+RcppExport SEXP _alfakR_alfak_two_shell_path_responsibilities_cpp(SEXP descendantSEXP, SEXP parent_anchor_exposureSEXP, SEXP transition_probabilitySEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type descendant(descendantSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type parent_anchor_exposure(parent_anchor_exposureSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type transition_probability(transition_probabilitySEXP);
+    rcpp_result_gen = Rcpp::wrap(alfak_two_shell_path_responsibilities_cpp(descendant, parent_anchor_exposure, transition_probability));
+    return rcpp_result_gen;
+END_RCPP
+}
+// alfak_group_cap_weights_cpp
+Rcpp::NumericVector alfak_group_cap_weights_cpp(Rcpp::CharacterVector group, Rcpp::NumericVector raw_weights, Rcpp::NumericVector cap_by_row);
+RcppExport SEXP _alfakR_alfak_group_cap_weights_cpp(SEXP groupSEXP, SEXP raw_weightsSEXP, SEXP cap_by_rowSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type group(groupSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type raw_weights(raw_weightsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type cap_by_row(cap_by_rowSEXP);
+    rcpp_result_gen = Rcpp::wrap(alfak_group_cap_weights_cpp(group, raw_weights, cap_by_row));
+    return rcpp_result_gen;
+END_RCPP
+}
 // alfak_neighbor_two_shell_objective_cpp
 double alfak_neighbor_two_shell_objective_cpp(double fc_param, Rcpp::NumericVector parent_fitness, Rcpp::NumericVector pij_values, Rcpp::NumericVector parent_birth_times, Rcpp::NumericVector timepoints, Rcpp::NumericMatrix parent_xfit, Rcpp::NumericVector child_obs, Rcpp::NumericVector ntot, double inward_prior_mean, double inward_prior_sd, Rcpp::NumericVector inward_prior_weights, bool do_inward_prior, Rcpp::NumericVector outward_fitness, double outward_prior_mean, Rcpp::NumericVector outward_prior_sd, Rcpp::NumericVector outward_prior_weights, double outward_lambda, double tol);
 RcppExport SEXP _alfakR_alfak_neighbor_two_shell_objective_cpp(SEXP fc_paramSEXP, SEXP parent_fitnessSEXP, SEXP pij_valuesSEXP, SEXP parent_birth_timesSEXP, SEXP timepointsSEXP, SEXP parent_xfitSEXP, SEXP child_obsSEXP, SEXP ntotSEXP, SEXP inward_prior_meanSEXP, SEXP inward_prior_sdSEXP, SEXP inward_prior_weightsSEXP, SEXP do_inward_priorSEXP, SEXP outward_fitnessSEXP, SEXP outward_prior_meanSEXP, SEXP outward_prior_sdSEXP, SEXP outward_prior_weightsSEXP, SEXP outward_lambdaSEXP, SEXP tolSEXP) {
@@ -161,6 +286,45 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// context_bandwidths_cpp
+Rcpp::NumericVector context_bandwidths_cpp(Rcpp::NumericMatrix evidence_profile_matrix, Rcpp::NumericVector evidence_total_cn, Rcpp::NumericVector evidence_burden, Rcpp::NumericVector evidence_local_copy, Rcpp::NumericVector evidence_local_z, Rcpp::IntegerVector evidence_transition_chr, Rcpp::IntegerVector evidence_direction_code, Rcpp::NumericVector evidence_transition_size, Rcpp::NumericVector evidence_delta_total_cn, Rcpp::NumericVector evidence_delta_burden, Rcpp::NumericVector chromosome_weights, int profile_distance_code);
+RcppExport SEXP _alfakR_context_bandwidths_cpp(SEXP evidence_profile_matrixSEXP, SEXP evidence_total_cnSEXP, SEXP evidence_burdenSEXP, SEXP evidence_local_copySEXP, SEXP evidence_local_zSEXP, SEXP evidence_transition_chrSEXP, SEXP evidence_direction_codeSEXP, SEXP evidence_transition_sizeSEXP, SEXP evidence_delta_total_cnSEXP, SEXP evidence_delta_burdenSEXP, SEXP chromosome_weightsSEXP, SEXP profile_distance_codeSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type evidence_profile_matrix(evidence_profile_matrixSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type evidence_total_cn(evidence_total_cnSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type evidence_burden(evidence_burdenSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type evidence_local_copy(evidence_local_copySEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type evidence_local_z(evidence_local_zSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type evidence_transition_chr(evidence_transition_chrSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type evidence_direction_code(evidence_direction_codeSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type evidence_transition_size(evidence_transition_sizeSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type evidence_delta_total_cn(evidence_delta_total_cnSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type evidence_delta_burden(evidence_delta_burdenSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type chromosome_weights(chromosome_weightsSEXP);
+    Rcpp::traits::input_parameter< int >::type profile_distance_code(profile_distance_codeSEXP);
+    rcpp_result_gen = Rcpp::wrap(context_bandwidths_cpp(evidence_profile_matrix, evidence_total_cn, evidence_burden, evidence_local_copy, evidence_local_z, evidence_transition_chr, evidence_direction_code, evidence_transition_size, evidence_delta_total_cn, evidence_delta_burden, chromosome_weights, profile_distance_code));
+    return rcpp_result_gen;
+END_RCPP
+}
+// context_patient_level_neighbors_cpp
+Rcpp::DataFrame context_patient_level_neighbors_cpp(Rcpp::IntegerVector evidence_index, Rcpp::CharacterVector patient_id, Rcpp::CharacterVector child_karyotype, Rcpp::NumericVector delta_hat, Rcpp::NumericVector delta_se, Rcpp::NumericVector final_weight, double sd_floor);
+RcppExport SEXP _alfakR_context_patient_level_neighbors_cpp(SEXP evidence_indexSEXP, SEXP patient_idSEXP, SEXP child_karyotypeSEXP, SEXP delta_hatSEXP, SEXP delta_seSEXP, SEXP final_weightSEXP, SEXP sd_floorSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type evidence_index(evidence_indexSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type patient_id(patient_idSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type child_karyotype(child_karyotypeSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type delta_hat(delta_hatSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type delta_se(delta_seSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type final_weight(final_weightSEXP);
+    Rcpp::traits::input_parameter< double >::type sd_floor(sd_floorSEXP);
+    rcpp_result_gen = Rcpp::wrap(context_patient_level_neighbors_cpp(evidence_index, patient_id, child_karyotype, delta_hat, delta_se, final_weight, sd_floor));
+    return rcpp_result_gen;
+END_RCPP
+}
 // pij_cpp
 double pij_cpp(int i, int j, double beta);
 static SEXP _alfakR_pij_cpp_try(SEXP iSEXP, SEXP jSEXP, SEXP betaSEXP) {
@@ -178,6 +342,76 @@ RcppExport SEXP _alfakR_pij_cpp(SEXP iSEXP, SEXP jSEXP, SEXP betaSEXP) {
     {
         Rcpp::RNGScope rcpp_rngScope_gen;
         rcpp_result_gen = PROTECT(_alfakR_pij_cpp_try(iSEXP, jSEXP, betaSEXP));
+    }
+    Rboolean rcpp_isInterrupt_gen = Rf_inherits(rcpp_result_gen, "interrupted-error");
+    if (rcpp_isInterrupt_gen) {
+        UNPROTECT(1);
+        Rf_onintr();
+    }
+    bool rcpp_isLongjump_gen = Rcpp::internal::isLongjumpSentinel(rcpp_result_gen);
+    if (rcpp_isLongjump_gen) {
+        Rcpp::internal::resumeJump(rcpp_result_gen);
+    }
+    Rboolean rcpp_isError_gen = Rf_inherits(rcpp_result_gen, "try-error");
+    if (rcpp_isError_gen) {
+        SEXP rcpp_msgSEXP_gen = Rf_asChar(rcpp_result_gen);
+        UNPROTECT(1);
+        Rf_error("%s", CHAR(rcpp_msgSEXP_gen));
+    }
+    UNPROTECT(1);
+    return rcpp_result_gen;
+}
+// gen_all_neighbours_cpp
+Rcpp::NumericMatrix gen_all_neighbours_cpp(Rcpp::CharacterVector ids, bool remove_nullisomes);
+static SEXP _alfakR_gen_all_neighbours_cpp_try(SEXP idsSEXP, SEXP remove_nullisomesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type ids(idsSEXP);
+    Rcpp::traits::input_parameter< bool >::type remove_nullisomes(remove_nullisomesSEXP);
+    rcpp_result_gen = Rcpp::wrap(gen_all_neighbours_cpp(ids, remove_nullisomes));
+    return rcpp_result_gen;
+END_RCPP_RETURN_ERROR
+}
+RcppExport SEXP _alfakR_gen_all_neighbours_cpp(SEXP idsSEXP, SEXP remove_nullisomesSEXP) {
+    SEXP rcpp_result_gen;
+    {
+        Rcpp::RNGScope rcpp_rngScope_gen;
+        rcpp_result_gen = PROTECT(_alfakR_gen_all_neighbours_cpp_try(idsSEXP, remove_nullisomesSEXP));
+    }
+    Rboolean rcpp_isInterrupt_gen = Rf_inherits(rcpp_result_gen, "interrupted-error");
+    if (rcpp_isInterrupt_gen) {
+        UNPROTECT(1);
+        Rf_onintr();
+    }
+    bool rcpp_isLongjump_gen = Rcpp::internal::isLongjumpSentinel(rcpp_result_gen);
+    if (rcpp_isLongjump_gen) {
+        Rcpp::internal::resumeJump(rcpp_result_gen);
+    }
+    Rboolean rcpp_isError_gen = Rf_inherits(rcpp_result_gen, "try-error");
+    if (rcpp_isError_gen) {
+        SEXP rcpp_msgSEXP_gen = Rf_asChar(rcpp_result_gen);
+        UNPROTECT(1);
+        Rf_error("%s", CHAR(rcpp_msgSEXP_gen));
+    }
+    UNPROTECT(1);
+    return rcpp_result_gen;
+}
+// gen_nn_info_cpp
+Rcpp::List gen_nn_info_cpp(Rcpp::CharacterVector fq, double beta);
+static SEXP _alfakR_gen_nn_info_cpp_try(SEXP fqSEXP, SEXP betaSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type fq(fqSEXP);
+    Rcpp::traits::input_parameter< double >::type beta(betaSEXP);
+    rcpp_result_gen = Rcpp::wrap(gen_nn_info_cpp(fq, beta));
+    return rcpp_result_gen;
+END_RCPP_RETURN_ERROR
+}
+RcppExport SEXP _alfakR_gen_nn_info_cpp(SEXP fqSEXP, SEXP betaSEXP) {
+    SEXP rcpp_result_gen;
+    {
+        Rcpp::RNGScope rcpp_rngScope_gen;
+        rcpp_result_gen = PROTECT(_alfakR_gen_nn_info_cpp_try(fqSEXP, betaSEXP));
     }
     Rboolean rcpp_isInterrupt_gen = Rf_inherits(rcpp_result_gen, "interrupted-error");
     if (rcpp_isInterrupt_gen) {
@@ -311,6 +545,8 @@ static int _alfakR_RcppExport_validate(const char* sig) {
     static std::set<std::string> signatures;
     if (signatures.empty()) {
         signatures.insert("double(*pij_cpp)(int,int,double)");
+        signatures.insert("Rcpp::NumericMatrix(*gen_all_neighbours_cpp)(Rcpp::CharacterVector,bool)");
+        signatures.insert("Rcpp::List(*gen_nn_info_cpp)(Rcpp::CharacterVector,double)");
         signatures.insert("List(*get_A_inputs)(CharacterVector,double,Nullable<double>)");
         signatures.insert("List(*chrmod_cpp)(double,NumericVector,List)");
         signatures.insert("List(*chrmod_rel_cpp)(double,NumericVector,List)");
@@ -321,6 +557,8 @@ static int _alfakR_RcppExport_validate(const char* sig) {
 // registerCCallable (register entry points for exported C++ functions)
 RcppExport SEXP _alfakR_RcppExport_registerCCallable() { 
     R_RegisterCCallable("alfakR", "_alfakR_pij_cpp", (DL_FUNC)_alfakR_pij_cpp_try);
+    R_RegisterCCallable("alfakR", "_alfakR_gen_all_neighbours_cpp", (DL_FUNC)_alfakR_gen_all_neighbours_cpp_try);
+    R_RegisterCCallable("alfakR", "_alfakR_gen_nn_info_cpp", (DL_FUNC)_alfakR_gen_nn_info_cpp_try);
     R_RegisterCCallable("alfakR", "_alfakR_get_A_inputs", (DL_FUNC)_alfakR_get_A_inputs_try);
     R_RegisterCCallable("alfakR", "_alfakR_chrmod_cpp", (DL_FUNC)_alfakR_chrmod_cpp_try);
     R_RegisterCCallable("alfakR", "_alfakR_chrmod_rel_cpp", (DL_FUNC)_alfakR_chrmod_rel_cpp_try);
@@ -333,10 +571,22 @@ static const R_CallMethodDef CallEntries[] = {
     {"_alfakR_alfak_project_forward_log_cpp", (DL_FUNC) &_alfakR_alfak_project_forward_log_cpp, 3},
     {"_alfakR_alfak_neg_log_lik_cpp", (DL_FUNC) &_alfakR_alfak_neg_log_lik_cpp, 3},
     {"_alfakR_alfak_neighbor_objective_cpp", (DL_FUNC) &_alfakR_alfak_neighbor_objective_cpp, 13},
+    {"_alfakR_alfak_nn_project_trajectory_cpp", (DL_FUNC) &_alfakR_alfak_nn_project_trajectory_cpp, 7},
+    {"_alfakR_alfak_nn_project_exposure_cpp", (DL_FUNC) &_alfakR_alfak_nn_project_exposure_cpp, 8},
+    {"_alfakR_alfak_parent_opportunity_weights_cpp", (DL_FUNC) &_alfakR_alfak_parent_opportunity_weights_cpp, 5},
+    {"_alfakR_alfak_weighted_parent_mean_cpp", (DL_FUNC) &_alfakR_alfak_weighted_parent_mean_cpp, 3},
+    {"_alfakR_alfak_neighbor_loglik_grid_cpp", (DL_FUNC) &_alfakR_alfak_neighbor_loglik_grid_cpp, 9},
+    {"_alfakR_alfak_nn_prior_marginal_negloglik_cpp", (DL_FUNC) &_alfakR_alfak_nn_prior_marginal_negloglik_cpp, 7},
+    {"_alfakR_alfak_two_shell_path_responsibilities_cpp", (DL_FUNC) &_alfakR_alfak_two_shell_path_responsibilities_cpp, 3},
+    {"_alfakR_alfak_group_cap_weights_cpp", (DL_FUNC) &_alfakR_alfak_group_cap_weights_cpp, 3},
     {"_alfakR_alfak_neighbor_two_shell_objective_cpp", (DL_FUNC) &_alfakR_alfak_neighbor_two_shell_objective_cpp, 18},
     {"_alfakR_alfak_qr_accum_cpp", (DL_FUNC) &_alfakR_alfak_qr_accum_cpp, 2},
     {"_alfakR_context_kernel_weights_cpp", (DL_FUNC) &_alfakR_context_kernel_weights_cpp, 28},
+    {"_alfakR_context_bandwidths_cpp", (DL_FUNC) &_alfakR_context_bandwidths_cpp, 12},
+    {"_alfakR_context_patient_level_neighbors_cpp", (DL_FUNC) &_alfakR_context_patient_level_neighbors_cpp, 7},
     {"_alfakR_pij_cpp", (DL_FUNC) &_alfakR_pij_cpp, 3},
+    {"_alfakR_gen_all_neighbours_cpp", (DL_FUNC) &_alfakR_gen_all_neighbours_cpp, 2},
+    {"_alfakR_gen_nn_info_cpp", (DL_FUNC) &_alfakR_gen_nn_info_cpp, 2},
     {"_alfakR_get_A_inputs", (DL_FUNC) &_alfakR_get_A_inputs, 3},
     {"_alfakR_chrmod_cpp", (DL_FUNC) &_alfakR_chrmod_cpp, 3},
     {"_alfakR_chrmod_rel_cpp", (DL_FUNC) &_alfakR_chrmod_rel_cpp, 3},

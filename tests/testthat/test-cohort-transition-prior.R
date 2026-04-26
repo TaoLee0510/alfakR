@@ -452,7 +452,7 @@ test_that("context kernel favors matching chromosome and direction", {
   expect_false("obs_2" %in% w$evidence_row_id)
 })
 
-test_that("C++ context kernel matches R fallback output", {
+test_that("C++ context kernel failures are logged and stop", {
   records <- rbind(
     make_context_records("patient_A", parents = "2.2.2", children = "2.2.3", delta = -0.1),
     make_context_records("patient_B", parents = "2.2.2", children = "2.2.3", delta = -0.12),
@@ -471,16 +471,75 @@ test_that("C++ context kernel matches R fallback output", {
     profile_distance = "hellinger"
   )
   fast <- do.call(alfakR::compute_context_kernel_weights, args)
-  slow <- testthat::with_mocked_bindings(
-    do.call(alfakR::compute_context_kernel_weights, args),
-    context_kernel_weights_cpp = function(...) stop("force R fallback"),
-    .package = "alfakR"
-  )
 
-  expect_equal(fast$evidence_row_id, slow$evidence_row_id)
-  expect_equal(fast$patient_id, slow$patient_id)
-  expect_equal(fast$final_weight, slow$final_weight, tolerance = 1e-12)
-  expect_equal(fast$context_distance, slow$context_distance, tolerance = 1e-12)
+  expect_true(nrow(fast) > 0)
+  expect_true(all(is.finite(fast$final_weight)))
+
+  log_path <- tempfile("alfak_run_log_")
+  old <- options(alfakR.run_log_path = log_path, alfakR.echo_run_log = FALSE)
+  on.exit(options(old), add = TRUE)
+  expect_error(
+    testthat::with_mocked_bindings(
+      do.call(alfakR::compute_context_kernel_weights, args),
+      context_kernel_weights_cpp = function(...) stop("forced cpp failure"),
+      .package = "alfakR"
+    ),
+    "context_kernel_weights_cpp.*forced cpp failure"
+  )
+  lines <- alfakR::alfak_read_run_log(path = log_path)
+  expect_true(any(grepl("cpp.context_kernel_weights_cpp", lines)))
+  expect_true(any(grepl("forced cpp failure", lines)))
+})
+
+test_that("C++ context bandwidth and patient aggregation failures are logged and stop", {
+  records <- rbind(
+    make_context_records("patient_A", parents = "2.2.2", children = "2.2.3", delta = -0.1),
+    make_context_records("patient_A", parents = "2.2.2", children = "2.2.3", delta = -0.08),
+    make_context_records("patient_B", parents = "2.3.2", children = "2.3.3", delta = -0.2),
+    make_context_records("patient_C", parents = "3.2.2", children = "3.2.3", delta = -0.05)
+  )
+  bank <- alfakR::build_contextual_transition_evidence_bank(records)$evidence_bank
+  fast_bw <- alfakR:::estimate_context_bandwidths(bank)
+  expect_true(all(vapply(fast_bw, function(x) is.finite(x) && x > 0, logical(1))))
+
+  target <- alfakR::compute_transition_context_features("2.2.2", "2.2.3")
+  weights_df <- alfakR::compute_context_kernel_weights(
+    target,
+    bank,
+    bandwidths = list(profile = 0.25, area = 2, burden = 2, local = 1, event = 1),
+    weights = list(profile = 1, area = 0.5, burden = 0.5, local = 1, event = 2),
+    event_match = "same_chr_direction"
+  )
+  fast_agg <- alfakR:::cohort_context_patient_level_neighbors(bank, weights_df)
+  expect_true(nrow(fast_agg) > 0)
+  expect_true(all(is.finite(fast_agg$delta_patient_mean)))
+  expect_true(all(is.finite(fast_agg$patient_weight)))
+
+  log_path <- tempfile("alfak_run_log_")
+  old <- options(alfakR.run_log_path = log_path, alfakR.echo_run_log = FALSE)
+  on.exit(options(old), add = TRUE)
+
+  expect_error(
+    testthat::with_mocked_bindings(
+      alfakR:::estimate_context_bandwidths(bank),
+      context_bandwidths_cpp = function(...) stop("forced bandwidth failure"),
+      .package = "alfakR"
+    ),
+    "context_bandwidths_cpp.*forced bandwidth failure"
+  )
+  expect_error(
+    testthat::with_mocked_bindings(
+      alfakR:::cohort_context_patient_level_neighbors(bank, weights_df),
+      context_patient_level_neighbors_cpp = function(...) stop("forced aggregation failure"),
+      .package = "alfakR"
+    ),
+    "context_patient_level_neighbors_cpp.*forced aggregation failure"
+  )
+  lines <- alfakR::alfak_read_run_log(path = log_path)
+  expect_true(any(grepl("cpp.context_bandwidths_cpp", lines)))
+  expect_true(any(grepl("forced bandwidth failure", lines)))
+  expect_true(any(grepl("cpp.context_patient_level_neighbors_cpp", lines)))
+  expect_true(any(grepl("forced aggregation failure", lines)))
 })
 
 test_that("context evidence bank filters unreliable records and keeps zeros censoring-only", {
@@ -511,7 +570,7 @@ test_that("context lookup excludes target patient evidence under LOPO", {
     delta = c(-0.1, -0.11, -0.12)
   ))
   lookup <- alfakR::lookup_contextual_transition_prior(
-    "2.2.2.2", "2.2.3.2", "patient_A",
+    "2.2.2", "2.2.3", "patient_A",
     evidence_bank = prior$evidence_bank,
     leave_one_patient_out = TRUE,
     baseline_ploidy = prior$context_feature_config$baseline_ploidy,

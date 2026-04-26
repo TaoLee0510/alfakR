@@ -23,6 +23,14 @@ compute_transition_group_heterogeneity(
 \item{group_level}{Grouping level.}
 
 \item{group_col}{Column containing \code{group_name}.}
+
+\item{cohort_transition_sd_floor}{Minimum transition-effect SD used in
+inverse-variance weights.}
+
+\item{cohort_transition_effect_threshold}{Absolute Delta threshold used to
+distinguish near-zero effects from signed effects.}
+
+\item{...}{Reserved for future heterogeneity controls.}
 }
 \value{
 A one-row data frame of heterogeneity metrics.

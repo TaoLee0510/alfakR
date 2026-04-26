@@ -221,7 +221,7 @@ build_W_rcpp <- function(karyotype_strings, p,Nmax=Inf) {
 #' @noRd
 chrmod_rel <- function(time, x, parms) {
   A <- parms$A
-  g <- as.numeric(x %*% A)        # per‐type contributions
+  g <- as.numeric(x %*% A)        # per-type contributions
   phi <- sum(g)                   # average growth
   list(g - x * phi)               # dx/dt
 }
@@ -726,18 +726,18 @@ find_steady_state <- function(lscape, p, Nmax=Inf) {
 # Public wrapper: ABM simulation under a GRF fitness landscape
 # -------------------------------------------------------------
 
-#' Simulate karyotype dynamics in a Gaussian‑Random‑Field (GRF) fitness landscape
+#' Simulate karyotype dynamics in a Gaussian-Random-Field (GRF) fitness landscape
 #'
-#' This function runs the C++ agent‑based model (`run_karyotype_abm`) in
-#' **GRF mode**: fitness values are generated on‑the‑fly from a set of
-#' centroid points and a wavelength λ, instead of using a lookup table.
+#' This function runs the C++ agent-based model (`run_karyotype_abm`) in
+#' **GRF mode**: fitness values are generated on-the-fly from a set of
+#' centroid points and a wavelength lambda, instead of using a lookup table.
 #'
 #' @param centroids Numeric matrix with one centroid per **row**  
-#'   (dimensions *n_centroids × K*), where *K* is the number of
+#'   (dimensions *n_centroids x K*), where *K* is the number of
 #'   chromosome types.
-#' @param lambda Positive scalar. The GRF wavelength λ; smaller values give
+#' @param lambda Positive scalar. The GRF wavelength lambda; smaller values give
 #'   a more rugged landscape.
-#' @param p Missegregation probability (0 ≤ \code{p} ≤ 1).
+#' @param p Missegregation probability (0 <= \code{p} <= 1).
 #' @param times Numeric vector of time points to sample.
 #' @param x0 **Named** numeric vector of initial karyotype frequencies
 #'   (must sum to 1).  The names must be karyotype strings of length *K*
@@ -752,11 +752,11 @@ find_steady_state <- function(lscape, p, Nmax=Inf) {
 #'   Use `-1` to record only at culling events. `0` is invalid.
 #' @param abm_seed RNG seed.  Use \code{-1} for a random seed.
 #' @param normalize_freq Should ABM counts be normalized to frequencies?
-#' @return A **wide data‑frame**: first column \code{time}, remaining columns
+#' @return A **wide data-frame**: first column \code{time}, remaining columns
 #'   one per karyotype, giving relative frequencies at each recorded ABM time point.
 #'
 #' @examples
-#' # Two‑chromosome example with 4 centroids
+#' # Two-chromosome example with 4 centroids
 #' cents <- matrix(c(2,2,
 #'                   3,1,
 #'                   1,3,
@@ -784,7 +784,7 @@ run_abm_simulation_grf <- function(centroids, lambda, p, times, x0,
   
   ## -- validation (same as internal draft, trimmed for brevity) -------------
   if(!is.matrix(centroids) || !is.numeric(centroids) || nrow(centroids) == 0)
-    stop("'centroids' must be a non‑empty numeric matrix.", call. = FALSE)
+    stop("'centroids' must be a non-empty numeric matrix.", call. = FALSE)
   if (any(!is.finite(centroids))) {
     stop("'centroids' must contain only finite numeric values.", call. = FALSE)
   }
@@ -833,7 +833,7 @@ run_abm_simulation_grf <- function(centroids, lambda, p, times, x0,
   })
   
   cat(sprintf("Simulation completed in %.2f seconds.\n", elapsed["elapsed"]))
-  ## -- convert to wide data‑frame (unchanged) --------------------------------
+  ## -- convert to wide data-frame (unchanged) --------------------------------
   if(!length(cpp_res)) {
     warning("C++ returned no results.")
     out <- data.frame(time = numeric(0))

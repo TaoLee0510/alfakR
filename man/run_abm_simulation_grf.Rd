@@ -2,7 +2,7 @@
 % Please edit documentation in R/prediction_functions.R
 \name{run_abm_simulation_grf}
 \alias{run_abm_simulation_grf}
-\title{Simulate karyotype dynamics in a Gaussian‑Random‑Field (GRF) fitness landscape}
+\title{Simulate karyotype dynamics in a Gaussian-Random-Field (GRF) fitness landscape}
 \usage{
 run_abm_simulation_grf(
   centroids,
@@ -21,13 +21,13 @@ run_abm_simulation_grf(
 }
 \arguments{
 \item{centroids}{Numeric matrix with one centroid per \strong{row}
-(dimensions \emph{n_centroids × K}), where \emph{K} is the number of
+(dimensions \emph{n_centroids x K}), where \emph{K} is the number of
 chromosome types.}
 
-\item{lambda}{Positive scalar. The GRF wavelength λ; smaller values give
+\item{lambda}{Positive scalar. The GRF wavelength lambda; smaller values give
 a more rugged landscape.}
 
-\item{p}{Missegregation probability (0 ≤ \code{p} ≤ 1).}
+\item{p}{Missegregation probability (0 <= \code{p} <= 1).}
 
 \item{times}{Numeric vector of time points to sample.}
 
@@ -39,8 +39,8 @@ matching the dimension of \code{centroids}.}
 
 \item{abm_delta_t}{Duration of one ABM step.}
 
-\item{abm_max_pop}{Carrying capacity. Values \verb{> 0} enable culling;
-values \verb{<= 0} mean unlimited population size.}
+\item{abm_max_pop}{Carrying capacity. Values \code{> 0} enable culling;
+values \code{<= 0} mean unlimited population size.}
 
 \item{abm_culling_survival}{Fraction of cells retained when the population
 exceeds \code{abm_max_pop}.}
@@ -53,16 +53,16 @@ Use \code{-1} to record only at culling events. \code{0} is invalid.}
 \item{normalize_freq}{Should ABM counts be normalized to frequencies?}
 }
 \value{
-A \strong{wide data‑frame}: first column \code{time}, remaining columns
+A \strong{wide data-frame}: first column \code{time}, remaining columns
 one per karyotype, giving relative frequencies at each recorded ABM time point.
 }
 \description{
-This function runs the C++ agent‑based model (\code{run_karyotype_abm}) in
-\strong{GRF mode}: fitness values are generated on‑the‑fly from a set of
-centroid points and a wavelength λ, instead of using a lookup table.
+This function runs the C++ agent-based model (\code{run_karyotype_abm}) in
+\strong{GRF mode}: fitness values are generated on-the-fly from a set of
+centroid points and a wavelength lambda, instead of using a lookup table.
 }
 \examples{
-# Two‑chromosome example with 4 centroids
+# Two-chromosome example with 4 centroids
 cents <- matrix(c(2,2,
                   3,1,
                   1,3,

@@ -4,6 +4,9 @@
 #include <cmath>
 #include <numeric>
 #include <limits>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 using namespace Rcpp;
 
 // [[Rcpp::interfaces(r, cpp)]]
@@ -57,6 +60,81 @@ double pij_impl(int i, int j, double beta) {
   return qij;
 }
 
+std::string karyotype_vector_to_string(const std::vector<int>& x) {
+  std::ostringstream ss;
+  for (std::size_t i = 0; i < x.size(); ++i) {
+    if (i > 0) ss << ".";
+    ss << x[i];
+  }
+  return ss.str();
+}
+
+std::vector<std::vector<int>> parse_karyotype_ids_cpp(Rcpp::CharacterVector ids) {
+  const int n = ids.size();
+  if (n == 0) {
+    Rcpp::stop("Karyotype IDs must be non-empty character strings.");
+  }
+  std::vector<std::vector<int>> parsed(n);
+  std::unordered_set<std::string> seen;
+  int k = -1;
+  for (int i = 0; i < n; ++i) {
+    std::string id = Rcpp::as<std::string>(ids[i]);
+    if (!seen.insert(id).second) {
+      Rcpp::stop("Karyotype IDs must be unique.");
+    }
+    parsed[i] = parse_karyotype_string_cpp(id);
+    if (k < 0) {
+      k = static_cast<int>(parsed[i].size());
+    } else if (static_cast<int>(parsed[i].size()) != k) {
+      Rcpp::stop("All karyotype IDs must have the same number of dot-separated components.");
+    }
+  }
+  return parsed;
+}
+
+std::vector<std::vector<int>> generate_one_step_neighbors_cpp(const std::vector<std::vector<int>>& ids,
+                                                              bool remove_nullisomes,
+                                                              const std::unordered_set<std::string>& originals) {
+  std::vector<std::vector<int>> out;
+  std::unordered_set<std::string> seen;
+  if (ids.empty()) {
+    return out;
+  }
+  const int k = ids[0].size();
+  for (const auto& base : ids) {
+    for (int chr = 0; chr < k; ++chr) {
+      for (int delta : {-1, 1}) {
+        std::vector<int> candidate = base;
+        candidate[chr] += delta;
+        if (remove_nullisomes && candidate[chr] < 1) {
+          continue;
+        }
+        std::string key = karyotype_vector_to_string(candidate);
+        if (originals.find(key) != originals.end()) {
+          continue;
+        }
+        if (seen.insert(key).second) {
+          out.push_back(candidate);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+double transition_probability_vec_cpp(const std::vector<int>& parent,
+                                      const std::vector<int>& child,
+                                      double beta) {
+  if (parent.size() != child.size()) {
+    Rcpp::stop("Parent and child karyotypes must have matching dimensions.");
+  }
+  double q = 1.0;
+  for (std::size_t i = 0; i < parent.size(); ++i) {
+    q *= pij_impl(parent[i], child[i], beta);
+  }
+  return q;
+}
+
 NumericMatrix validate_transition_matrix(List parms, int expected_size, const char* state_name) {
   if (!parms.containsElementNamed("A")) {
     Rcpp::stop("`parms$A` must be provided.");
@@ -93,6 +171,70 @@ double pij_cpp(int i, int j, double beta) {
     Rcpp::stop("Internal error: computed `pij` is not finite or not in [0, 1].");
   }
   return qij;
+}
+
+// [[Rcpp::export]]
+Rcpp::NumericMatrix gen_all_neighbours_cpp(Rcpp::CharacterVector ids,
+                                           bool remove_nullisomes = true) {
+  std::vector<std::vector<int>> parsed = parse_karyotype_ids_cpp(ids);
+  std::unordered_set<std::string> originals;
+  for (const auto& x : parsed) {
+    originals.insert(karyotype_vector_to_string(x));
+  }
+  std::vector<std::vector<int>> neighbors = generate_one_step_neighbors_cpp(parsed, remove_nullisomes, originals);
+  const int n = neighbors.size();
+  const int k = parsed[0].size();
+  Rcpp::NumericMatrix out(n, k);
+  for (int i = 0; i < n; ++i) {
+    for (int j = 0; j < k; ++j) {
+      out(i, j) = neighbors[i][j];
+    }
+  }
+  return out;
+}
+
+// [[Rcpp::export]]
+Rcpp::List gen_nn_info_cpp(Rcpp::CharacterVector fq, double beta) {
+  if (!std::isfinite(beta) || beta < 0.0 || beta > 1.0) {
+    Rcpp::stop("`beta` must be finite and in [0, 1].");
+  }
+  std::vector<std::vector<int>> fq_parsed = parse_karyotype_ids_cpp(fq);
+  std::unordered_set<std::string> frequent_set;
+  std::unordered_map<std::string, std::vector<int>> frequent_vectors;
+  for (int i = 0; i < fq.size(); ++i) {
+    std::string id = Rcpp::as<std::string>(fq[i]);
+    frequent_set.insert(id);
+    frequent_vectors[id] = fq_parsed[i];
+  }
+  std::vector<std::vector<int>> candidates = generate_one_step_neighbors_cpp(fq_parsed, true, frequent_set);
+  Rcpp::List out(candidates.size());
+  for (std::size_t idx = 0; idx < candidates.size(); ++idx) {
+    const std::vector<int>& child = candidates[idx];
+    std::string child_id = karyotype_vector_to_string(child);
+    std::vector<std::vector<int>> child_wrap(1, child);
+    std::unordered_set<std::string> child_original;
+    child_original.insert(child_id);
+    std::vector<std::vector<int>> parent_candidates = generate_one_step_neighbors_cpp(child_wrap, true, child_original);
+    std::vector<std::string> parent_ids;
+    std::vector<double> pij_values;
+    for (const auto& parent : parent_candidates) {
+      std::string parent_id = karyotype_vector_to_string(parent);
+      if (frequent_set.find(parent_id) == frequent_set.end()) {
+        continue;
+      }
+      double q = transition_probability_vec_cpp(parent, child, beta);
+      parent_ids.push_back(parent_id);
+      pij_values.push_back(q);
+    }
+    Rcpp::CharacterVector nj(parent_ids.begin(), parent_ids.end());
+    Rcpp::NumericVector pij(pij_values.begin(), pij_values.end());
+    out[idx] = Rcpp::List::create(
+      Rcpp::Named("ni") = child_id,
+      Rcpp::Named("nj") = nj,
+      Rcpp::Named("pij") = pij
+    );
+  }
+  return out;
 }
 
  //' Prepare triplet inputs (i, j, x, dims, dimnames) for sparse A matrix.

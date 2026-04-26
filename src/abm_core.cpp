@@ -396,7 +396,7 @@ Rcpp::List run_karyotype_abm(
   
   for (int step = 1; step <= n_steps; ++step) {
     if (population.empty()) {
-      Rcpp::Rcout << "Population extinct at step " << step << std::endl;
+      Rcpp::warning("Population extinct at step %d.", step);
       break;
     }
     if (n_chr_types_sim <=0) { // Should have been caught earlier

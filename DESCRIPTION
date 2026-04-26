@@ -2,7 +2,10 @@ Package: alfakR
 Title: Adaptive Local Fitness landscapes for Aneuploid Karotypes 
 Version: 0.0.1.100
 Authors@R: 
-    person("Richard", "Beck", , "richard.beck@moffitt.org", role = c("aut", "cre"))
+    person(given = "Richard", family = "Beck",
+           email = "richard.beck@moffitt.org", role = c("aut", "cre"))
+Author: Richard Beck
+Maintainer: Richard Beck <richard.beck@moffitt.org>
 Description: Methods to infer fitness landscapes for aneuploid karyotypes, and predict karyotype evolution.
 License: MIT + file LICENSE
 Encoding: UTF-8
@@ -19,7 +22,6 @@ Imports:
     tidyr
 LinkingTo: 
     Rcpp
-VignetteBuilder: knitr
 Suggests:
     knitr,
     rmarkdown,

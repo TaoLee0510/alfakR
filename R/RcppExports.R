@@ -17,6 +17,38 @@ alfak_neighbor_objective_cpp <- function(fc_param, parent_fitness, pij_values, p
     .Call(`_alfakR_alfak_neighbor_objective_cpp`, fc_param, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, child_obs, ntot, parent_fitness_mean, prior_mean, prior_sd, do_prior, tol)
 }
 
+alfak_nn_project_trajectory_cpp <- function(fc_param, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, tol) {
+    .Call(`_alfakR_alfak_nn_project_trajectory_cpp`, fc_param, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, tol)
+}
+
+alfak_nn_project_exposure_cpp <- function(fc_param, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, ntot, tol) {
+    .Call(`_alfakR_alfak_nn_project_exposure_cpp`, fc_param, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, ntot, tol)
+}
+
+alfak_parent_opportunity_weights_cpp <- function(pij_values, parent_birth_times, timepoints, parent_xfit, ntot) {
+    .Call(`_alfakR_alfak_parent_opportunity_weights_cpp`, pij_values, parent_birth_times, timepoints, parent_xfit, ntot)
+}
+
+alfak_weighted_parent_mean_cpp <- function(parent_fitness, weights, fallback_mean) {
+    .Call(`_alfakR_alfak_weighted_parent_mean_cpp`, parent_fitness, weights, fallback_mean)
+}
+
+alfak_neighbor_loglik_grid_cpp <- function(fc_grid, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, child_obs, ntot, tol) {
+    .Call(`_alfakR_alfak_neighbor_loglik_grid_cpp`, fc_grid, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, child_obs, ntot, tol)
+}
+
+alfak_nn_prior_marginal_negloglik_cpp <- function(loglik_mat, fc_grid, log_weights, parent_means, child_weights, mu, sigma) {
+    .Call(`_alfakR_alfak_nn_prior_marginal_negloglik_cpp`, loglik_mat, fc_grid, log_weights, parent_means, child_weights, mu, sigma)
+}
+
+alfak_two_shell_path_responsibilities_cpp <- function(descendant, parent_anchor_exposure, transition_probability) {
+    .Call(`_alfakR_alfak_two_shell_path_responsibilities_cpp`, descendant, parent_anchor_exposure, transition_probability)
+}
+
+alfak_group_cap_weights_cpp <- function(group, raw_weights, cap_by_row) {
+    .Call(`_alfakR_alfak_group_cap_weights_cpp`, group, raw_weights, cap_by_row)
+}
+
 alfak_neighbor_two_shell_objective_cpp <- function(fc_param, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, child_obs, ntot, inward_prior_mean, inward_prior_sd, inward_prior_weights, do_inward_prior, outward_fitness, outward_prior_mean, outward_prior_sd, outward_prior_weights, outward_lambda, tol) {
     .Call(`_alfakR_alfak_neighbor_two_shell_objective_cpp`, fc_param, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, child_obs, ntot, inward_prior_mean, inward_prior_sd, inward_prior_weights, do_inward_prior, outward_fitness, outward_prior_mean, outward_prior_sd, outward_prior_weights, outward_lambda, tol)
 }
@@ -29,8 +61,24 @@ context_kernel_weights_cpp <- function(target_profile, target_total_cn, target_b
     .Call(`_alfakR_context_kernel_weights_cpp`, target_profile, target_total_cn, target_burden, target_local_copy, target_local_z, target_transition_chr, target_direction_code, target_transition_size, target_delta_total_cn, target_delta_burden, evidence_profile_matrix, evidence_total_cn, evidence_burden, evidence_local_copy, evidence_local_z, evidence_transition_chr, evidence_direction_code, evidence_transition_size, evidence_delta_total_cn, evidence_delta_burden, quality_weight, bandwidths, component_weights, chromosome_weights, event_match_code, profile_distance_code, k_nearest, min_kernel_weight)
 }
 
+context_bandwidths_cpp <- function(evidence_profile_matrix, evidence_total_cn, evidence_burden, evidence_local_copy, evidence_local_z, evidence_transition_chr, evidence_direction_code, evidence_transition_size, evidence_delta_total_cn, evidence_delta_burden, chromosome_weights, profile_distance_code) {
+    .Call(`_alfakR_context_bandwidths_cpp`, evidence_profile_matrix, evidence_total_cn, evidence_burden, evidence_local_copy, evidence_local_z, evidence_transition_chr, evidence_direction_code, evidence_transition_size, evidence_delta_total_cn, evidence_delta_burden, chromosome_weights, profile_distance_code)
+}
+
+context_patient_level_neighbors_cpp <- function(evidence_index, patient_id, child_karyotype, delta_hat, delta_se, final_weight, sd_floor) {
+    .Call(`_alfakR_context_patient_level_neighbors_cpp`, evidence_index, patient_id, child_karyotype, delta_hat, delta_se, final_weight, sd_floor)
+}
+
 pij_cpp <- function(i, j, beta) {
     .Call(`_alfakR_pij_cpp`, i, j, beta)
+}
+
+gen_all_neighbours_cpp <- function(ids, remove_nullisomes = TRUE) {
+    .Call(`_alfakR_gen_all_neighbours_cpp`, ids, remove_nullisomes)
+}
+
+gen_nn_info_cpp <- function(fq, beta) {
+    .Call(`_alfakR_gen_nn_info_cpp`, fq, beta)
 }
 
 get_A_inputs <- function(k_str, beta, Nmax_ = NULL) {

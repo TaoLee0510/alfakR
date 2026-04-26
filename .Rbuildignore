@@ -3,3 +3,17 @@
 ^LICENSE\.md$
 ^doc$
 ^Meta$
+^benchmark$
+^vignettes$
+^\.git$
+^\.github$
+^\.DS_Store$
+^\.Rhistory$
+^\.RData$
+^\.Ruserdata$
+^.*\.DS_Store$
+^\.\.Rcheck$
+^.*\.Rcheck$
+^.*\.tar\.gz$
+^src/.*\.(o|so|dll|dylib)$
+^src/symbols\.rds$

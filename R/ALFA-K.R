@@ -370,6 +370,7 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
   # Note: library calls removed, dependencies handled by @importFrom or DESCRIPTION
 
   dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+  alfak_run_log_path(file.path(outdir, "alfak_run.log"))
   validate_positive_integer(nboot, "nboot")
   validate_positive_finite(n0, "n0")
   validate_positive_finite(nb, "nb")
@@ -379,6 +380,11 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
   validate_scalar_logical(landscape_data_output, "landscape_data_output")
   validate_scalar_logical(nn_two_shell_save_diagnostics, "nn_two_shell_save_diagnostics")
   nn_prior <- validate_nn_prior_mode(nn_prior)
+  alfak_log_event(
+    level = "INFO",
+    component = "alfak",
+    detail = sprintf("start nn_prior=%s outdir=%s", nn_prior, normalizePath(outdir, mustWork = FALSE))
+  )
   cohort_transition_prior <- if (identical(nn_prior, "cohort_transition")) {
     cohort_transition_version <- match.arg(cohort_transition_version)
     cohort_transition_apply_to <- match.arg(cohort_transition_apply_to)
@@ -561,7 +567,7 @@ pij <- function(i, j, beta) {
   validate_nonnegative_integer(i, "i")
   validate_nonnegative_integer(j, "j")
   validate_probability(beta, "beta", upper_inclusive = TRUE)
-  pij_cpp(i, j, beta)
+  alfak_cpp_call("pij_cpp", pij_cpp(i, j, beta), context = "pij")
 }
 
 #' Convert string like "1.2.3" to numeric vector
@@ -653,6 +659,96 @@ ALFAK_NN_TWO_SHELL_UNCERTAINTY_FLOOR <- 0.25
 ALFAK_COUNT_INTEGER_TOL <- sqrt(.Machine$double.eps)
 ALFAK_KRIG_NSTEP_CV <- 200L
 ALFAK_MAX_EXACT_INTEGER <- 2^53 - 1
+
+#' Get or set the ALFA-K run log path
+#'
+#' C++ acceleration failures are written to this log before the run stops. High
+#' level `alfak()` and `alfak_cohort_transition()` runs set the path to
+#' `file.path(outdir, "alfak_run.log")`; low-level helper calls use a temporary
+#' session log unless `options(alfakR.run_log_path = ...)` is set.
+#'
+#' @param path Optional path to set for subsequent log entries.
+#' @return The current run log path.
+#' @export
+alfak_run_log_path <- function(path = NULL) {
+  if (!is.null(path)) {
+    if (!is.character(path) || length(path) != 1L || is.na(path) || !nzchar(path)) {
+      stop("`path` must be a non-empty character scalar.", call. = FALSE)
+    }
+    options(alfakR.run_log_path = path)
+  }
+  getOption("alfakR.run_log_path", file.path(tempdir(), "alfakR_run.log"))
+}
+
+#' Read the ALFA-K run log
+#'
+#' @param n Number of trailing lines to return. Use `Inf` for the full log.
+#' @param path Optional run log path. Defaults to `alfak_run_log_path()`.
+#' @return Character vector of log lines.
+#' @export
+alfak_read_run_log <- function(n = Inf, path = alfak_run_log_path()) {
+  if (!file.exists(path)) {
+    return(character(0))
+  }
+  lines <- readLines(path, warn = FALSE)
+  if (is.finite(n)) {
+    n <- as.integer(n)
+    if (n <= 0L) return(character(0))
+    lines <- utils::tail(lines, n)
+  }
+  lines
+}
+
+#' Print the ALFA-K run log
+#'
+#' @inheritParams alfak_read_run_log
+#' @return Invisibly, the printed log lines.
+#' @export
+alfak_print_run_log <- function(n = 100L, path = alfak_run_log_path()) {
+  lines <- alfak_read_run_log(n = n, path = path)
+  if (length(lines)) {
+    cat(paste(lines, collapse = "\n"), "\n", sep = "")
+  }
+  invisible(lines)
+}
+
+alfak_log_event <- function(level = "INFO", component = "alfak", detail, path = alfak_run_log_path()) {
+  level <- toupper(as.character(level)[1])
+  component <- as.character(component)[1]
+  detail <- as.character(detail)[1]
+  line <- sprintf(
+    "%s [%s] %s: %s",
+    format(Sys.time(), "%Y-%m-%d %H:%M:%S %z"),
+    level,
+    component,
+    detail
+  )
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  cat(line, file = path, append = TRUE, sep = "\n")
+  if (isTRUE(getOption("alfakR.echo_run_log", TRUE))) {
+    base::message(line)
+  }
+  invisible(line)
+}
+
+alfak_cpp_call <- function(kernel, expr, context = NULL) {
+  tryCatch(
+    force(expr),
+    error = function(e) {
+      detail <- conditionMessage(e)
+      context_text <- if (!is.null(context) && nzchar(context)) paste0(" in ", context) else ""
+      alfak_log_event(
+        level = "ERROR",
+        component = paste0("cpp.", kernel),
+        detail = paste0("C++ kernel failed", context_text, ": ", detail)
+      )
+      stop(
+        sprintf("C++ kernel `%s` failed%s: %s", kernel, context_text, detail),
+        call. = FALSE
+      )
+    }
+  )
+}
 
 #' Validate scalar positive integer input
 #' @keywords internal
@@ -1314,26 +1410,17 @@ resolve_nn_parent_opportunity_weights <- function(pij_values, parent_birth_times
   if (n_parents == 0) {
     return(numeric(0))
   }
-
-  parent_weights <- numeric(n_parents)
-  for (p in seq_len(n_parents)) {
-    parent_active <- as.numeric(timepoints >= parent_birth_times[p])
-    parent_weights[p] <- pij_values[p] * sum(ntot * parent_xfit[p, ] * parent_active)
-  }
-
-  if (all(is.finite(parent_weights)) &&
-      all(parent_weights >= 0) &&
-      sum(parent_weights) > 0) {
-    return(parent_weights)
-  }
-
-  if (all(is.finite(pij_values)) &&
-      all(pij_values >= 0) &&
-      sum(pij_values) > 0) {
-    return(as.numeric(pij_values))
-  }
-
-  rep(1, n_parents)
+  alfak_cpp_call(
+    "alfak_parent_opportunity_weights_cpp",
+    alfak_parent_opportunity_weights_cpp(
+      pij_values = as.numeric(pij_values),
+      parent_birth_times = as.numeric(parent_birth_times),
+      timepoints = as.numeric(timepoints),
+      parent_xfit = parent_xfit,
+      ntot = as.numeric(ntot)
+    ),
+    context = "resolve_nn_parent_opportunity_weights"
+  )
 }
 
 #' Exposure-weighted parent fitness for weighted nearest-neighbour priors
@@ -1348,14 +1435,15 @@ weighted_parent_fitness_exposure <- function(parent_fitness, parent_opportunity_
   if (length(parent_opportunity_weights) != n_parents) {
     stop("Internal error: malformed parent inputs for exposure-weighted nearest-neighbour prior centering.")
   }
-
-  if (all(is.finite(parent_opportunity_weights)) &&
-      all(parent_opportunity_weights >= 0) &&
-      sum(parent_opportunity_weights) > 0) {
-    return(stats::weighted.mean(parent_fitness, w = parent_opportunity_weights))
-  }
-
-  fallback_mean
+  alfak_cpp_call(
+    "alfak_weighted_parent_mean_cpp",
+    alfak_weighted_parent_mean_cpp(
+      parent_fitness = as.numeric(parent_fitness),
+      weights = as.numeric(parent_opportunity_weights),
+      fallback_mean = as.numeric(fallback_mean)
+    ),
+    context = "weighted_parent_fitness_exposure"
+  )
 }
 
 #' Compute a child-level birth fallback burden from parent opportunity weights
@@ -1684,15 +1772,41 @@ build_nn_prior_child_surfaces <- function(nn_info_items, fpar, build_opt_fc, sea
   map_fc <- rep(NA_real_, length(nn_info_items))
   informative_children <- rep(FALSE, length(nn_info_items))
   for (i in seq_along(nn_info_items)) {
-    objective_fn <- build_opt_fc(nn_info_items[[i]], do_prior_param = FALSE)
-    objective_vals <- vapply(fc_grid, function(fc_val) {
-      val <- try(objective_fn(fc_val), silent = TRUE)
-      if (inherits(val, "try-error")) {
-        return(NA_real_)
-      }
-      val
-    }, numeric(1))
-    loglik_vals <- -objective_vals
+    item_i <- nn_info_items[[i]]
+    item_timepoints <- if (!is.null(item_i$timepoints)) item_i$timepoints else numeric(0)
+    can_use_cpp_surface <- all(c("parent_fitness", "pij", "parent_birth_times", "parent_xfit", "child_obs", "ntot") %in% names(item_i)) &&
+      length(item_timepoints) > 0 &&
+      is.matrix(item_i$parent_xfit)
+    loglik_vals <- if (isTRUE(can_use_cpp_surface)) {
+      alfak_cpp_call(
+        "alfak_neighbor_loglik_grid_cpp",
+        alfak_neighbor_loglik_grid_cpp(
+          fc_grid = fc_grid,
+          parent_fitness = item_i$parent_fitness,
+          pij_values = item_i$pij,
+          parent_birth_times = item_i$parent_birth_times,
+          timepoints = item_timepoints,
+          parent_xfit = item_i$parent_xfit,
+          child_obs = item_i$child_obs,
+          ntot = item_i$ntot,
+          tol = ALFAK_FEXP_DELTA_TOL
+        ),
+        context = sprintf("build_nn_prior_child_surfaces child=%s", child_names[i])
+      )
+    } else {
+      NULL
+    }
+    if (is.null(loglik_vals)) {
+      objective_fn <- build_opt_fc(item_i, do_prior_param = FALSE)
+      objective_vals <- vapply(fc_grid, function(fc_val) {
+        val <- try(objective_fn(fc_val), silent = TRUE)
+        if (inherits(val, "try-error")) {
+          return(NA_real_)
+        }
+        val
+      }, numeric(1))
+      loglik_vals <- -objective_vals
+    }
     finite_mask <- is.finite(loglik_vals)
     if (!any(finite_mask)) {
       next
@@ -1803,22 +1917,19 @@ fit_nn_prior_single_gaussian <- function(surface_obj,
     if (!is.finite(mu) || !is.finite(sigma) || sigma <= 0) {
       return(1e9)
     }
-    total <- 0
-    for (i in seq_len(nrow(surface_obj$loglik_mat))) {
-      log_prior <- stats::dnorm(surface_obj$fc_grid - surface_obj$parent_means[i],
-                                mean = mu, sd = sigma, log = TRUE)
-      vals <- surface_obj$loglik_mat[i, ] + log_prior + surface_obj$log_weights
-      max_val <- max(vals)
-      if (!is.finite(max_val)) {
-        return(1e9)
-      }
-      log_marginal <- max_val + log(sum(exp(vals - max_val)))
-      total <- total - surface_obj$child_weights[i] * log_marginal
-    }
-    if (!is.finite(total)) {
-      return(1e9)
-    }
-    total
+    alfak_cpp_call(
+      "alfak_nn_prior_marginal_negloglik_cpp",
+      alfak_nn_prior_marginal_negloglik_cpp(
+        loglik_mat = surface_obj$loglik_mat,
+        fc_grid = surface_obj$fc_grid,
+        log_weights = surface_obj$log_weights,
+        parent_means = surface_obj$parent_means,
+        child_weights = surface_obj$child_weights,
+        mu = mu,
+        sigma = sigma
+      ),
+      context = context
+    )
   }
 
   if (is.null(nn_prior_sd)) {
@@ -1922,13 +2033,19 @@ project_nn_child_trajectory <- function(fc_param, parent_fitness, pij_values, pa
       !is.matrix(parent_xfit) || nrow(parent_xfit) != n_parents || ncol(parent_xfit) != n_time) {
     stop("Internal error: malformed inputs for projected nearest-neighbour child trajectory.")
   }
-
-  projected <- numeric(n_time)
-  for (p in seq_len(n_parents)) {
-    tt <- pmax(0, timepoints - parent_birth_times[p])
-    projected <- projected + fExp_stable(fc_param, parent_fitness[p], pij_values[p], tt, tol = tol) * parent_xfit[p, ]
-  }
-  pmax(0, pmin(1, projected))
+  alfak_cpp_call(
+    "alfak_nn_project_trajectory_cpp",
+    alfak_nn_project_trajectory_cpp(
+      fc_param = fc_param,
+      parent_fitness = as.numeric(parent_fitness),
+      pij_values = as.numeric(pij_values),
+      parent_birth_times = as.numeric(parent_birth_times),
+      timepoints = as.numeric(timepoints),
+      parent_xfit = parent_xfit,
+      tol = tol
+    ),
+    context = "project_nn_child_trajectory"
+  )
 }
 
 #' Project nearest-neighbour child exposure from the neutral child trajectory
@@ -1940,16 +2057,20 @@ project_nn_child_exposure <- function(fc_param, parent_fitness, pij_values, pare
   if (length(ntot) != length(timepoints) || any(!is.finite(ntot)) || any(ntot < 0)) {
     stop("Internal error: malformed ntot input for projected nearest-neighbour child exposure.")
   }
-  xhat_child <- project_nn_child_trajectory(
-    fc_param = fc_param,
-    parent_fitness = parent_fitness,
-    pij_values = pij_values,
-    parent_birth_times = parent_birth_times,
-    timepoints = timepoints,
-    parent_xfit = parent_xfit,
-    tol = tol
+  alfak_cpp_call(
+    "alfak_nn_project_exposure_cpp",
+    alfak_nn_project_exposure_cpp(
+      fc_param = fc_param,
+      parent_fitness = as.numeric(parent_fitness),
+      pij_values = as.numeric(pij_values),
+      parent_birth_times = as.numeric(parent_birth_times),
+      timepoints = as.numeric(timepoints),
+      parent_xfit = parent_xfit,
+      ntot = as.numeric(ntot),
+      tol = tol
+    ),
+    context = "project_nn_child_exposure"
   )
-  sum(ntot * xhat_child)
 }
 
 #' Resolve a safe projected-exposure reference scale
@@ -2007,6 +2128,7 @@ prepare_nn_child_context <- function(nni_item, boot_data, fpar, birth_times_est,
       parent_xfit = matrix(numeric(0), nrow = 0, ncol = length(timepoints)),
       child_obs = child_obs,
       ntot = as.numeric(ntot),
+      timepoints = as.numeric(timepoints),
       parent_fitness_mean_pij = NA_real_,
       parent_fitness_mean_exposure = NA_real_,
       projected_exposure = NA_real_
@@ -2062,6 +2184,7 @@ prepare_nn_child_context <- function(nni_item, boot_data, fpar, birth_times_est,
     parent_xfit = parent_xfit,
     child_obs = child_obs,
     ntot = as.numeric(ntot),
+    timepoints = as.numeric(timepoints),
     parent_fitness_mean_pij = parent_fitness_mean_pij,
     parent_fitness_mean_exposure = parent_fitness_mean_exposure,
     projected_exposure = projected_exposure
@@ -2086,7 +2209,9 @@ make_nn_child_objective_builder <- function(timepoints, ntot_rounded) {
     )
 
     function(fc_param) {
-      alfak_neighbor_objective_cpp(
+      alfak_cpp_call(
+        "alfak_neighbor_objective_cpp",
+        alfak_neighbor_objective_cpp(
         fc_param = fc_param,
         parent_fitness = nni_param$parent_fitness,
         pij_values = nni_param$pij,
@@ -2100,6 +2225,8 @@ make_nn_child_objective_builder <- function(timepoints, ntot_rounded) {
         prior_sd = prior_sd_param,
         do_prior = do_prior_param,
         tol = ALFAK_FEXP_DELTA_TOL
+        ),
+        context = "make_nn_child_objective_builder"
       )
     }
   }
@@ -2153,7 +2280,11 @@ prepare_bootstrap_nn_dataset_state <- function(count_data, current_fq, current_t
   dx_dt <- compute_dx_dt(x, current_timepoints)
   x_trim <- x[, -1, drop = FALSE]
 
-  qr_terms <- alfak_qr_accum_cpp(x_trim, dx_dt)
+  qr_terms <- alfak_cpp_call(
+    "alfak_qr_accum_cpp",
+    alfak_qr_accum_cpp(x_trim, dx_dt),
+    context = context
+  )
   Q_accum <- qr_terms$Q_accum
   r_accum <- qr_terms$r_accum
   num_species <- length(current_fq)
@@ -2975,20 +3106,28 @@ compute_two_shell_path_responsibilities <- function(candidate_paths) {
   if (!is.data.frame(candidate_paths) || !nrow(candidate_paths)) {
     return(candidate_paths)
   }
-  candidate_paths$path_supply <- candidate_paths$parent_anchor_exposure *
-    candidate_paths$transition_probability
-  candidate_paths$path_supply[!is.finite(candidate_paths$path_supply) | candidate_paths$path_supply < 0] <- 0
-  candidate_paths$path_responsibility <- 0
-  for (desc_id in unique(candidate_paths$descendant)) {
-    idx <- which(candidate_paths$descendant == desc_id)
-    supply <- candidate_paths$path_supply[idx]
-    if (sum(supply) > 0) {
-      candidate_paths$path_responsibility[idx] <- supply / sum(supply)
-    } else if (length(idx)) {
-      candidate_paths$path_responsibility[idx] <- rep(1 / length(idx), length(idx))
-    }
+  cpp_resp <- alfak_cpp_call(
+    "alfak_two_shell_path_responsibilities_cpp",
+    alfak_two_shell_path_responsibilities_cpp(
+      descendant = as.character(candidate_paths$descendant),
+      parent_anchor_exposure = as.numeric(candidate_paths$parent_anchor_exposure),
+      transition_probability = as.numeric(candidate_paths$transition_probability)
+    ),
+    context = "compute_two_shell_path_responsibilities"
+  )
+  if (is.list(cpp_resp) &&
+      length(cpp_resp$path_supply) == nrow(candidate_paths) &&
+      length(cpp_resp$path_responsibility) == nrow(candidate_paths)) {
+    candidate_paths$path_supply <- as.numeric(cpp_resp$path_supply)
+    candidate_paths$path_responsibility <- as.numeric(cpp_resp$path_responsibility)
+    return(candidate_paths)
   }
-  candidate_paths
+  alfak_log_event(
+    level = "ERROR",
+    component = "cpp.alfak_two_shell_path_responsibilities_cpp",
+    detail = "C++ kernel returned malformed output in compute_two_shell_path_responsibilities."
+  )
+  stop("C++ kernel `alfak_two_shell_path_responsibilities_cpp` returned malformed output.", call. = FALSE)
 }
 
 #' Estimate provisional two-step descendant fitness and uncertainty
@@ -3048,7 +3187,9 @@ estimate_provisional_two_step_fitness <- function(candidate_paths, anchor_states
       fallback_mean = stats::weighted.mean(parent_fitness, w = normalize_nn_weights(pij_values))
     )
     objective_fn <- function(fc_param) {
-      alfak_neighbor_objective_cpp(
+      alfak_cpp_call(
+        "alfak_neighbor_objective_cpp",
+        alfak_neighbor_objective_cpp(
         fc_param = fc_param,
         parent_fitness = parent_fitness,
         pij_values = pij_values,
@@ -3062,6 +3203,8 @@ estimate_provisional_two_step_fitness <- function(candidate_paths, anchor_states
         prior_sd = NaN,
         do_prior = FALSE,
         tol = ALFAK_FEXP_DELTA_TOL
+        ),
+        context = sprintf("estimate provisional two-step fitness for descendant %s", desc_id)
       )
     }
     res <- run_optimise_checked(
@@ -3137,9 +3280,8 @@ compute_two_shell_outward_weights <- function(candidate_paths, f2_fit, nn_child_
   paths$support_weight <- support_weight
   paths$uncertainty_weight <- pmin(1, uncertainty_weight)
   paths$outward_weight_raw <- paths$path_responsibility * paths$support_weight * paths$uncertainty_weight
-  paths$outward_weight <- paths$outward_weight_raw
-  for (child_name in unique(paths$one_step)) {
-    idx <- which(paths$one_step == child_name)
+  child_names <- unique(paths$one_step)
+  cap_by_child <- vapply(child_names, function(child_name) {
     item <- nn_child_contexts[[child_name]]
     inward_sum <- if (!is.null(item)) {
       sum(normalize_nn_weights(item$parent_opportunity_weights, fallback_n = length(item$parent_fitness)))
@@ -3149,13 +3291,18 @@ compute_two_shell_outward_weights <- function(candidate_paths, f2_fit, nn_child_
     if (!is.finite(inward_sum) || inward_sum <= 0) {
       inward_sum <- 1
     }
-    cap <- nn_two_shell_max_weight_ratio * inward_sum
-    raw_sum <- sum(paths$outward_weight_raw[idx], na.rm = TRUE)
-    if (is.finite(cap) && cap >= 0 && is.finite(raw_sum) && raw_sum > cap &&
-        raw_sum > sqrt(.Machine$double.eps)) {
-      paths$outward_weight[idx] <- paths$outward_weight_raw[idx] * (cap / raw_sum)
-    }
-  }
+    nn_two_shell_max_weight_ratio * inward_sum
+  }, numeric(1))
+  cap_by_row <- cap_by_child[match(paths$one_step, child_names)]
+  paths$outward_weight <- alfak_cpp_call(
+    "alfak_group_cap_weights_cpp",
+    alfak_group_cap_weights_cpp(
+      group = as.character(paths$one_step),
+      raw_weights = as.numeric(paths$outward_weight_raw),
+      cap_by_row = as.numeric(cap_by_row)
+    ),
+    context = "compute_two_shell_outward_weights"
+  )
   paths[is.finite(paths$outward_weight) & paths$outward_weight > 0, , drop = FALSE]
 }
 
@@ -3187,7 +3334,9 @@ apply_two_shell_backward_correction <- function(nn_child_contexts, f1_initial, o
     } else {
       sigma12_eff <- sqrt(sigma12^2 + child_paths$f2_var + tau_reuse^2)
       objective_fn <- function(fc_param) {
-        alfak_neighbor_two_shell_objective_cpp(
+        alfak_cpp_call(
+          "alfak_neighbor_two_shell_objective_cpp",
+          alfak_neighbor_two_shell_objective_cpp(
           fc_param = fc_param,
           parent_fitness = item$parent_fitness,
           pij_values = item$pij,
@@ -3206,6 +3355,8 @@ apply_two_shell_backward_correction <- function(nn_child_contexts, f1_initial, o
           outward_prior_weights = child_paths$outward_weight,
           outward_lambda = nn_two_shell_lambda,
           tol = ALFAK_FEXP_DELTA_TOL
+          ),
+          context = sprintf("refit empirical_two_shell child %s", child_name)
         )
       }
       local_interval <- range(c(search_interval, f1_initial[child_name], child_paths$f2_hat), na.rm = TRUE)
@@ -3482,8 +3633,20 @@ run_empirical_two_shell_correction <- function(nn_child_contexts, nn_present, f1
 #' @noRd
 gen_all_neighbours <- function(ids, as.strings = TRUE, remove_nullisomes = TRUE) {
   if (as.strings) {
-    parsed_ids <- parse_karyotype_ids(as.character(ids))
-    ids <- lapply(seq_len(nrow(parsed_ids)), function(i) as.numeric(parsed_ids[i, ]))
+    cpp_neighbors <- alfak_cpp_call(
+      "gen_all_neighbours_cpp",
+      gen_all_neighbours_cpp(as.character(ids), remove_nullisomes = isTRUE(remove_nullisomes)),
+      context = "gen_all_neighbours"
+    )
+    if (is.matrix(cpp_neighbors)) {
+      return(cpp_neighbors)
+    }
+    alfak_log_event(
+      level = "ERROR",
+      component = "cpp.gen_all_neighbours_cpp",
+      detail = "C++ kernel returned malformed output in gen_all_neighbours."
+    )
+    stop("C++ kernel `gen_all_neighbours_cpp` returned malformed output.", call. = FALSE)
   }
   nkern <- do.call(rbind, lapply(1:length(ids[[1]]), function(i) {
     x0 <- rep(0, length(ids[[1]]))
@@ -3676,37 +3839,31 @@ logSumExp <- function(v) {
 #' @noRd
 gen_nn_info <- function(fq, pm = 0.00005) {
   validate_probability(pm, "pm", upper_inclusive = TRUE)
-  # fq is a character vector of karyotype strings
-  nn_matrix <- gen_all_neighbours(fq) # Expects list of strings or char vector
-  if(nrow(nn_matrix) == 0) return(list())
-
-  nn_str <- as.character(apply(nn_matrix, 1, paste, collapse = "."))
-
-  n_info <- lapply(nn_str, function(ni_string) { # Renamed ni to ni_string
-    # gen_all_neighbours for a single string (as input `ids`)
-    nj_matrix_inner <- gen_all_neighbours(ni_string) # Pass single string directly
-    nj_strings_inner <- character(0)
-    if(nrow(nj_matrix_inner) > 0) {
-      nj_strings_inner <- as.character(apply(nj_matrix_inner, 1, paste, collapse = "."))
-    }
-    nj_filtered <- nj_strings_inner[nj_strings_inner %in% fq] # Renamed nj
-
-    nivec <- as.numeric(parse_karyotype_ids(ni_string)[1, ])
-    pij_vals <- sapply(nj_filtered, function(si_string) { # Renamed si to si_string
-      si_vec <- as.numeric(parse_karyotype_ids(si_string)[1, ])
-      prod(sapply(1:length(si_vec), function(k) pij(si_vec[k], nivec[k], pm)))
-    })
-    list(ni = ni_string, nj = nj_filtered, pij = pij_vals)
-  })
-  # Names are set in solve_fitness_bootstrap as per original: names(nn) <- sapply(nn,...)
-  n_info
+  cpp_info <- alfak_cpp_call(
+    "gen_nn_info_cpp",
+    gen_nn_info_cpp(as.character(fq), beta = pm),
+    context = "gen_nn_info"
+  )
+  if (is.list(cpp_info)) {
+    return(cpp_info)
+  }
+  alfak_log_event(
+    level = "ERROR",
+    component = "cpp.gen_nn_info_cpp",
+    detail = "C++ kernel returned malformed output in gen_nn_info."
+  )
+  stop("C++ kernel `gen_nn_info_cpp` returned malformed output.", call. = FALSE)
 }
 
 #' Negative log-likelihood calculation
 #' @keywords internal
 #' @noRd
 neg_log_lik <- function(param, counts, timepoints) {
-  alfak_neg_log_lik_cpp(param, counts, timepoints)
+  alfak_cpp_call(
+    "alfak_neg_log_lik_cpp",
+    alfak_neg_log_lik_cpp(param, counts, timepoints),
+    context = "neg_log_lik"
+  )
 }
 
 #' Jointly optimize fitness and initial frequencies
@@ -3736,7 +3893,11 @@ joint_optimize <- function(counts, timepoints, f_init, x0_init) {
 #' @keywords internal
 #' @noRd
 project_forward_log <- function(x0, f, timepoints) {
-  alfak_project_forward_log_cpp(x0, f, timepoints)
+  alfak_cpp_call(
+    "alfak_project_forward_log_cpp",
+    alfak_project_forward_log_cpp(x0, f, timepoints),
+    context = "project_forward_log"
+  )
 }
 
 #' Optimize initial frequencies given observed data and fitness values

@@ -552,6 +552,98 @@ test_that("C++ numerical kernels match the previous R reference calculations", {
   expect_equal(qr_cpp$r_accum, qr_ref$r_accum, tolerance = 1e-12)
 })
 
+test_that("C++ NN prior helper kernels match R reference paths", {
+  timepoints <- c(0, 1.5, 4)
+  parent_fitness <- c(0.15, 0.05)
+  pij_values <- c(0.2, 0.1)
+  parent_birth_times <- c(-1, 0.5)
+  parent_xfit <- matrix(c(0.4, 0.35, 0.3,
+                          0.2, 0.25, 0.3), nrow = 2, byrow = TRUE)
+  child_obs <- c(0, 2, 3)
+  ntot <- c(10, 12, 14)
+  fc_grid <- seq(-0.2, 0.3, length.out = 7)
+
+  traj_ref <- numeric(length(timepoints))
+  for (p in seq_along(parent_fitness)) {
+    tt <- pmax(0, timepoints - parent_birth_times[p])
+    traj_ref <- traj_ref +
+      alfakR:::fExp_stable(0.11, parent_fitness[p], pij_values[p], tt, tol = alfakR:::ALFAK_FEXP_DELTA_TOL) *
+      parent_xfit[p, ]
+  }
+  traj_ref <- pmax(0, pmin(1, traj_ref))
+  traj_cpp <- alfakR:::alfak_nn_project_trajectory_cpp(
+    0.11, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit,
+    alfakR:::ALFAK_FEXP_DELTA_TOL
+  )
+  expect_equal(traj_cpp, traj_ref, tolerance = 1e-12)
+  expect_equal(
+    alfakR:::alfak_nn_project_exposure_cpp(
+      0.11, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, ntot,
+      alfakR:::ALFAK_FEXP_DELTA_TOL
+    ),
+    sum(ntot * traj_ref),
+    tolerance = 1e-12
+  )
+  expect_equal(
+    alfakR:::alfak_parent_opportunity_weights_cpp(pij_values, parent_birth_times, timepoints, parent_xfit, ntot),
+    c(
+      pij_values[1] * sum(ntot * parent_xfit[1, ] * as.numeric(timepoints >= parent_birth_times[1])),
+      pij_values[2] * sum(ntot * parent_xfit[2, ] * as.numeric(timepoints >= parent_birth_times[2]))
+    ),
+    tolerance = 1e-12
+  )
+
+  loglik_cpp <- alfakR:::alfak_neighbor_loglik_grid_cpp(
+    fc_grid, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit,
+    child_obs, ntot, alfakR:::ALFAK_FEXP_DELTA_TOL
+  )
+  loglik_ref <- -vapply(fc_grid, function(fc) {
+    alfakR:::alfak_neighbor_objective_cpp(
+      fc, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit,
+      child_obs, ntot, parent_fitness_mean = 0.1, prior_mean = NaN, prior_sd = NaN,
+      do_prior = FALSE, tol = alfakR:::ALFAK_FEXP_DELTA_TOL
+    )
+  }, numeric(1))
+  expect_equal(loglik_cpp, loglik_ref, tolerance = 1e-12)
+
+  loglik_mat <- rbind(loglik_cpp - max(loglik_cpp), loglik_cpp - max(loglik_cpp) - 0.1)
+  log_weights <- rep(log(fc_grid[2] - fc_grid[1]), length(fc_grid))
+  parent_means <- c(0.1, 0.2)
+  child_weights <- c(1, 0.5)
+  marginal_ref <- local({
+    total <- 0
+    for (i in seq_len(nrow(loglik_mat))) {
+      vals <- loglik_mat[i, ] + stats::dnorm(fc_grid - parent_means[i], 0, 0.4, log = TRUE) + log_weights
+      total <- total - child_weights[i] * (max(vals) + log(sum(exp(vals - max(vals)))))
+    }
+    total
+  })
+  expect_equal(
+    alfakR:::alfak_nn_prior_marginal_negloglik_cpp(
+      loglik_mat, fc_grid, log_weights, parent_means, child_weights, mu = 0, sigma = 0.4
+    ),
+    marginal_ref,
+    tolerance = 1e-12
+  )
+})
+
+test_that("C++ karyotype neighbour generation matches R-visible semantics", {
+  neigh <- alfakR:::gen_all_neighbours(c("2.2.2", "2.2.3"))
+  neigh_str <- apply(neigh, 1, paste, collapse = ".")
+  expect_false("2.2.2" %in% neigh_str)
+  expect_false("2.2.3" %in% neigh_str)
+  expect_true("1.2.2" %in% neigh_str)
+  expect_true("2.2.4" %in% neigh_str)
+
+  nn <- alfakR:::gen_nn_info(c("2.2.2", "2.2.4"), pm = 0.00005)
+  child_ids <- vapply(nn, `[[`, character(1), "ni")
+  expect_true("2.2.3" %in% child_ids)
+  mid <- nn[[match("2.2.3", child_ids)]]
+  expect_setequal(mid$nj, c("2.2.2", "2.2.4"))
+  expect_true(all(is.finite(mid$pij)))
+  expect_true(all(mid$pij > 0))
+})
+
 test_that("C++ numerical kernels validate dimensions and non-finite inputs", {
   expect_error(
     alfakR:::alfak_project_forward_log_cpp(c(0.5, 0.5), c(0.1), c(0, 1)),
@@ -1644,6 +1736,31 @@ test_that("weighted projected child exposure uses the projected neutral child tr
   )
 
   expect_equal(exposure, 4, tolerance = 1e-12)
+})
+
+test_that("NN C++ projection failures are logged and stop", {
+  log_path <- tempfile("alfak_run_log_")
+  old <- options(alfakR.run_log_path = log_path, alfakR.echo_run_log = FALSE)
+  on.exit(options(old), add = TRUE)
+
+  expect_error(
+    testthat::with_mocked_bindings(
+      alfakR:::project_nn_child_trajectory(
+        fc_param = 0.5,
+        parent_fitness = 0.5,
+        pij_values = 0.2,
+        parent_birth_times = 0,
+        timepoints = c(0, 2),
+        parent_xfit = matrix(c(0.8, 0.4), nrow = 1)
+      ),
+      alfak_nn_project_trajectory_cpp = function(...) stop("forced trajectory failure"),
+      .package = "alfakR"
+    ),
+    "alfak_nn_project_trajectory_cpp.*forced trajectory failure"
+  )
+  lines <- alfakR::alfak_read_run_log(path = log_path)
+  expect_true(any(grepl("cpp.alfak_nn_project_trajectory_cpp", lines)))
+  expect_true(any(grepl("forced trajectory failure", lines)))
 })
 
 test_that("weighted parent centering uses exposure opportunity weights and falls back cleanly", {

@@ -2,6 +2,9 @@
 #include <Rcpp.h>
 #include <algorithm>
 #include <cmath>
+#include <map>
+#include <set>
+#include <sstream>
 #include <vector>
 
 using namespace Rcpp;
@@ -174,6 +177,33 @@ struct KernelRow {
   double final_weight;
 };
 
+double median_positive(std::vector<double>& values, double fallback) {
+  values.erase(
+    std::remove_if(values.begin(), values.end(), [](double x) {
+      return !finite_num(x) || x <= 0.0;
+    }),
+    values.end()
+  );
+  const int n = values.size();
+  if (n == 0) return fallback;
+  std::sort(values.begin(), values.end());
+  if (n % 2 == 1) {
+    return values[n / 2];
+  }
+  return 0.5 * (values[n / 2 - 1] + values[n / 2]);
+}
+
+std::string collapse_unique_strings(const std::set<std::string>& values) {
+  std::ostringstream ss;
+  bool first = true;
+  for (const auto& value : values) {
+    if (!first) ss << ";";
+    ss << value;
+    first = false;
+  }
+  return ss.str();
+}
+
 } // namespace
 
 // [[Rcpp::export]]
@@ -334,5 +364,147 @@ Rcpp::DataFrame context_kernel_weights_cpp(
     Named("kernel_weight") = kernel_weight,
     Named("quality_weight") = quality_weight_out,
     Named("final_weight") = final_weight
+  );
+}
+
+// [[Rcpp::export]]
+Rcpp::NumericVector context_bandwidths_cpp(
+    Rcpp::NumericMatrix evidence_profile_matrix,
+    Rcpp::NumericVector evidence_total_cn,
+    Rcpp::NumericVector evidence_burden,
+    Rcpp::NumericVector evidence_local_copy,
+    Rcpp::NumericVector evidence_local_z,
+    Rcpp::IntegerVector evidence_transition_chr,
+    Rcpp::IntegerVector evidence_direction_code,
+    Rcpp::NumericVector evidence_transition_size,
+    Rcpp::NumericVector evidence_delta_total_cn,
+    Rcpp::NumericVector evidence_delta_burden,
+    Rcpp::NumericVector chromosome_weights,
+    int profile_distance_code) {
+  const int n = evidence_profile_matrix.nrow();
+  if (evidence_total_cn.size() != n || evidence_burden.size() != n ||
+      evidence_local_copy.size() != n || evidence_local_z.size() != n ||
+      evidence_transition_chr.size() != n || evidence_direction_code.size() != n ||
+      evidence_transition_size.size() != n || evidence_delta_total_cn.size() != n ||
+      evidence_delta_burden.size() != n) {
+    Rcpp::stop("Evidence vectors must be aligned with evidence_profile_matrix rows.");
+  }
+  std::vector<double> profile_vals;
+  std::vector<double> area_vals;
+  std::vector<double> burden_vals;
+  std::vector<double> local_vals;
+  std::vector<double> event_vals;
+  if (n > 1) {
+    std::size_t cap = static_cast<std::size_t>(n) * static_cast<std::size_t>(n - 1) / 2;
+    profile_vals.reserve(cap);
+    area_vals.reserve(cap);
+    burden_vals.reserve(cap);
+    local_vals.reserve(cap);
+    event_vals.reserve(cap);
+  }
+  for (int i = 0; i < n - 1; ++i) {
+    Rcpp::NumericVector target_profile = evidence_profile_matrix(i, Rcpp::_);
+    for (int j = i + 1; j < n; ++j) {
+      profile_vals.push_back(profile_distance_cpp(target_profile, evidence_profile_matrix, j, chromosome_weights, profile_distance_code));
+      area_vals.push_back(std::abs(evidence_total_cn[i] - evidence_total_cn[j]));
+      burden_vals.push_back(std::abs(evidence_burden[i] - evidence_burden[j]));
+      double dlc = evidence_local_copy[i] - evidence_local_copy[j];
+      double dlz = evidence_local_z[i] - evidence_local_z[j];
+      if (!finite_num(dlc)) dlc = 0.0;
+      if (!finite_num(dlz)) dlz = 0.0;
+      local_vals.push_back(std::sqrt(dlc * dlc + dlz * dlz));
+      event_vals.push_back(event_distance_cpp(
+        evidence_transition_chr[i],
+        evidence_transition_chr[j],
+        evidence_direction_code[i],
+        evidence_direction_code[j],
+        evidence_transition_size[i],
+        evidence_transition_size[j],
+        evidence_local_copy[i],
+        evidence_local_copy[j],
+        evidence_local_z[i],
+        evidence_local_z[j],
+        evidence_delta_total_cn[i],
+        evidence_delta_total_cn[j],
+        evidence_delta_burden[i],
+        evidence_delta_burden[j],
+        3
+      ));
+    }
+  }
+  Rcpp::NumericVector out = Rcpp::NumericVector::create(
+    Rcpp::Named("profile") = median_positive(profile_vals, 0.25),
+    Rcpp::Named("area") = median_positive(area_vals, 2.0),
+    Rcpp::Named("burden") = median_positive(burden_vals, 2.0),
+    Rcpp::Named("local") = median_positive(local_vals, 1.0),
+    Rcpp::Named("event") = median_positive(event_vals, 1.0)
+  );
+  return out;
+}
+
+// [[Rcpp::export]]
+Rcpp::DataFrame context_patient_level_neighbors_cpp(Rcpp::IntegerVector evidence_index,
+                                                    Rcpp::CharacterVector patient_id,
+                                                    Rcpp::CharacterVector child_karyotype,
+                                                    Rcpp::NumericVector delta_hat,
+                                                    Rcpp::NumericVector delta_se,
+                                                    Rcpp::NumericVector final_weight,
+                                                    double sd_floor) {
+  const int n = evidence_index.size();
+  if (patient_id.size() != n || child_karyotype.size() != n || delta_hat.size() != n ||
+      delta_se.size() != n || final_weight.size() != n) {
+    Rcpp::stop("Context patient-neighbor aggregation inputs must be aligned.");
+  }
+  if (!finite_num(sd_floor) || sd_floor <= 0.0) {
+    Rcpp::stop("`sd_floor` must be a positive finite value.");
+  }
+  struct Accum {
+    double patient_weight = 0.0;
+    double inv_sum = 0.0;
+    double inv_delta_sum = 0.0;
+    int n = 0;
+    std::set<std::string> children;
+  };
+  std::map<std::string, Accum> groups;
+  for (int i = 0; i < n; ++i) {
+    double ww = final_weight[i];
+    if (!finite_num(ww) || ww < 0.0) ww = 0.0;
+    std::string pid = Rcpp::as<std::string>(patient_id[i]);
+    Accum& acc = groups[pid];
+    acc.patient_weight += ww;
+    acc.n += 1;
+    acc.children.insert(Rcpp::as<std::string>(child_karyotype[i]));
+    double se = delta_se[i];
+    if (!finite_num(se) || se < sd_floor) se = sd_floor;
+    double inv = ww / (se * se + sd_floor * sd_floor);
+    double delta = delta_hat[i];
+    if (finite_num(inv) && inv > 0.0 && finite_num(delta)) {
+      acc.inv_sum += inv;
+      acc.inv_delta_sum += inv * delta;
+    }
+  }
+  const int m = groups.size();
+  Rcpp::CharacterVector out_patient(m);
+  Rcpp::NumericVector out_mean(m), out_se(m), out_weight(m);
+  Rcpp::IntegerVector out_n(m);
+  Rcpp::CharacterVector out_children(m);
+  int row = 0;
+  for (const auto& entry : groups) {
+    const Accum& acc = entry.second;
+    out_patient[row] = entry.first;
+    out_mean[row] = acc.inv_sum > 0.0 ? acc.inv_delta_sum / acc.inv_sum : R_NaReal;
+    out_se[row] = acc.inv_sum > 0.0 ? std::sqrt(1.0 / acc.inv_sum) : R_NaReal;
+    out_weight[row] = acc.patient_weight;
+    out_n[row] = acc.n;
+    out_children[row] = collapse_unique_strings(acc.children);
+    ++row;
+  }
+  return Rcpp::DataFrame::create(
+    Rcpp::Named("patient_id") = out_patient,
+    Rcpp::Named("delta_patient_mean") = out_mean,
+    Rcpp::Named("delta_patient_se") = out_se,
+    Rcpp::Named("patient_weight") = out_weight,
+    Rcpp::Named("n_context_neighbors") = out_n,
+    Rcpp::Named("child_karyotype") = out_children
   );
 }

@@ -22,6 +22,9 @@ needed to estimate a nonzero shift.}
 
 \item{cohort_transition_patient_shift_shrinkage_sd}{Shrinkage SD for the
 patient-level residual shift.}
+
+\item{...}{Additional filtering controls used when \code{patient_records} are raw
+transition records rather than patient-level summaries.}
 }
 \value{
 A one-row data frame with the shrunk shift and reliability.

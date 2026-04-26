@@ -6,6 +6,7 @@
 "_PACKAGE"
 
 #' @useDynLib alfakR, .registration = TRUE
+#' @importFrom Rcpp evalCpp
 
 # You can also put common @importFrom directives here if they apply package-wide,
 # for example, if many functions use specific Rcpp helper functions:

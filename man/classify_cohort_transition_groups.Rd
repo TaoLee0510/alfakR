@@ -21,6 +21,37 @@ classify_cohort_transition_groups(
 }
 \arguments{
 \item{patient_group_summaries}{Patient-level summaries.}
+
+\item{cohort_transition_sd_floor}{Minimum transition-effect prior standard
+deviation used in group summaries.}
+
+\item{cohort_transition_patient_sd_floor}{Patient heterogeneity SD floor.}
+
+\item{cohort_transition_min_patients_consistent}{Minimum number of patients
+required before a group can be considered consistent.}
+
+\item{cohort_transition_min_effective_patients}{Minimum effective patient
+count required before a group can be considered consistent.}
+
+\item{cohort_transition_min_effective_observed}{Minimum effective observed
+evidence required before a group can be considered consistent.}
+
+\item{cohort_transition_effect_threshold}{Absolute Delta threshold used to
+distinguish near-zero effects from signed effects.}
+
+\item{cohort_transition_sign_consistency_threshold}{Required fraction of
+patient summaries with sign consistent with the group mean.}
+
+\item{cohort_transition_high_heterogeneity_i2}{I2 threshold for high
+heterogeneity.}
+
+\item{cohort_transition_high_between_patient_sd}{Between-patient SD threshold
+for high heterogeneity.}
+
+\item{cohort_transition_context_heterogeneity_drop}{Minimum heterogeneity
+reduction used to mark finer context-dependent groups.}
+
+\item{...}{Class-specific borrowing and SD multiplier controls.}
 }
 \value{
 A data frame of group classes and recommended borrowing controls.

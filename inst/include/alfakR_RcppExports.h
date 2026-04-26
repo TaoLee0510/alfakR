@@ -45,6 +45,48 @@ namespace alfakR {
         return Rcpp::as<double >(rcpp_result_gen);
     }
 
+    inline Rcpp::NumericMatrix gen_all_neighbours_cpp(Rcpp::CharacterVector ids, bool remove_nullisomes = true) {
+        typedef SEXP(*Ptr_gen_all_neighbours_cpp)(SEXP,SEXP);
+        static Ptr_gen_all_neighbours_cpp p_gen_all_neighbours_cpp = NULL;
+        if (p_gen_all_neighbours_cpp == NULL) {
+            validateSignature("Rcpp::NumericMatrix(*gen_all_neighbours_cpp)(Rcpp::CharacterVector,bool)");
+            p_gen_all_neighbours_cpp = (Ptr_gen_all_neighbours_cpp)R_GetCCallable("alfakR", "_alfakR_gen_all_neighbours_cpp");
+        }
+        RObject rcpp_result_gen;
+        {
+            RNGScope RCPP_rngScope_gen;
+            rcpp_result_gen = p_gen_all_neighbours_cpp(Shield<SEXP>(Rcpp::wrap(ids)), Shield<SEXP>(Rcpp::wrap(remove_nullisomes)));
+        }
+        if (rcpp_result_gen.inherits("interrupted-error"))
+            throw Rcpp::internal::InterruptedException();
+        if (Rcpp::internal::isLongjumpSentinel(rcpp_result_gen))
+            throw Rcpp::LongjumpException(rcpp_result_gen);
+        if (rcpp_result_gen.inherits("try-error"))
+            throw Rcpp::exception(Rcpp::as<std::string>(rcpp_result_gen).c_str());
+        return Rcpp::as<Rcpp::NumericMatrix >(rcpp_result_gen);
+    }
+
+    inline Rcpp::List gen_nn_info_cpp(Rcpp::CharacterVector fq, double beta) {
+        typedef SEXP(*Ptr_gen_nn_info_cpp)(SEXP,SEXP);
+        static Ptr_gen_nn_info_cpp p_gen_nn_info_cpp = NULL;
+        if (p_gen_nn_info_cpp == NULL) {
+            validateSignature("Rcpp::List(*gen_nn_info_cpp)(Rcpp::CharacterVector,double)");
+            p_gen_nn_info_cpp = (Ptr_gen_nn_info_cpp)R_GetCCallable("alfakR", "_alfakR_gen_nn_info_cpp");
+        }
+        RObject rcpp_result_gen;
+        {
+            RNGScope RCPP_rngScope_gen;
+            rcpp_result_gen = p_gen_nn_info_cpp(Shield<SEXP>(Rcpp::wrap(fq)), Shield<SEXP>(Rcpp::wrap(beta)));
+        }
+        if (rcpp_result_gen.inherits("interrupted-error"))
+            throw Rcpp::internal::InterruptedException();
+        if (Rcpp::internal::isLongjumpSentinel(rcpp_result_gen))
+            throw Rcpp::LongjumpException(rcpp_result_gen);
+        if (rcpp_result_gen.inherits("try-error"))
+            throw Rcpp::exception(Rcpp::as<std::string>(rcpp_result_gen).c_str());
+        return Rcpp::as<Rcpp::List >(rcpp_result_gen);
+    }
+
     inline List get_A_inputs(CharacterVector k_str, double beta, Nullable<double> Nmax_ = R_NilValue) {
         typedef SEXP(*Ptr_get_A_inputs)(SEXP,SEXP,SEXP);
         static Ptr_get_A_inputs p_get_A_inputs = NULL;

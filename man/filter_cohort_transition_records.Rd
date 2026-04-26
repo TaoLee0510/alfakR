@@ -41,6 +41,8 @@ count for zero-censoring records.}
 
 \item{cohort_transition_zero_as_censoring_only}{Keep zero records as censoring
 evidence only; they are never observed delta labels.}
+
+\item{...}{Reserved for future filtering controls.}
 }
 \value{
 A list with kept records, excluded records, and diagnostics.

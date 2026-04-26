@@ -290,6 +290,13 @@ ensure_two_shell_fits <- function(patients,
   }
   dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
   dir.create(two_shell_root, recursive = TRUE, showWarnings = FALSE)
+  outer_log_path <- file.path(outdir, "alfak_run.log")
+  alfak_run_log_path(outer_log_path)
+  alfak_log_event(
+    level = "INFO",
+    component = "ensure_two_shell_fits",
+    detail = sprintf("start n_patients=%d two_shell_root=%s integrity=%s", length(patient_ids), normalizePath(two_shell_root, mustWork = FALSE), integrity_check)
+  )
 
   patient_ids <- as.character(patient_ids)
   if (length(patients) != length(patient_ids)) {
@@ -321,16 +328,31 @@ ensure_two_shell_fits <- function(patients,
     needs_rerun <- FALSE
     if (isTRUE(reuse_two_shell) && isTRUE(before$ok)) {
       action <- "reused"
+      alfak_log_event(
+        level = "INFO",
+        component = "ensure_two_shell_fits",
+        detail = sprintf("patient=%s action=reused fit_dir=%s", patient_id, fit_dir)
+      )
     } else {
       missing_dir <- identical(before$status, "missing_dir")
       if (missing_dir) {
         if (!isTRUE(rerun_missing_two_shell)) {
+          alfak_log_event(
+            level = "ERROR",
+            component = "ensure_two_shell_fits",
+            detail = sprintf("patient=%s missing fit_dir=%s rerun_missing_two_shell=FALSE", patient_id, fit_dir)
+          )
           stop(sprintf("Two-shell fit for patient `%s` is missing at `%s`.", patient_id, fit_dir), call. = FALSE)
         }
         action <- "rerun_missing"
         needs_rerun <- TRUE
       } else {
         if (!isTRUE(rerun_corrupt_two_shell)) {
+          alfak_log_event(
+            level = "ERROR",
+            component = "ensure_two_shell_fits",
+            detail = sprintf("patient=%s invalid status=%s fit_dir=%s rerun_corrupt_two_shell=FALSE", patient_id, before$status, fit_dir)
+          )
           stop(
             sprintf("Two-shell fit for patient `%s` is not reusable at `%s` (status: %s).",
                     patient_id, fit_dir, before$status),
@@ -339,6 +361,13 @@ ensure_two_shell_fits <- function(patients,
         }
         action <- if (isTRUE(reuse_two_shell)) "rerun_corrupt" else "rerun_reuse_disabled"
         needs_rerun <- TRUE
+      }
+      if (isTRUE(needs_rerun)) {
+        alfak_log_event(
+          level = "INFO",
+          component = "ensure_two_shell_fits",
+          detail = sprintf("patient=%s action=%s status_before=%s fit_dir=%s", patient_id, action, before$status, fit_dir)
+        )
       }
     }
 
@@ -356,6 +385,12 @@ ensure_two_shell_fits <- function(patients,
             if (!file.rename(fit_dir, backup_dir)) {
               stop(sprintf("Could not move corrupt two-shell directory `%s` to `%s`.", fit_dir, backup_dir), call. = FALSE)
             }
+            alfak_run_log_path(outer_log_path)
+            alfak_log_event(
+              level = "INFO",
+              component = "ensure_two_shell_fits",
+              detail = sprintf("patient=%s backed_up_corrupt_dir=%s", patient_id, backup_dir)
+            )
           }
           dir.create(fit_dir, recursive = TRUE, showWarnings = FALSE)
           alfak(
@@ -366,10 +401,22 @@ ensure_two_shell_fits <- function(patients,
             nn_prior = base_nn_prior,
             ...
           )
+          alfak_run_log_path(outer_log_path)
+          alfak_log_event(
+            level = "INFO",
+            component = "ensure_two_shell_fits",
+            detail = sprintf("patient=%s rerun_completed fit_dir=%s", patient_id, fit_dir)
+          )
           check_two_shell_fit_integrity(fit_dir, patient_id = patient_id, mode = integrity_check)
         },
         error = function(e) {
           error_message <<- conditionMessage(e)
+          alfak_run_log_path(outer_log_path)
+          alfak_log_event(
+            level = "ERROR",
+            component = "ensure_two_shell_fits",
+            detail = sprintf("patient=%s rerun_failed status_before=%s error=%s", patient_id, before$status, error_message)
+          )
           list(ok = FALSE, status = "rerun_failed", missing_files = character(0),
                unreadable_files = character(0), warnings = character(0),
                fit_dir = fit_dir, patient_id = patient_id)
@@ -377,6 +424,11 @@ ensure_two_shell_fits <- function(patients,
       )
       after <- rerun_result
       if (!isTRUE(after$ok) && !isTRUE(allow_incomplete_cohort)) {
+        alfak_log_event(
+          level = "ERROR",
+          component = "ensure_two_shell_fits",
+          detail = sprintf("patient=%s integrity_after_failed status_after=%s error=%s", patient_id, after$status, ifelse(is.na(error_message), "", error_message))
+        )
         stop(
           sprintf("Two-shell rerun failed integrity checks for patient `%s` at `%s` (status: %s; error: %s).",
                   patient_id, fit_dir, after$status, ifelse(is.na(error_message), "", error_message)),
@@ -401,6 +453,11 @@ ensure_two_shell_fits <- function(patients,
       error_message = error_message,
       stringsAsFactors = FALSE
     )
+    alfak_log_event(
+      level = "INFO",
+      component = "ensure_two_shell_fits",
+      detail = sprintf("patient=%s action=%s status_before=%s status_after=%s", patient_id, action, before$status, after$status)
+    )
   }
 
   status <- do.call(rbind, rows)
@@ -412,6 +469,11 @@ ensure_two_shell_fits <- function(patients,
     sep = "\t",
     quote = FALSE,
     row.names = FALSE
+  )
+  alfak_log_event(
+    level = "INFO",
+    component = "ensure_two_shell_fits",
+    detail = sprintf("finished status_file=%s", file.path(outdir, "two_shell_fit_status.tsv"))
   )
   status
 }
@@ -717,7 +779,7 @@ cohort_transition_record_weights <- function(records,
     w[zero] <- w[zero] * pmin(1, zero_score[zero])
   }
   patient_id <- as.character(records$patient_id)
-  patient_weight_sum <- ave(w, patient_id, FUN = function(x) sum(x, na.rm = TRUE))
+  patient_weight_sum <- stats::ave(w, patient_id, FUN = function(x) sum(x, na.rm = TRUE))
   can_normalize <- is.finite(patient_weight_sum) & patient_weight_sum > 0
   w[can_normalize] <- w[can_normalize] / patient_weight_sum[can_normalize]
   w[!can_normalize] <- 0
@@ -770,6 +832,7 @@ cohort_transition_empty_filter_diagnostics <- function() {
 #'   count for zero-censoring records.
 #' @param cohort_transition_zero_as_censoring_only Keep zero records as censoring
 #'   evidence only; they are never observed delta labels.
+#' @param ... Reserved for future filtering controls.
 #' @return A list with kept records, excluded records, and diagnostics.
 #' @export
 filter_cohort_transition_records <- function(records,
@@ -920,6 +983,7 @@ cohort_transition_weighted_median <- function(x, w) {
 #' @param grouping Transition grouping mode used for `transition_group`.
 #' @param cohort_transition_sd_floor Floor used in inverse-variance weights.
 #' @param cohort_transition_zero_weight_cap_ratio Cap on zero-censoring weight.
+#' @param ... Reserved for future aggregation controls.
 #' @return A data frame with patient-level group summaries.
 #' @export
 aggregate_cohort_transition_records_by_patient <- function(records,
@@ -1164,6 +1228,11 @@ compute_transition_group_class <- function(k,
 #' @param group_name Group label.
 #' @param group_level Grouping level.
 #' @param group_col Column containing `group_name`.
+#' @param cohort_transition_sd_floor Minimum transition-effect SD used in
+#'   inverse-variance weights.
+#' @param cohort_transition_effect_threshold Absolute Delta threshold used to
+#'   distinguish near-zero effects from signed effects.
+#' @param ... Reserved for future heterogeneity controls.
 #' @return A one-row data frame of heterogeneity metrics.
 #' @export
 compute_transition_group_heterogeneity <- function(patient_group_summaries,
@@ -1265,6 +1334,26 @@ compute_transition_group_heterogeneity <- function(patient_group_summaries,
 #' Classify cohort transition groups for v2 selective borrowing
 #'
 #' @param patient_group_summaries Patient-level summaries.
+#' @param cohort_transition_sd_floor Minimum transition-effect prior standard
+#'   deviation used in group summaries.
+#' @param cohort_transition_patient_sd_floor Patient heterogeneity SD floor.
+#' @param cohort_transition_min_patients_consistent Minimum number of patients
+#'   required before a group can be considered consistent.
+#' @param cohort_transition_min_effective_patients Minimum effective patient
+#'   count required before a group can be considered consistent.
+#' @param cohort_transition_min_effective_observed Minimum effective observed
+#'   evidence required before a group can be considered consistent.
+#' @param cohort_transition_effect_threshold Absolute Delta threshold used to
+#'   distinguish near-zero effects from signed effects.
+#' @param cohort_transition_sign_consistency_threshold Required fraction of
+#'   patient summaries with sign consistent with the group mean.
+#' @param cohort_transition_high_heterogeneity_i2 I2 threshold for high
+#'   heterogeneity.
+#' @param cohort_transition_high_between_patient_sd Between-patient SD threshold
+#'   for high heterogeneity.
+#' @param cohort_transition_context_heterogeneity_drop Minimum heterogeneity
+#'   reduction used to mark finer context-dependent groups.
+#' @param ... Class-specific borrowing and SD multiplier controls.
 #' @return A data frame of group classes and recommended borrowing controls.
 #' @export
 classify_cohort_transition_groups <- function(patient_group_summaries,
@@ -1968,6 +2057,8 @@ cohort_transition_build_prior_tables_v2 <- function(patient_group_summaries,
 #'   needed to estimate a nonzero shift.
 #' @param cohort_transition_patient_shift_shrinkage_sd Shrinkage SD for the
 #'   patient-level residual shift.
+#' @param ... Additional filtering controls used when `patient_records` are raw
+#'   transition records rather than patient-level summaries.
 #' @return A one-row data frame with the shrunk shift and reliability.
 #' @export
 estimate_patient_transition_shift <- function(patient_records,
@@ -3060,7 +3151,8 @@ compute_context_kernel_weights <- function(target_context,
     val <- getv(x, name)
     if (is.list(val)) val[[1]] else val
   }
-  cpp_out <- tryCatch(
+  cpp_out <- alfak_cpp_call(
+    "context_kernel_weights_cpp",
     context_kernel_weights_cpp(
       target_profile = as.numeric(getlist(target_context, "parent_context_profile")),
       target_total_cn = as.numeric(getv(target_context, "parent_total_cn")),
@@ -3091,7 +3183,7 @@ compute_context_kernel_weights <- function(target_context,
       k_nearest = as.integer(k_nearest),
       min_kernel_weight = min_kernel_weight
     ),
-    error = function(e) NULL
+    context = "compute_context_kernel_weights"
   )
   if (is.data.frame(cpp_out)) {
     if (!nrow(cpp_out)) {
@@ -3131,40 +3223,12 @@ compute_context_kernel_weights <- function(target_context,
     rownames(cpp_out) <- NULL
     return(cpp_out)
   }
-  rows <- lapply(seq_len(nrow(evidence_contexts)), function(i) {
-    ev <- evidence_contexts[i, , drop = FALSE]
-    dist <- compute_context_distance(
-      target_context = target_context,
-      evidence_context = ev,
-      bandwidths = bandwidths,
-      weights = weights,
-      profile_distance = profile_distance,
-      event_match = event_match,
-      chromosome_weights = chromosome_weights
-    )
-    kernel_weight <- if (is.finite(dist$context_distance)) exp(-0.5 * dist$context_distance^2) else 0
-    quality_weight <- if ("quality_weight" %in% names(ev)) ev$quality_weight[1] else 1
-    if (!is.finite(quality_weight) || quality_weight < 0) quality_weight <- 0
-    data.frame(
-      evidence_row_id = if ("evidence_id" %in% names(ev)) ev$evidence_id[1] else i,
-      patient_id = if ("patient_id" %in% names(ev)) as.character(ev$patient_id[1]) else NA_character_,
-      context_distance = dist$context_distance,
-      profile_distance = dist$profile_distance,
-      area_distance = dist$area_distance,
-      burden_distance = dist$burden_distance,
-      local_distance = dist$local_distance,
-      event_distance = dist$event_distance,
-      kernel_weight = kernel_weight,
-      quality_weight = quality_weight,
-      final_weight = kernel_weight * quality_weight,
-      stringsAsFactors = FALSE
-    )
-  })
-  out <- do.call(rbind, rows)
-  out <- out[is.finite(out$final_weight) & out$final_weight >= min_kernel_weight, , drop = FALSE]
-  if (!nrow(out)) return(out)
-  out <- out[order(out$final_weight, decreasing = TRUE), , drop = FALSE]
-  utils::head(out, k_nearest)
+  alfak_log_event(
+    level = "ERROR",
+    component = "cpp.context_kernel_weights_cpp",
+    detail = "C++ kernel returned malformed output in compute_context_kernel_weights."
+  )
+  stop("C++ kernel `context_kernel_weights_cpp` returned malformed output.", call. = FALSE)
 }
 
 cohort_context_enrich_record <- function(record,
@@ -3308,22 +3372,51 @@ estimate_context_bandwidths <- function(evidence_bank,
     val <- as.numeric(stats::quantile(x, probs = 0.5, names = FALSE, type = 8))
     if (!is.finite(val) || val <= 0) fallback else val
   }
-  profile_vals <- cohort_context_pairwise_values(evidence_bank, function(a, b) {
-    karyotype_profile_distance(a$parent_context_profile[[1]], b$parent_context_profile[[1]], method = profile_distance, chromosome_weights = chromosome_weights)
-  })
-  area_vals <- cohort_context_pairwise_values(evidence_bank, function(a, b) abs(a$parent_total_cn[1] - b$parent_total_cn[1]))
-  burden_vals <- cohort_context_pairwise_values(evidence_bank, function(a, b) abs(a$parent_burden[1] - b$parent_burden[1]))
-  local_vals <- cohort_context_pairwise_values(evidence_bank, function(a, b) {
-    sqrt(sum(c(a$changed_chr_parent_copy[1] - b$changed_chr_parent_copy[1],
-               a$changed_chr_parent_zscore[1] - b$changed_chr_parent_zscore[1])^2, na.rm = TRUE))
-  })
-  event_vals <- cohort_context_pairwise_values(evidence_bank, function(a, b) transition_event_distance(a, b, event_match = "kernel"))
+  if (is.data.frame(evidence_bank) && nrow(evidence_bank) >= 2L) {
+    cache <- attr(evidence_bank, "context_numeric_cache", exact = TRUE)
+    if (is.null(cache)) {
+      cache <- cohort_context_numeric_cache(evidence_bank)
+    }
+    cpp_bw <- alfak_cpp_call(
+      "context_bandwidths_cpp",
+      context_bandwidths_cpp(
+        evidence_profile_matrix = cache$profile_matrix,
+        evidence_total_cn = cache$total_cn,
+        evidence_burden = cache$burden,
+        evidence_local_copy = cache$local_copy,
+        evidence_local_z = cache$local_z,
+        evidence_transition_chr = cache$transition_chr,
+        evidence_direction_code = cache$direction_code,
+        evidence_transition_size = cache$transition_size,
+        evidence_delta_total_cn = cache$delta_total_cn,
+        evidence_delta_burden = cache$delta_burden,
+        chromosome_weights = if (is.null(chromosome_weights)) numeric(0) else as.numeric(chromosome_weights),
+        profile_distance_code = cohort_context_profile_distance_code(profile_distance)
+      ),
+      context = "estimate_context_bandwidths"
+    )
+    if (!is.numeric(cpp_bw) || length(cpp_bw) < 5L) {
+      alfak_log_event(
+        level = "ERROR",
+        component = "cpp.context_bandwidths_cpp",
+        detail = "C++ kernel returned malformed output in estimate_context_bandwidths."
+      )
+      stop("C++ kernel `context_bandwidths_cpp` returned malformed output.", call. = FALSE)
+    }
+    return(list(
+      profile = if (is.null(cohort_context_bandwidth_profile)) unname(cpp_bw[["profile"]]) else cohort_context_bandwidth_profile,
+      area = if (is.null(cohort_context_bandwidth_area)) unname(cpp_bw[["area"]]) else cohort_context_bandwidth_area,
+      burden = if (is.null(cohort_context_bandwidth_burden)) unname(cpp_bw[["burden"]]) else cohort_context_bandwidth_burden,
+      local = if (is.null(cohort_context_bandwidth_local)) unname(cpp_bw[["local"]]) else cohort_context_bandwidth_local,
+      event = if (is.null(cohort_context_bandwidth_event)) unname(cpp_bw[["event"]]) else cohort_context_bandwidth_event
+    ))
+  }
   list(
-    profile = if (is.null(cohort_context_bandwidth_profile)) robust_bw(profile_vals, 0.25) else cohort_context_bandwidth_profile,
-    area = if (is.null(cohort_context_bandwidth_area)) robust_bw(area_vals, 2) else cohort_context_bandwidth_area,
-    burden = if (is.null(cohort_context_bandwidth_burden)) robust_bw(burden_vals, 2) else cohort_context_bandwidth_burden,
-    local = if (is.null(cohort_context_bandwidth_local)) robust_bw(local_vals, 1) else cohort_context_bandwidth_local,
-    event = if (is.null(cohort_context_bandwidth_event)) robust_bw(event_vals, 1) else cohort_context_bandwidth_event
+    profile = if (is.null(cohort_context_bandwidth_profile)) robust_bw(numeric(0), 0.25) else cohort_context_bandwidth_profile,
+    area = if (is.null(cohort_context_bandwidth_area)) robust_bw(numeric(0), 2) else cohort_context_bandwidth_area,
+    burden = if (is.null(cohort_context_bandwidth_burden)) robust_bw(numeric(0), 2) else cohort_context_bandwidth_burden,
+    local = if (is.null(cohort_context_bandwidth_local)) robust_bw(numeric(0), 1) else cohort_context_bandwidth_local,
+    event = if (is.null(cohort_context_bandwidth_event)) robust_bw(numeric(0), 1) else cohort_context_bandwidth_event
   )
 }
 
@@ -3518,28 +3611,29 @@ cohort_context_patient_level_neighbors <- function(evidence_bank, weights_df, sd
   ev <- evidence_bank[idx[!is.na(idx)], , drop = FALSE]
   weights_df <- weights_df[!is.na(idx), , drop = FALSE]
   if (!nrow(ev)) return(data.frame())
-  split_key <- as.character(ev$patient_id)
-  rows <- lapply(split(seq_len(nrow(ev)), split_key), function(ii) {
-    ww <- weights_df$final_weight[ii]
-    se <- pmax(as.numeric(ev$delta_se[ii]), sd_floor)
-    inv <- ww / (se^2 + sd_floor^2)
-    inv[!is.finite(inv) | inv < 0] <- 0
-    if (sum(inv) <= 0) inv <- ww
-    delta <- as.numeric(ev$delta_hat[ii])
-    ok <- is.finite(delta) & is.finite(inv) & inv > 0
-    data.frame(
-      patient_id = ev$patient_id[ii[1]],
-      delta_patient_mean = if (any(ok)) stats::weighted.mean(delta[ok], inv[ok]) else NA_real_,
-      delta_patient_se = if (sum(inv[ok]) > 0) sqrt(1 / sum(inv[ok])) else NA_real_,
-      patient_weight = sum(ww, na.rm = TRUE),
-      n_context_neighbors = length(ii),
-      child_karyotype = paste(unique(ev$child_karyotype[ii]), collapse = ";"),
-      stringsAsFactors = FALSE
-    )
-  })
-  out <- do.call(rbind, rows)
-  rownames(out) <- NULL
-  out
+  cpp_out <- alfak_cpp_call(
+    "context_patient_level_neighbors_cpp",
+    context_patient_level_neighbors_cpp(
+      evidence_index = seq_len(nrow(ev)),
+      patient_id = as.character(ev$patient_id),
+      child_karyotype = as.character(ev$child_karyotype),
+      delta_hat = as.numeric(ev$delta_hat),
+      delta_se = as.numeric(ev$delta_se),
+      final_weight = as.numeric(weights_df$final_weight),
+      sd_floor = sd_floor
+    ),
+    context = "cohort_context_patient_level_neighbors"
+  )
+  if (is.data.frame(cpp_out)) {
+    rownames(cpp_out) <- NULL
+    return(cpp_out)
+  }
+  alfak_log_event(
+    level = "ERROR",
+    component = "cpp.context_patient_level_neighbors_cpp",
+    detail = "C++ kernel returned malformed output in cohort_context_patient_level_neighbors."
+  )
+  stop("C++ kernel `context_patient_level_neighbors_cpp` returned malformed output.", call. = FALSE)
 }
 
 #' Lookup a target-specific contextual transition prior
@@ -4924,6 +5018,17 @@ alfak_cohort_transition <- function(patients,
   cohort_context_profile_distance <- match.arg(cohort_context_profile_distance)
   cohort_context_event_match <- match.arg(cohort_context_event_match)
   dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+  alfak_run_log_path(file.path(outdir, "alfak_run.log"))
+  alfak_log_event(
+    level = "INFO",
+    component = "alfak_cohort_transition",
+    detail = sprintf(
+      "start version=%s grouping=%s outdir=%s",
+      cohort_transition_version,
+      cohort_transition_grouping,
+      normalizePath(outdir, mustWork = FALSE)
+    )
+  )
   if (is.null(patient_ids)) {
     stop("`patient_ids` must be supplied when `patients` is unnamed.", call. = FALSE)
   }
@@ -4959,7 +5064,18 @@ alfak_cohort_transition <- function(patients,
     base_nn_prior = base_nn_prior,
     ...
   )
+  alfak_run_log_path(file.path(outdir, "alfak_run.log"))
+  alfak_log_event(
+    level = "INFO",
+    component = "alfak_cohort_transition",
+    detail = sprintf("stage=two_shell complete reused=%d rerun=%d", sum(two_shell_status$reused), sum(two_shell_status$rerun))
+  )
 
+  alfak_log_event(
+    level = "INFO",
+    component = "alfak_cohort_transition",
+    detail = "stage=extract_transition_records start"
+  )
   records <- extract_cohort_transition_records(
     fit_dirs = two_shell_status$fit_dir,
     patient_ids = two_shell_status$patient_id,
@@ -4968,6 +5084,16 @@ alfak_cohort_transition <- function(patients,
     cohort_transition_use_zero = cohort_transition_use_zero,
     cohort_transition_zero_min_expected_count = cohort_transition_zero_min_expected_count,
     cohort_transition_zero_min_exposure = cohort_transition_zero_min_exposure
+  )
+  alfak_log_event(
+    level = "INFO",
+    component = "alfak_cohort_transition",
+    detail = sprintf("stage=extract_transition_records complete n_records=%d", nrow(records))
+  )
+  alfak_log_event(
+    level = "INFO",
+    component = "alfak_cohort_transition",
+    detail = sprintf("stage=learn_prior start version=%s", cohort_transition_version)
   )
   prior <- learn_cohort_transition_prior(
     records = records,
@@ -5064,6 +5190,11 @@ alfak_cohort_transition <- function(patients,
     cohort_context_zero_min_expected_count = cohort_context_zero_min_expected_count,
     cohort_context_zero_weight_cap_ratio = cohort_context_zero_weight_cap_ratio
   )
+  alfak_log_event(
+    level = "INFO",
+    component = "alfak_cohort_transition",
+    detail = sprintf("stage=learn_prior complete prior_version=%s", prior$version %||% "unknown")
+  )
   diagnostics <- prior$diagnostics
   diagnostics$two_shell_root <- two_shell_root
   diagnostics$pm_tag <- unique(two_shell_status$pm_tag)
@@ -5089,14 +5220,26 @@ alfak_cohort_transition <- function(patients,
       }
     }
     saveRDS(diagnostics, file.path(outdir, "cohort_transition_diagnostics.Rds"))
+    alfak_log_event(
+      level = "INFO",
+      component = "alfak_cohort_transition",
+      detail = sprintf("stage=save_diagnostics complete outdir=%s", outdir)
+    )
   }
 
   patient_outdirs <- stats::setNames(file.path(outdir, patient_ids), patient_ids)
+  cohort_log_path <- file.path(outdir, "alfak_run.log")
   refit_status <- lapply(patient_ids, function(patient_id) {
     patient_outdir <- patient_outdirs[[patient_id]]
+    alfak_run_log_path(cohort_log_path)
+    alfak_log_event(
+      level = "INFO",
+      component = "alfak_cohort_transition",
+      detail = sprintf("stage=patient_refit start patient=%s outdir=%s", patient_id, patient_outdir)
+    )
     res <- tryCatch(
       {
-        refit_patient_with_cohort_transition_prior(
+        patient_fit <- refit_patient_with_cohort_transition_prior(
           patient = patients[[patient_id]],
           patient_id = patient_id,
           outdir = patient_outdir,
@@ -5128,9 +5271,23 @@ alfak_cohort_transition <- function(patients,
           cohort_context_keep_baseline_when_high_variable = cohort_context_keep_baseline_when_high_variable,
           ...
         )
-        list(ok = TRUE, error_message = NA_character_, xval = res)
+        alfak_run_log_path(cohort_log_path)
+        alfak_log_event(
+          level = "INFO",
+          component = "alfak_cohort_transition",
+          detail = sprintf("stage=patient_refit complete patient=%s", patient_id)
+        )
+        list(ok = TRUE, error_message = NA_character_, xval = patient_fit)
       },
-      error = function(e) list(ok = FALSE, error_message = conditionMessage(e), xval = NA_real_)
+      error = function(e) {
+        alfak_run_log_path(cohort_log_path)
+        alfak_log_event(
+          level = "ERROR",
+          component = "alfak_cohort_transition",
+          detail = sprintf("stage=patient_refit failed patient=%s error=%s", patient_id, conditionMessage(e))
+        )
+        list(ok = FALSE, error_message = conditionMessage(e), xval = NA_real_)
+      }
     )
     data.frame(
       patient_id = patient_id,
