@@ -25,6 +25,10 @@ alfak_qr_accum_cpp <- function(x_trim, dx_dt) {
     .Call(`_alfakR_alfak_qr_accum_cpp`, x_trim, dx_dt)
 }
 
+context_kernel_weights_cpp <- function(target_profile, target_total_cn, target_burden, target_local_copy, target_local_z, target_transition_chr, target_direction_code, target_transition_size, target_delta_total_cn, target_delta_burden, evidence_profile_matrix, evidence_total_cn, evidence_burden, evidence_local_copy, evidence_local_z, evidence_transition_chr, evidence_direction_code, evidence_transition_size, evidence_delta_total_cn, evidence_delta_burden, quality_weight, bandwidths, component_weights, chromosome_weights, event_match_code, profile_distance_code, k_nearest, min_kernel_weight) {
+    .Call(`_alfakR_context_kernel_weights_cpp`, target_profile, target_total_cn, target_burden, target_local_copy, target_local_z, target_transition_chr, target_direction_code, target_transition_size, target_delta_total_cn, target_delta_burden, evidence_profile_matrix, evidence_total_cn, evidence_burden, evidence_local_copy, evidence_local_z, evidence_transition_chr, evidence_direction_code, evidence_transition_size, evidence_delta_total_cn, evidence_delta_burden, quality_weight, bandwidths, component_weights, chromosome_weights, event_match_code, profile_distance_code, k_nearest, min_kernel_weight)
+}
+
 pij_cpp <- function(i, j, beta) {
     .Call(`_alfakR_pij_cpp`, i, j, beta)
 }

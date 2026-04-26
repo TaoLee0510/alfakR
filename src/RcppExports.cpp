@@ -123,6 +123,44 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// context_kernel_weights_cpp
+Rcpp::DataFrame context_kernel_weights_cpp(Rcpp::NumericVector target_profile, double target_total_cn, double target_burden, double target_local_copy, double target_local_z, int target_transition_chr, int target_direction_code, double target_transition_size, double target_delta_total_cn, double target_delta_burden, Rcpp::NumericMatrix evidence_profile_matrix, Rcpp::NumericVector evidence_total_cn, Rcpp::NumericVector evidence_burden, Rcpp::NumericVector evidence_local_copy, Rcpp::NumericVector evidence_local_z, Rcpp::IntegerVector evidence_transition_chr, Rcpp::IntegerVector evidence_direction_code, Rcpp::NumericVector evidence_transition_size, Rcpp::NumericVector evidence_delta_total_cn, Rcpp::NumericVector evidence_delta_burden, Rcpp::NumericVector quality_weight, Rcpp::NumericVector bandwidths, Rcpp::NumericVector component_weights, Rcpp::NumericVector chromosome_weights, int event_match_code, int profile_distance_code, int k_nearest, double min_kernel_weight);
+RcppExport SEXP _alfakR_context_kernel_weights_cpp(SEXP target_profileSEXP, SEXP target_total_cnSEXP, SEXP target_burdenSEXP, SEXP target_local_copySEXP, SEXP target_local_zSEXP, SEXP target_transition_chrSEXP, SEXP target_direction_codeSEXP, SEXP target_transition_sizeSEXP, SEXP target_delta_total_cnSEXP, SEXP target_delta_burdenSEXP, SEXP evidence_profile_matrixSEXP, SEXP evidence_total_cnSEXP, SEXP evidence_burdenSEXP, SEXP evidence_local_copySEXP, SEXP evidence_local_zSEXP, SEXP evidence_transition_chrSEXP, SEXP evidence_direction_codeSEXP, SEXP evidence_transition_sizeSEXP, SEXP evidence_delta_total_cnSEXP, SEXP evidence_delta_burdenSEXP, SEXP quality_weightSEXP, SEXP bandwidthsSEXP, SEXP component_weightsSEXP, SEXP chromosome_weightsSEXP, SEXP event_match_codeSEXP, SEXP profile_distance_codeSEXP, SEXP k_nearestSEXP, SEXP min_kernel_weightSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type target_profile(target_profileSEXP);
+    Rcpp::traits::input_parameter< double >::type target_total_cn(target_total_cnSEXP);
+    Rcpp::traits::input_parameter< double >::type target_burden(target_burdenSEXP);
+    Rcpp::traits::input_parameter< double >::type target_local_copy(target_local_copySEXP);
+    Rcpp::traits::input_parameter< double >::type target_local_z(target_local_zSEXP);
+    Rcpp::traits::input_parameter< int >::type target_transition_chr(target_transition_chrSEXP);
+    Rcpp::traits::input_parameter< int >::type target_direction_code(target_direction_codeSEXP);
+    Rcpp::traits::input_parameter< double >::type target_transition_size(target_transition_sizeSEXP);
+    Rcpp::traits::input_parameter< double >::type target_delta_total_cn(target_delta_total_cnSEXP);
+    Rcpp::traits::input_parameter< double >::type target_delta_burden(target_delta_burdenSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type evidence_profile_matrix(evidence_profile_matrixSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type evidence_total_cn(evidence_total_cnSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type evidence_burden(evidence_burdenSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type evidence_local_copy(evidence_local_copySEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type evidence_local_z(evidence_local_zSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type evidence_transition_chr(evidence_transition_chrSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type evidence_direction_code(evidence_direction_codeSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type evidence_transition_size(evidence_transition_sizeSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type evidence_delta_total_cn(evidence_delta_total_cnSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type evidence_delta_burden(evidence_delta_burdenSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type quality_weight(quality_weightSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type bandwidths(bandwidthsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type component_weights(component_weightsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type chromosome_weights(chromosome_weightsSEXP);
+    Rcpp::traits::input_parameter< int >::type event_match_code(event_match_codeSEXP);
+    Rcpp::traits::input_parameter< int >::type profile_distance_code(profile_distance_codeSEXP);
+    Rcpp::traits::input_parameter< int >::type k_nearest(k_nearestSEXP);
+    Rcpp::traits::input_parameter< double >::type min_kernel_weight(min_kernel_weightSEXP);
+    rcpp_result_gen = Rcpp::wrap(context_kernel_weights_cpp(target_profile, target_total_cn, target_burden, target_local_copy, target_local_z, target_transition_chr, target_direction_code, target_transition_size, target_delta_total_cn, target_delta_burden, evidence_profile_matrix, evidence_total_cn, evidence_burden, evidence_local_copy, evidence_local_z, evidence_transition_chr, evidence_direction_code, evidence_transition_size, evidence_delta_total_cn, evidence_delta_burden, quality_weight, bandwidths, component_weights, chromosome_weights, event_match_code, profile_distance_code, k_nearest, min_kernel_weight));
+    return rcpp_result_gen;
+END_RCPP
+}
 // pij_cpp
 double pij_cpp(int i, int j, double beta);
 static SEXP _alfakR_pij_cpp_try(SEXP iSEXP, SEXP jSEXP, SEXP betaSEXP) {
@@ -297,6 +335,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_alfakR_alfak_neighbor_objective_cpp", (DL_FUNC) &_alfakR_alfak_neighbor_objective_cpp, 13},
     {"_alfakR_alfak_neighbor_two_shell_objective_cpp", (DL_FUNC) &_alfakR_alfak_neighbor_two_shell_objective_cpp, 18},
     {"_alfakR_alfak_qr_accum_cpp", (DL_FUNC) &_alfakR_alfak_qr_accum_cpp, 2},
+    {"_alfakR_context_kernel_weights_cpp", (DL_FUNC) &_alfakR_context_kernel_weights_cpp, 28},
     {"_alfakR_pij_cpp", (DL_FUNC) &_alfakR_pij_cpp, 3},
     {"_alfakR_get_A_inputs", (DL_FUNC) &_alfakR_get_A_inputs, 3},
     {"_alfakR_chrmod_cpp", (DL_FUNC) &_alfakR_chrmod_cpp, 3},

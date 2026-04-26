@@ -452,6 +452,37 @@ test_that("context kernel favors matching chromosome and direction", {
   expect_false("obs_2" %in% w$evidence_row_id)
 })
 
+test_that("C++ context kernel matches R fallback output", {
+  records <- rbind(
+    make_context_records("patient_A", parents = "2.2.2", children = "2.2.3", delta = -0.1),
+    make_context_records("patient_B", parents = "2.2.2", children = "2.2.3", delta = -0.12),
+    make_context_records("patient_C", parents = "2.3.2", children = "2.3.3", delta = -0.2)
+  )
+  bank <- alfakR::build_contextual_transition_evidence_bank(records)$evidence_bank
+  target <- alfakR::compute_transition_context_features("2.2.2", "2.2.3")
+  args <- list(
+    target_context = target,
+    evidence_contexts = bank,
+    bandwidths = list(profile = 0.25, area = 2, burden = 2, local = 1, event = 1),
+    weights = list(profile = 1, area = 0.5, burden = 0.5, local = 1, event = 2),
+    event_match = "same_chr_direction",
+    k_nearest = 50,
+    min_kernel_weight = 1e-6,
+    profile_distance = "hellinger"
+  )
+  fast <- do.call(alfakR::compute_context_kernel_weights, args)
+  slow <- testthat::with_mocked_bindings(
+    do.call(alfakR::compute_context_kernel_weights, args),
+    context_kernel_weights_cpp = function(...) stop("force R fallback"),
+    .package = "alfakR"
+  )
+
+  expect_equal(fast$evidence_row_id, slow$evidence_row_id)
+  expect_equal(fast$patient_id, slow$patient_id)
+  expect_equal(fast$final_weight, slow$final_weight, tolerance = 1e-12)
+  expect_equal(fast$context_distance, slow$context_distance, tolerance = 1e-12)
+})
+
 test_that("context evidence bank filters unreliable records and keeps zeros censoring-only", {
   records <- make_context_records(
     patient_ids = paste0("patient_", LETTERS[1:5]),

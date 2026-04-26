@@ -2842,6 +2842,119 @@ transition_event_distance <- function(context_a,
   sqrt(sum(vals^2))
 }
 
+cohort_context_direction_code <- function(x) {
+  out <- rep.int(0L, length(x))
+  x <- as.character(x)
+  out[x == "gain"] <- 1L
+  out[x == "loss"] <- -1L
+  out
+}
+
+cohort_context_profile_distance_code <- function(method) {
+  switch(
+    match.arg(method, c("hellinger", "jensen_shannon", "cosine", "euclidean", "manhattan")),
+    hellinger = 1L,
+    jensen_shannon = 2L,
+    cosine = 3L,
+    euclidean = 4L,
+    manhattan = 5L
+  )
+}
+
+cohort_context_event_match_code <- function(event_match) {
+  switch(
+    match.arg(event_match, c("same_chr_direction", "same_direction", "kernel")),
+    same_chr_direction = 1L,
+    same_direction = 2L,
+    kernel = 3L
+  )
+}
+
+cohort_context_numeric_cache <- function(evidence_contexts) {
+  if (!is.data.frame(evidence_contexts) || !nrow(evidence_contexts)) {
+    return(NULL)
+  }
+  if (!"parent_context_profile" %in% names(evidence_contexts)) {
+    stop("Context evidence is missing `parent_context_profile`.", call. = FALSE)
+  }
+  profile_matrix <- do.call(rbind, lapply(evidence_contexts$parent_context_profile, as.numeric))
+  if (is.null(dim(profile_matrix))) {
+    profile_matrix <- matrix(profile_matrix, nrow = nrow(evidence_contexts))
+  }
+  list(
+    profile_matrix = profile_matrix,
+    total_cn = as.numeric(evidence_contexts$parent_total_cn),
+    burden = as.numeric(evidence_contexts$parent_burden),
+    local_copy = as.numeric(evidence_contexts$changed_chr_parent_copy),
+    local_z = as.numeric(evidence_contexts$changed_chr_parent_zscore),
+    transition_chr = as.integer(evidence_contexts$transition_chr),
+    direction_code = cohort_context_direction_code(evidence_contexts$transition_direction),
+    transition_size = as.numeric(evidence_contexts$transition_size),
+    delta_total_cn = as.numeric(evidence_contexts$delta_total_cn),
+    delta_burden = as.numeric(evidence_contexts$delta_burden),
+    quality_weight = if ("quality_weight" %in% names(evidence_contexts)) {
+      as.numeric(evidence_contexts$quality_weight)
+    } else {
+      rep(1, nrow(evidence_contexts))
+    }
+  )
+}
+
+cohort_context_attach_numeric_cache <- function(evidence_contexts) {
+  if (is.data.frame(evidence_contexts) && nrow(evidence_contexts)) {
+    attr(evidence_contexts, "context_numeric_cache") <- cohort_context_numeric_cache(evidence_contexts)
+  }
+  evidence_contexts
+}
+
+cohort_context_subset_cache <- function(cache, keep) {
+  if (is.null(cache)) return(NULL)
+  keep_idx <- which(keep)
+  if (!length(keep_idx)) return(NULL)
+  list(
+    profile_matrix = cache$profile_matrix[keep_idx, , drop = FALSE],
+    total_cn = cache$total_cn[keep_idx],
+    burden = cache$burden[keep_idx],
+    local_copy = cache$local_copy[keep_idx],
+    local_z = cache$local_z[keep_idx],
+    transition_chr = cache$transition_chr[keep_idx],
+    direction_code = cache$direction_code[keep_idx],
+    transition_size = cache$transition_size[keep_idx],
+    delta_total_cn = cache$delta_total_cn[keep_idx],
+    delta_burden = cache$delta_burden[keep_idx],
+    quality_weight = cache$quality_weight[keep_idx]
+  )
+}
+
+cohort_context_subset_bank <- function(evidence_contexts, keep) {
+  out <- evidence_contexts[keep, , drop = FALSE]
+  cache <- attr(evidence_contexts, "context_numeric_cache", exact = TRUE)
+  if (!is.null(cache)) {
+    attr(out, "context_numeric_cache") <- cohort_context_subset_cache(cache, keep)
+  }
+  out
+}
+
+cohort_context_bandwidth_vector <- function(bandwidths) {
+  c(
+    profile = as.numeric(bandwidths$profile),
+    area = as.numeric(bandwidths$area),
+    burden = as.numeric(bandwidths$burden),
+    local = as.numeric(bandwidths$local),
+    event = as.numeric(bandwidths$event)
+  )
+}
+
+cohort_context_weight_vector <- function(weights) {
+  c(
+    profile = as.numeric(weights$profile),
+    area = as.numeric(weights$area),
+    burden = as.numeric(weights$burden),
+    local = as.numeric(weights$local),
+    event = as.numeric(weights$event)
+  )
+}
+
 #' Compute contextual transition distance
 #'
 #' @param target_context,evidence_context One-row transition context data frames.
@@ -2935,6 +3048,88 @@ compute_context_kernel_weights <- function(target_context,
   validate_nonnegative_finite(min_kernel_weight, "min_kernel_weight")
   if (!is.data.frame(evidence_contexts) || !nrow(evidence_contexts)) {
     return(data.frame())
+  }
+  cache <- attr(evidence_contexts, "context_numeric_cache", exact = TRUE)
+  if (is.null(cache)) {
+    cache <- cohort_context_numeric_cache(evidence_contexts)
+  }
+  getv <- function(x, name) {
+    if (is.data.frame(x)) x[[name]][1] else x[[name]]
+  }
+  getlist <- function(x, name) {
+    val <- getv(x, name)
+    if (is.list(val)) val[[1]] else val
+  }
+  cpp_out <- tryCatch(
+    context_kernel_weights_cpp(
+      target_profile = as.numeric(getlist(target_context, "parent_context_profile")),
+      target_total_cn = as.numeric(getv(target_context, "parent_total_cn")),
+      target_burden = as.numeric(getv(target_context, "parent_burden")),
+      target_local_copy = as.numeric(getv(target_context, "changed_chr_parent_copy")),
+      target_local_z = as.numeric(getv(target_context, "changed_chr_parent_zscore")),
+      target_transition_chr = as.integer(getv(target_context, "transition_chr")),
+      target_direction_code = cohort_context_direction_code(getv(target_context, "transition_direction")),
+      target_transition_size = as.numeric(getv(target_context, "transition_size")),
+      target_delta_total_cn = as.numeric(getv(target_context, "delta_total_cn")),
+      target_delta_burden = as.numeric(getv(target_context, "delta_burden")),
+      evidence_profile_matrix = cache$profile_matrix,
+      evidence_total_cn = cache$total_cn,
+      evidence_burden = cache$burden,
+      evidence_local_copy = cache$local_copy,
+      evidence_local_z = cache$local_z,
+      evidence_transition_chr = cache$transition_chr,
+      evidence_direction_code = cache$direction_code,
+      evidence_transition_size = cache$transition_size,
+      evidence_delta_total_cn = cache$delta_total_cn,
+      evidence_delta_burden = cache$delta_burden,
+      quality_weight = cache$quality_weight,
+      bandwidths = cohort_context_bandwidth_vector(bandwidths),
+      component_weights = cohort_context_weight_vector(weights),
+      chromosome_weights = if (is.null(chromosome_weights)) numeric(0) else as.numeric(chromosome_weights),
+      event_match_code = cohort_context_event_match_code(event_match),
+      profile_distance_code = cohort_context_profile_distance_code(profile_distance),
+      k_nearest = as.integer(k_nearest),
+      min_kernel_weight = min_kernel_weight
+    ),
+    error = function(e) NULL
+  )
+  if (is.data.frame(cpp_out)) {
+    if (!nrow(cpp_out)) {
+      return(data.frame(
+        evidence_row_id = character(0),
+        patient_id = character(0),
+        context_distance = numeric(0),
+        profile_distance = numeric(0),
+        area_distance = numeric(0),
+        burden_distance = numeric(0),
+        local_distance = numeric(0),
+        event_distance = numeric(0),
+        kernel_weight = numeric(0),
+        quality_weight = numeric(0),
+        final_weight = numeric(0),
+        stringsAsFactors = FALSE
+      ))
+    }
+    idx <- as.integer(cpp_out$evidence_index)
+    cpp_out$evidence_row_id <- if ("evidence_id" %in% names(evidence_contexts)) evidence_contexts$evidence_id[idx] else idx
+    cpp_out$patient_id <- if ("patient_id" %in% names(evidence_contexts)) as.character(evidence_contexts$patient_id[idx]) else NA_character_
+    cpp_out <- cpp_out[
+      c(
+        "evidence_row_id",
+        "patient_id",
+        "context_distance",
+        "profile_distance",
+        "area_distance",
+        "burden_distance",
+        "local_distance",
+        "event_distance",
+        "kernel_weight",
+        "quality_weight",
+        "final_weight"
+      )
+    ]
+    rownames(cpp_out) <- NULL
+    return(cpp_out)
   }
   rows <- lapply(seq_len(nrow(evidence_contexts)), function(i) {
     ev <- evidence_contexts[i, , drop = FALSE]
@@ -3072,6 +3267,8 @@ build_contextual_transition_evidence_bank <- function(records,
   }
   evidence_bank <- enrich(observed, "obs")
   zero_evidence_bank <- enrich(zeros, "zero")
+  evidence_bank <- cohort_context_attach_numeric_cache(evidence_bank)
+  zero_evidence_bank <- cohort_context_attach_numeric_cache(zero_evidence_bank)
   diagnostics <- c(
     filtered$diagnostics,
     list(
@@ -3387,7 +3584,7 @@ lookup_contextual_transition_prior <- function(target_parent_karyotype,
   )
   ev <- evidence_bank
   if (isTRUE(leave_one_patient_out) && !is.null(target_patient_id) && "patient_id" %in% names(ev)) {
-    ev <- ev[as.character(ev$patient_id) != as.character(target_patient_id), , drop = FALSE]
+    ev <- cohort_context_subset_bank(ev, as.character(ev$patient_id) != as.character(target_patient_id))
   }
   neighbors <- compute_context_kernel_weights(
     target_context = target_context,
@@ -3404,7 +3601,7 @@ lookup_contextual_transition_prior <- function(target_parent_karyotype,
   if (!is.null(zero_evidence_bank) && is.data.frame(zero_evidence_bank) && nrow(zero_evidence_bank)) {
     zev <- zero_evidence_bank
     if (isTRUE(leave_one_patient_out) && !is.null(target_patient_id) && "patient_id" %in% names(zev)) {
-      zev <- zev[as.character(zev$patient_id) != as.character(target_patient_id), , drop = FALSE]
+      zev <- cohort_context_subset_bank(zev, as.character(zev$patient_id) != as.character(target_patient_id))
     }
     zero_neighbors <- compute_context_kernel_weights(
       target_context = target_context,
