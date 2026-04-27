@@ -35,11 +35,14 @@ params:
   nn_prior_two_step_support_min: 0.15
   nn_prior_two_step_cap_floor: 0.30
   cohort_transition_version: "contextual"
+  cohort_contextual_apply_to: "all"
+  cohort_context_keep_baseline_when_sparse: false
+  cohort_context_lambda_sparse_unknown: 0.10
   include_posterior_comparison: true
   top_shift_n: 15
   run_nn_identifiability: true
   run_nn_stability: true
-  run_nn_holdout: false
+  run_nn_holdout: true
   nn_holdout_repeats: 5
   nn_holdout_fraction: 0.25
   nn_holdout_min_count: 2

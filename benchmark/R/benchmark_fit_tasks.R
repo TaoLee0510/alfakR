@@ -11,35 +11,100 @@ has_complete_alfak_outputs <- function(outdir) {
   all(file.exists(required_paths))
 }
 
-cohort_transition_output_version <- function(outdir) {
+cohort_transition_output_setting <- function(outdir, field) {
   diag_path <- file.path(outdir, "nn_prior_diagnostics.Rds")
   diag_obj <- safe_read_rds(diag_path)
   if (!is.list(diag_obj) || is.null(diag_obj$replicate) || !is.data.frame(diag_obj$replicate)) {
     return(NA_character_)
   }
 
-  version_vec <- diag_obj$replicate$cohort_transition_version
-  if (is.null(version_vec)) {
+  value_vec <- diag_obj$replicate[[field]]
+  if (is.null(value_vec)) {
     return(NA_character_)
   }
-  version_vec <- unique(as.character(version_vec[!is.na(version_vec) & nzchar(version_vec)]))
-  if (length(version_vec) != 1L) {
+  value_vec <- unique(as.character(value_vec[!is.na(value_vec) & nzchar(value_vec)]))
+  if (length(value_vec) != 1L) {
     return(NA_character_)
   }
-  version_vec[[1L]]
+  value_vec[[1L]]
+}
+
+cohort_transition_output_version <- function(outdir) {
+  cohort_transition_output_setting(outdir, "cohort_transition_version")
+}
+
+cohort_transition_output_contextual_apply_to <- function(outdir) {
+  cohort_transition_output_setting(outdir, "cohort_contextual_apply_to")
+}
+
+cohort_transition_output_keep_baseline_when_sparse <- function(outdir) {
+  cohort_transition_output_setting(outdir, "cohort_context_keep_baseline_when_sparse")
+}
+
+cohort_transition_output_lambda_sparse_unknown <- function(outdir) {
+  cohort_transition_output_setting(outdir, "cohort_context_lambda_sparse_unknown")
 }
 
 cohort_transition_output_matches <- function(outdir,
                                              nn_prior,
-                                             cohort_transition_version = NA_character_) {
+                                             cohort_transition_version = NA_character_,
+                                             cohort_contextual_apply_to = NA_character_,
+                                             cohort_context_keep_baseline_when_sparse = NA,
+                                             cohort_context_lambda_sparse_unknown = NA_real_) {
   if (!identical(as.character(nn_prior), "cohort_transition")) {
     return(TRUE)
   }
   requested_version <- as.character(cohort_transition_version)
-  if (!length(requested_version) || is.na(requested_version[[1L]]) || !nzchar(requested_version[[1L]])) {
+  if (length(requested_version) && !is.na(requested_version[[1L]]) && nzchar(requested_version[[1L]]) &&
+      !identical(cohort_transition_output_version(outdir), requested_version[[1L]])) {
+    return(FALSE)
+  }
+
+  requested_apply_to <- as.character(cohort_contextual_apply_to)
+  if (length(requested_apply_to) && !is.na(requested_apply_to[[1L]]) && nzchar(requested_apply_to[[1L]]) &&
+      !identical(cohort_transition_output_contextual_apply_to(outdir), requested_apply_to[[1L]])) {
+    return(FALSE)
+  }
+
+  requested_keep_sparse_missing <- is.null(cohort_context_keep_baseline_when_sparse) ||
+    !length(cohort_context_keep_baseline_when_sparse) ||
+    (length(cohort_context_keep_baseline_when_sparse) == 1L && is.na(cohort_context_keep_baseline_when_sparse))
+  if (!requested_keep_sparse_missing) {
+    if (!same_optional_logical(
+      cohort_transition_output_keep_baseline_when_sparse(outdir),
+      cohort_context_keep_baseline_when_sparse
+    )) {
+      return(FALSE)
+    }
+  }
+
+  requested_sparse_lambda_missing <- is.null(cohort_context_lambda_sparse_unknown) ||
+    !length(cohort_context_lambda_sparse_unknown) ||
+    (length(cohort_context_lambda_sparse_unknown) == 1L && is.na(cohort_context_lambda_sparse_unknown))
+  if (!requested_sparse_lambda_missing) {
+    if (!same_optional_numeric(
+      cohort_transition_output_lambda_sparse_unknown(outdir),
+      cohort_context_lambda_sparse_unknown
+    )) {
+      return(FALSE)
+    }
+  }
+
+  TRUE
+}
+
+same_optional_logical <- function(lhs, rhs) {
+  lhs_missing <- is.null(lhs) || !length(lhs) || (length(lhs) == 1L && is.na(lhs))
+  rhs_missing <- is.null(rhs) || !length(rhs) || (length(rhs) == 1L && is.na(rhs))
+  if (lhs_missing && rhs_missing) {
     return(TRUE)
   }
-  identical(cohort_transition_output_version(outdir), requested_version[[1L]])
+  if (lhs_missing || rhs_missing) {
+    return(FALSE)
+  }
+  lhs_log <- suppressWarnings(as.logical(lhs[[1]]))
+  rhs_log <- suppressWarnings(as.logical(rhs[[1]]))
+  is.logical(lhs_log) && is.logical(rhs_log) && !is.na(lhs_log) && !is.na(rhs_log) && identical(lhs_log, rhs_log)
 }
 
 same_optional_numeric <- function(lhs, rhs, tol = 1e-12) {
@@ -98,23 +163,66 @@ weighted_prior_cache_matches <- function(cached,
 cohort_transition_cache_matches <- function(cached,
                                             outdir,
                                             nn_prior,
-                                            cohort_transition_version = NA_character_) {
+                                            cohort_transition_version = NA_character_,
+                                            cohort_contextual_apply_to = NA_character_,
+                                            cohort_context_keep_baseline_when_sparse = NA,
+                                            cohort_context_lambda_sparse_unknown = NA_real_) {
   if (!identical(as.character(nn_prior), "cohort_transition")) {
     return(TRUE)
   }
   requested_version <- as.character(cohort_transition_version)
-  if (!length(requested_version) || is.na(requested_version[[1L]]) || !nzchar(requested_version[[1L]])) {
-    return(TRUE)
+  if (length(requested_version) && !is.na(requested_version[[1L]]) && nzchar(requested_version[[1L]])) {
+    cached_version <- as.character(cached$cohort_transition_version)
+    if (length(cached_version) && !is.na(cached_version[[1L]]) && nzchar(cached_version[[1L]])) {
+      if (!identical(cached_version[[1L]], requested_version[[1L]])) {
+        return(FALSE)
+      }
+    } else if (!identical(cohort_transition_output_version(outdir), requested_version[[1L]])) {
+      return(FALSE)
+    }
   }
-  cached_version <- as.character(cached$cohort_transition_version)
-  if (length(cached_version) && !is.na(cached_version[[1L]]) && nzchar(cached_version[[1L]])) {
-    return(identical(cached_version[[1L]], requested_version[[1L]]))
+
+  requested_apply_to <- as.character(cohort_contextual_apply_to)
+  if (length(requested_apply_to) && !is.na(requested_apply_to[[1L]]) && nzchar(requested_apply_to[[1L]])) {
+    cached_apply_to <- as.character(cached$cohort_contextual_apply_to)
+    if (length(cached_apply_to) && !is.na(cached_apply_to[[1L]]) && nzchar(cached_apply_to[[1L]])) {
+      if (!identical(cached_apply_to[[1L]], requested_apply_to[[1L]])) {
+        return(FALSE)
+      }
+    } else if (!identical(cohort_transition_output_contextual_apply_to(outdir), requested_apply_to[[1L]])) {
+      return(FALSE)
+    }
   }
-  cohort_transition_output_matches(
-    outdir = outdir,
-    nn_prior = nn_prior,
-    cohort_transition_version = requested_version[[1L]]
-  )
+
+  requested_keep_sparse_missing <- is.null(cohort_context_keep_baseline_when_sparse) ||
+    !length(cohort_context_keep_baseline_when_sparse) ||
+    (length(cohort_context_keep_baseline_when_sparse) == 1L && is.na(cohort_context_keep_baseline_when_sparse))
+  if (!requested_keep_sparse_missing) {
+    cached_keep_sparse <- if ("cohort_context_keep_baseline_when_sparse" %in% names(cached)) {
+      cached$cohort_context_keep_baseline_when_sparse
+    } else {
+      cohort_transition_output_keep_baseline_when_sparse(outdir)
+    }
+    if (!same_optional_logical(cached_keep_sparse, cohort_context_keep_baseline_when_sparse)) {
+      return(FALSE)
+    }
+  }
+
+  requested_sparse_lambda_missing <- is.null(cohort_context_lambda_sparse_unknown) ||
+    !length(cohort_context_lambda_sparse_unknown) ||
+    (length(cohort_context_lambda_sparse_unknown) == 1L && is.na(cohort_context_lambda_sparse_unknown))
+  if (!requested_sparse_lambda_missing) {
+    cached_sparse_lambda <- if ("cohort_context_lambda_sparse_unknown" %in% names(cached)) {
+      cached$cohort_context_lambda_sparse_unknown
+    } else {
+      cohort_transition_output_lambda_sparse_unknown(outdir)
+    }
+    if (!same_optional_numeric(cached_sparse_lambda, cohort_context_lambda_sparse_unknown)) {
+      return(FALSE)
+    }
+  }
+
+  TRUE
 }
 
 build_existing_fit_row <- function(patient_id,
@@ -138,6 +246,9 @@ build_existing_fit_row <- function(patient_id,
                                    nn_prior_two_step_support_min,
                                    nn_prior_two_step_cap_floor,
                                    cohort_transition_version = NA_character_,
+                                   cohort_contextual_apply_to = NA_character_,
+                                   cohort_context_keep_baseline_when_sparse = NA,
+                                   cohort_context_lambda_sparse_unknown = NA_real_,
                                    warning_log_path,
                                    landscape_path,
                                    bootstrap_path,
@@ -170,6 +281,9 @@ build_existing_fit_row <- function(patient_id,
       nn_prior_two_step_support_min = nn_prior_two_step_support_min,
       nn_prior_two_step_cap_floor = nn_prior_two_step_cap_floor,
       cohort_transition_version = if (identical(nn_prior, "cohort_transition")) as.character(cohort_transition_version) else NA_character_,
+      cohort_contextual_apply_to = if (identical(nn_prior, "cohort_transition")) as.character(cohort_contextual_apply_to) else NA_character_,
+      cohort_context_keep_baseline_when_sparse = if (identical(nn_prior, "cohort_transition")) as.logical(cohort_context_keep_baseline_when_sparse) else NA,
+      cohort_context_lambda_sparse_unknown = if (identical(nn_prior, "cohort_transition")) as.numeric(cohort_context_lambda_sparse_unknown) else NA_real_,
       status = "ok",
       cached = TRUE,
       error_message = NA_character_,
@@ -263,6 +377,9 @@ refresh_cached_fit_row <- function(cached,
                                    nn_prior_two_step_support_min,
                                    nn_prior_two_step_cap_floor,
                                    cohort_transition_version = NA_character_,
+                                   cohort_contextual_apply_to = NA_character_,
+                                   cohort_context_keep_baseline_when_sparse = NA,
+                                   cohort_context_lambda_sparse_unknown = NA_real_,
                                    warning_log_path,
                                    landscape_path,
                                    bootstrap_path,
@@ -295,6 +412,9 @@ refresh_cached_fit_row <- function(cached,
   cached$nn_prior_two_step_support_min <- nn_prior_two_step_support_min
   cached$nn_prior_two_step_cap_floor <- nn_prior_two_step_cap_floor
   cached$cohort_transition_version <- if (identical(nn_prior, "cohort_transition")) as.character(cohort_transition_version) else NA_character_
+  cached$cohort_contextual_apply_to <- if (identical(nn_prior, "cohort_transition")) as.character(cohort_contextual_apply_to) else NA_character_
+  cached$cohort_context_keep_baseline_when_sparse <- if (identical(nn_prior, "cohort_transition")) as.logical(cohort_context_keep_baseline_when_sparse) else NA
+  cached$cohort_context_lambda_sparse_unknown <- if (identical(nn_prior, "cohort_transition")) as.numeric(cohort_context_lambda_sparse_unknown) else NA_real_
   cached$cached <- TRUE
   cached$warning_count <- length(warning_lines)
   cached$lambda_endpoint_warning_count <- sum(grepl("^Grid searches over lambda", warning_lines))
@@ -411,6 +531,9 @@ run_alfak_fit <- function(patient_id,
                           nn_prior_two_step_support_min = 0.15,
                           nn_prior_two_step_cap_floor = 0.30,
                           cohort_transition_version = NA_character_,
+                          cohort_contextual_apply_to = NA_character_,
+                          cohort_context_keep_baseline_when_sparse = NA,
+                          cohort_context_lambda_sparse_unknown = NA_real_,
                           force_refit = FALSE) {
   landscape_path <- file.path(outdir, "landscape.Rds")
   bootstrap_path <- file.path(outdir, "bootstrap_res.Rds")
@@ -470,7 +593,10 @@ run_alfak_fit <- function(patient_id,
             cached = cached,
             outdir = outdir,
             nn_prior = nn_prior,
-            cohort_transition_version = cohort_transition_version
+            cohort_transition_version = cohort_transition_version,
+            cohort_contextual_apply_to = cohort_contextual_apply_to,
+            cohort_context_keep_baseline_when_sparse = cohort_context_keep_baseline_when_sparse,
+            cohort_context_lambda_sparse_unknown = cohort_context_lambda_sparse_unknown
           )) {
       cached <- refresh_cached_fit_row(
         cached = cached,
@@ -495,6 +621,9 @@ run_alfak_fit <- function(patient_id,
         nn_prior_two_step_support_min = nn_prior_two_step_support_min,
         nn_prior_two_step_cap_floor = nn_prior_two_step_cap_floor,
         cohort_transition_version = cohort_transition_version,
+        cohort_contextual_apply_to = cohort_contextual_apply_to,
+        cohort_context_keep_baseline_when_sparse = cohort_context_keep_baseline_when_sparse,
+        cohort_context_lambda_sparse_unknown = cohort_context_lambda_sparse_unknown,
         warning_log_path = warning_log_path,
         landscape_path = landscape_path,
         bootstrap_path = bootstrap_path,
@@ -509,7 +638,14 @@ run_alfak_fit <- function(patient_id,
 
   if (!force_refit &&
       has_complete_alfak_outputs(outdir) &&
-      cohort_transition_output_matches(outdir, nn_prior, cohort_transition_version)) {
+      cohort_transition_output_matches(
+        outdir,
+        nn_prior,
+        cohort_transition_version,
+        cohort_contextual_apply_to,
+        cohort_context_keep_baseline_when_sparse,
+        cohort_context_lambda_sparse_unknown
+      )) {
     cached <- build_existing_fit_row(
       patient_id = patient_id,
       outdir = outdir,
@@ -532,6 +668,9 @@ run_alfak_fit <- function(patient_id,
       nn_prior_two_step_support_min = nn_prior_two_step_support_min,
       nn_prior_two_step_cap_floor = nn_prior_two_step_cap_floor,
       cohort_transition_version = cohort_transition_version,
+      cohort_contextual_apply_to = cohort_contextual_apply_to,
+      cohort_context_keep_baseline_when_sparse = cohort_context_keep_baseline_when_sparse,
+      cohort_context_lambda_sparse_unknown = cohort_context_lambda_sparse_unknown,
       warning_log_path = warning_log_path,
       landscape_path = landscape_path,
       bootstrap_path = bootstrap_path,
@@ -632,6 +771,9 @@ run_alfak_fit <- function(patient_id,
         nn_prior_two_step_support_min = nn_prior_two_step_support_min,
         nn_prior_two_step_cap_floor = nn_prior_two_step_cap_floor,
         cohort_transition_version = if (identical(nn_prior, "cohort_transition")) as.character(cohort_transition_version) else NA_character_,
+        cohort_contextual_apply_to = if (identical(nn_prior, "cohort_transition")) as.character(cohort_contextual_apply_to) else NA_character_,
+        cohort_context_keep_baseline_when_sparse = if (identical(nn_prior, "cohort_transition")) as.logical(cohort_context_keep_baseline_when_sparse) else NA,
+        cohort_context_lambda_sparse_unknown = if (identical(nn_prior, "cohort_transition")) as.numeric(cohort_context_lambda_sparse_unknown) else NA_real_,
         status = "ok",
         cached = FALSE,
         error_message = NA_character_,
@@ -677,6 +819,9 @@ run_alfak_fit <- function(patient_id,
       nn_prior_two_step_support_min = nn_prior_two_step_support_min,
       nn_prior_two_step_cap_floor = nn_prior_two_step_cap_floor,
       cohort_transition_version = if (identical(nn_prior, "cohort_transition")) as.character(cohort_transition_version) else NA_character_,
+      cohort_contextual_apply_to = if (identical(nn_prior, "cohort_transition")) as.character(cohort_contextual_apply_to) else NA_character_,
+      cohort_context_keep_baseline_when_sparse = if (identical(nn_prior, "cohort_transition")) as.logical(cohort_context_keep_baseline_when_sparse) else NA,
+      cohort_context_lambda_sparse_unknown = if (identical(nn_prior, "cohort_transition")) as.numeric(cohort_context_lambda_sparse_unknown) else NA_real_,
       status = "error",
       cached = FALSE,
       error_message = conditionMessage(e),
@@ -734,6 +879,9 @@ build_parameter_tasks <- function(input_index_tbl,
                                   nn_prior_two_step_support_min,
                                   nn_prior_two_step_cap_floor,
                                   cohort_transition_version,
+                                  cohort_contextual_apply_to,
+                                  cohort_context_keep_baseline_when_sparse,
+                                  cohort_context_lambda_sparse_unknown,
                                   nboot,
                                   n0,
                                   nb,
@@ -768,6 +916,21 @@ build_parameter_tasks <- function(input_index_tbl,
         nn_prior == "cohort_transition",
         as.character(cohort_transition_version),
         NA_character_
+      ),
+      cohort_contextual_apply_to = dplyr::if_else(
+        nn_prior == "cohort_transition",
+        as.character(cohort_contextual_apply_to),
+        NA_character_
+      ),
+      cohort_context_keep_baseline_when_sparse = dplyr::if_else(
+        nn_prior == "cohort_transition",
+        as.logical(cohort_context_keep_baseline_when_sparse),
+        NA
+      ),
+      cohort_context_lambda_sparse_unknown = dplyr::if_else(
+        nn_prior == "cohort_transition",
+        as.numeric(cohort_context_lambda_sparse_unknown),
+        NA_real_
       ),
       outdir = purrr::pmap_chr(
         list(patient_id, minobs, pm, parameter_label),
@@ -828,6 +991,9 @@ run_task_table_parallel <- function(task_tbl, n_cores, diploid_state) {
           nn_prior_two_step_support_min = rr$nn_prior_two_step_support_min,
           nn_prior_two_step_cap_floor = rr$nn_prior_two_step_cap_floor,
           cohort_transition_version = if ("cohort_transition_version" %in% names(rr)) rr$cohort_transition_version else NA_character_,
+          cohort_contextual_apply_to = if ("cohort_contextual_apply_to" %in% names(rr)) rr$cohort_contextual_apply_to else NA_character_,
+          cohort_context_keep_baseline_when_sparse = if ("cohort_context_keep_baseline_when_sparse" %in% names(rr)) rr$cohort_context_keep_baseline_when_sparse else NA,
+          cohort_context_lambda_sparse_unknown = if ("cohort_context_lambda_sparse_unknown" %in% names(rr)) rr$cohort_context_lambda_sparse_unknown else NA_real_,
           force_refit = rr$force_refit
         )
       },
@@ -866,6 +1032,9 @@ run_task_table_parallel <- function(task_tbl, n_cores, diploid_state) {
         nn_prior_two_step_support_min = rr$nn_prior_two_step_support_min,
         nn_prior_two_step_cap_floor = rr$nn_prior_two_step_cap_floor,
         cohort_transition_version = if ("cohort_transition_version" %in% names(rr)) rr$cohort_transition_version else NA_character_,
+        cohort_contextual_apply_to = if ("cohort_contextual_apply_to" %in% names(rr)) rr$cohort_contextual_apply_to else NA_character_,
+        cohort_context_keep_baseline_when_sparse = if ("cohort_context_keep_baseline_when_sparse" %in% names(rr)) rr$cohort_context_keep_baseline_when_sparse else NA,
+        cohort_context_lambda_sparse_unknown = if ("cohort_context_lambda_sparse_unknown" %in% names(rr)) rr$cohort_context_lambda_sparse_unknown else NA_real_,
         force_refit = rr$force_refit
       )
     })
@@ -913,6 +1082,9 @@ build_task_error_rows <- function(task_tbl, error_message) {
       nn_prior_two_step_support_min = as.numeric(rr$nn_prior_two_step_support_min),
       nn_prior_two_step_cap_floor = as.numeric(rr$nn_prior_two_step_cap_floor),
       cohort_transition_version = if ("cohort_transition_version" %in% names(rr)) as.character(rr$cohort_transition_version) else NA_character_,
+      cohort_contextual_apply_to = if ("cohort_contextual_apply_to" %in% names(rr)) as.character(rr$cohort_contextual_apply_to) else NA_character_,
+      cohort_context_keep_baseline_when_sparse = if ("cohort_context_keep_baseline_when_sparse" %in% names(rr)) as.logical(rr$cohort_context_keep_baseline_when_sparse) else NA,
+      cohort_context_lambda_sparse_unknown = if ("cohort_context_lambda_sparse_unknown" %in% names(rr)) as.numeric(rr$cohort_context_lambda_sparse_unknown) else NA_real_,
       status = "error",
       cached = FALSE,
       error_message = error_message[[i]],
@@ -985,6 +1157,7 @@ run_cohort_transition_task_group <- function(task_tbl,
                                              n0,
                                              nb,
                                              correct_efflux,
+                                             n_cores = 1L,
                                              diploid_state,
                                              force_refit) {
   if (!nrow(task_tbl)) {
@@ -1000,6 +1173,37 @@ run_cohort_transition_task_group <- function(task_tbl,
   }
   if (!length(cohort_transition_version) || is.na(cohort_transition_version) || !nzchar(cohort_transition_version)) {
     cohort_transition_version <- "contextual"
+  }
+  cohort_contextual_apply_to <- if ("cohort_contextual_apply_to" %in% names(task_tbl)) {
+    as.character(task_tbl$cohort_contextual_apply_to[[1]])
+  } else {
+    "all"
+  }
+  if (!length(cohort_contextual_apply_to) || is.na(cohort_contextual_apply_to) || !nzchar(cohort_contextual_apply_to)) {
+    cohort_contextual_apply_to <- "all"
+  }
+  cohort_context_keep_baseline_when_sparse <- if ("cohort_context_keep_baseline_when_sparse" %in% names(task_tbl)) {
+    as.logical(task_tbl$cohort_context_keep_baseline_when_sparse[[1]])
+  } else {
+    TRUE
+  }
+  if (!length(cohort_context_keep_baseline_when_sparse) || is.na(cohort_context_keep_baseline_when_sparse[[1L]])) {
+    cohort_context_keep_baseline_when_sparse <- TRUE
+  } else {
+    cohort_context_keep_baseline_when_sparse <- cohort_context_keep_baseline_when_sparse[[1L]]
+  }
+  cohort_context_lambda_sparse_unknown <- if ("cohort_context_lambda_sparse_unknown" %in% names(task_tbl)) {
+    suppressWarnings(as.numeric(task_tbl$cohort_context_lambda_sparse_unknown[[1]]))
+  } else {
+    0
+  }
+  if (!length(cohort_context_lambda_sparse_unknown) ||
+      is.na(cohort_context_lambda_sparse_unknown[[1L]]) ||
+      !is.finite(cohort_context_lambda_sparse_unknown[[1L]]) ||
+      cohort_context_lambda_sparse_unknown[[1L]] < 0) {
+    cohort_context_lambda_sparse_unknown <- 0
+  } else {
+    cohort_context_lambda_sparse_unknown <- cohort_context_lambda_sparse_unknown[[1L]]
   }
 
   if (!force_refit) {
@@ -1052,6 +1256,12 @@ run_cohort_transition_task_group <- function(task_tbl,
   if (!nrow(eligible_task_tbl)) {
     return(missing_base_rows)
   }
+  cohort_refit_cores <- suppressWarnings(as.integer(n_cores))
+  if (!length(cohort_refit_cores) || is.na(cohort_refit_cores[[1L]]) || cohort_refit_cores[[1L]] < 1L) {
+    cohort_refit_cores <- 1L
+  } else {
+    cohort_refit_cores <- min(cohort_refit_cores[[1L]], max(1L, nrow(eligible_task_tbl)))
+  }
 
   cohort_outdir <- dirname(as.character(eligible_task_tbl$outdir[[1]]))
   two_shell_root <- file.path(fit_root, "nn_prior_empirical_two_shell")
@@ -1076,7 +1286,11 @@ run_cohort_transition_task_group <- function(task_tbl,
     "ALFA-K cohort_transition start: minobs=", minobs_value,
     " | pm=", pm_to_label(pm_value),
     " | version=", cohort_transition_version,
-    " | patients=", nrow(eligible_task_tbl)
+    " | contextual_apply_to=", cohort_contextual_apply_to,
+    " | keep_sparse_baseline=", cohort_context_keep_baseline_when_sparse,
+    " | sparse_unknown_lambda=", signif(cohort_context_lambda_sparse_unknown, 4),
+    " | patients=", nrow(eligible_task_tbl),
+    " | refit_cores=", cohort_refit_cores
   )
   cohort_result <- tryCatch(
     {
@@ -1096,6 +1310,9 @@ run_cohort_transition_task_group <- function(task_tbl,
         two_shell_integrity_check = "strict",
         base_nn_prior = "empirical_two_shell",
         cohort_transition_version = cohort_transition_version,
+        cohort_contextual_apply_to = cohort_contextual_apply_to,
+        cohort_context_keep_baseline_when_sparse = cohort_context_keep_baseline_when_sparse,
+        cohort_context_lambda_sparse_unknown = cohort_context_lambda_sparse_unknown,
         minobs = minobs_value,
         nboot = nboot,
         n0 = n0,
@@ -1104,6 +1321,8 @@ run_cohort_transition_task_group <- function(task_tbl,
         passage_times = NULL,
         allow_noninteger_counts = FALSE,
         correct_efflux = correct_efflux,
+        cohort_refit_cores = cohort_refit_cores,
+        cohort_refit_seed = as.integer(eligible_task_tbl$benchmark_seed[[1]]),
         nn_prior_grid_n = as.integer(eligible_task_tbl$nn_prior_grid_n[[1]]),
         nn_prior_fit_subset = as.character(eligible_task_tbl$nn_prior_fit_subset[[1]]),
         nn_prior_zero_exposure_quantile = as.numeric(eligible_task_tbl$nn_prior_zero_exposure_quantile[[1]]),
@@ -1131,6 +1350,9 @@ run_cohort_transition_task_group <- function(task_tbl,
       "ALFA-K cohort_transition error: minobs=", minobs_value,
       " | pm=", pm_to_label(pm_value),
       " | version=", cohort_transition_version,
+      " | contextual_apply_to=", cohort_contextual_apply_to,
+      " | keep_sparse_baseline=", cohort_context_keep_baseline_when_sparse,
+      " | sparse_unknown_lambda=", signif(cohort_context_lambda_sparse_unknown, 4),
       " | ", cohort_error
     )
     return(dplyr::bind_rows(
@@ -1173,6 +1395,9 @@ run_cohort_transition_task_group <- function(task_tbl,
     "ALFA-K cohort_transition done: minobs=", minobs_value,
     " | pm=", pm_to_label(pm_value),
     " | version=", cohort_transition_version,
+    " | contextual_apply_to=", cohort_contextual_apply_to,
+    " | keep_sparse_baseline=", cohort_context_keep_baseline_when_sparse,
+    " | sparse_unknown_lambda=", signif(cohort_context_lambda_sparse_unknown, 4),
     " | ok=", nrow(adopted_tbl),
     " | error=", nrow(incomplete_rows) + nrow(missing_base_rows)
   )
@@ -1187,7 +1412,11 @@ run_cohort_transition_tasks <- function(task_tbl,
                                         n0,
                                         nb,
                                         correct_efflux,
+                                        n_cores = 1L,
                                         cohort_transition_version = "contextual",
+                                        cohort_contextual_apply_to = "all",
+                                        cohort_context_keep_baseline_when_sparse = TRUE,
+                                        cohort_context_lambda_sparse_unknown = 0,
                                         diploid_state,
                                         force_refit) {
   cohort_transition_version_requested <- as.character(cohort_transition_version)
@@ -1198,16 +1427,61 @@ run_cohort_transition_tasks <- function(task_tbl,
   } else {
     cohort_transition_version_requested <- cohort_transition_version_requested[[1L]]
   }
+  cohort_contextual_apply_to_requested <- as.character(cohort_contextual_apply_to)
+  if (!length(cohort_contextual_apply_to_requested) ||
+      is.na(cohort_contextual_apply_to_requested[[1L]]) ||
+      !nzchar(cohort_contextual_apply_to_requested[[1L]])) {
+    cohort_contextual_apply_to_requested <- "all"
+  } else {
+    cohort_contextual_apply_to_requested <- cohort_contextual_apply_to_requested[[1L]]
+  }
+  cohort_context_keep_baseline_when_sparse_requested <- as.logical(cohort_context_keep_baseline_when_sparse)
+  if (!length(cohort_context_keep_baseline_when_sparse_requested) ||
+      is.na(cohort_context_keep_baseline_when_sparse_requested[[1L]])) {
+    cohort_context_keep_baseline_when_sparse_requested <- TRUE
+  } else {
+    cohort_context_keep_baseline_when_sparse_requested <- cohort_context_keep_baseline_when_sparse_requested[[1L]]
+  }
+  cohort_context_lambda_sparse_unknown_requested <- suppressWarnings(as.numeric(cohort_context_lambda_sparse_unknown))
+  if (!length(cohort_context_lambda_sparse_unknown_requested) ||
+      is.na(cohort_context_lambda_sparse_unknown_requested[[1L]]) ||
+      !is.finite(cohort_context_lambda_sparse_unknown_requested[[1L]]) ||
+      cohort_context_lambda_sparse_unknown_requested[[1L]] < 0) {
+    cohort_context_lambda_sparse_unknown_requested <- 0
+  } else {
+    cohort_context_lambda_sparse_unknown_requested <- cohort_context_lambda_sparse_unknown_requested[[1L]]
+  }
   cohort_task_tbl <- task_tbl %>%
     dplyr::filter(nn_prior == "cohort_transition")
   if (!"cohort_transition_version" %in% names(cohort_task_tbl)) {
     cohort_task_tbl$cohort_transition_version <- cohort_transition_version_requested
+  }
+  if (!"cohort_contextual_apply_to" %in% names(cohort_task_tbl)) {
+    cohort_task_tbl$cohort_contextual_apply_to <- cohort_contextual_apply_to_requested
+  }
+  if (!"cohort_context_keep_baseline_when_sparse" %in% names(cohort_task_tbl)) {
+    cohort_task_tbl$cohort_context_keep_baseline_when_sparse <- cohort_context_keep_baseline_when_sparse_requested
+  }
+  if (!"cohort_context_lambda_sparse_unknown" %in% names(cohort_task_tbl)) {
+    cohort_task_tbl$cohort_context_lambda_sparse_unknown <- cohort_context_lambda_sparse_unknown_requested
   }
   cohort_task_tbl <- cohort_task_tbl %>%
     dplyr::mutate(cohort_transition_version = dplyr::if_else(
       is.na(.data$cohort_transition_version) | !nzchar(.data$cohort_transition_version),
       cohort_transition_version_requested,
       as.character(.data$cohort_transition_version)
+    ), cohort_contextual_apply_to = dplyr::if_else(
+      is.na(.data$cohort_contextual_apply_to) | !nzchar(.data$cohort_contextual_apply_to),
+      cohort_contextual_apply_to_requested,
+      as.character(.data$cohort_contextual_apply_to)
+    ), cohort_context_keep_baseline_when_sparse = dplyr::if_else(
+      is.na(.data$cohort_context_keep_baseline_when_sparse),
+      cohort_context_keep_baseline_when_sparse_requested,
+      as.logical(.data$cohort_context_keep_baseline_when_sparse)
+    ), cohort_context_lambda_sparse_unknown = dplyr::if_else(
+      is.na(.data$cohort_context_lambda_sparse_unknown),
+      cohort_context_lambda_sparse_unknown_requested,
+      as.numeric(.data$cohort_context_lambda_sparse_unknown)
     )) %>%
     dplyr::arrange(minobs, pm, factor(patient_id, levels = sort_pid_levels(patient_id)))
   if (!nrow(cohort_task_tbl)) {
@@ -1224,6 +1498,7 @@ run_cohort_transition_tasks <- function(task_tbl,
       n0 = n0,
       nb = nb,
       correct_efflux = correct_efflux,
+      n_cores = n_cores,
       diploid_state = diploid_state,
       force_refit = force_refit
     ) %>%
@@ -1245,7 +1520,10 @@ adopt_existing_task_outputs <- function(task_tbl, fit_results_tbl = NULL) {
     if (cohort_transition_output_matches(
       outdir = rr$outdir,
       nn_prior = as.character(rr$nn_prior),
-      cohort_transition_version = if ("cohort_transition_version" %in% names(rr)) rr$cohort_transition_version else NA_character_
+      cohort_transition_version = if ("cohort_transition_version" %in% names(rr)) rr$cohort_transition_version else NA_character_,
+      cohort_contextual_apply_to = if ("cohort_contextual_apply_to" %in% names(rr)) rr$cohort_contextual_apply_to else NA_character_,
+      cohort_context_keep_baseline_when_sparse = if ("cohort_context_keep_baseline_when_sparse" %in% names(rr)) rr$cohort_context_keep_baseline_when_sparse else NA,
+      cohort_context_lambda_sparse_unknown = if ("cohort_context_lambda_sparse_unknown" %in% names(rr)) rr$cohort_context_lambda_sparse_unknown else NA_real_
     )) {
       return(NULL)
     }
@@ -1262,7 +1540,10 @@ adopt_existing_task_outputs <- function(task_tbl, fit_results_tbl = NULL) {
         !cohort_transition_output_matches(
           outdir = rr$outdir,
           nn_prior = as.character(rr$nn_prior),
-          cohort_transition_version = if ("cohort_transition_version" %in% names(rr)) rr$cohort_transition_version else NA_character_
+          cohort_transition_version = if ("cohort_transition_version" %in% names(rr)) rr$cohort_transition_version else NA_character_,
+          cohort_contextual_apply_to = if ("cohort_contextual_apply_to" %in% names(rr)) rr$cohort_contextual_apply_to else NA_character_,
+          cohort_context_keep_baseline_when_sparse = if ("cohort_context_keep_baseline_when_sparse" %in% names(rr)) rr$cohort_context_keep_baseline_when_sparse else NA,
+          cohort_context_lambda_sparse_unknown = if ("cohort_context_lambda_sparse_unknown" %in% names(rr)) rr$cohort_context_lambda_sparse_unknown else NA_real_
         )) {
       return(NULL)
     }
@@ -1289,6 +1570,9 @@ adopt_existing_task_outputs <- function(task_tbl, fit_results_tbl = NULL) {
       nn_prior_two_step_support_min = rr$nn_prior_two_step_support_min,
       nn_prior_two_step_cap_floor = rr$nn_prior_two_step_cap_floor,
       cohort_transition_version = if ("cohort_transition_version" %in% names(rr)) rr$cohort_transition_version else NA_character_,
+      cohort_contextual_apply_to = if ("cohort_contextual_apply_to" %in% names(rr)) rr$cohort_contextual_apply_to else NA_character_,
+      cohort_context_keep_baseline_when_sparse = if ("cohort_context_keep_baseline_when_sparse" %in% names(rr)) rr$cohort_context_keep_baseline_when_sparse else NA,
+      cohort_context_lambda_sparse_unknown = if ("cohort_context_lambda_sparse_unknown" %in% names(rr)) rr$cohort_context_lambda_sparse_unknown else NA_real_,
       warning_log_path = file.path(rr$outdir, "fit_warnings.log"),
       landscape_path = file.path(rr$outdir, "landscape.Rds"),
       bootstrap_path = file.path(rr$outdir, "bootstrap_res.Rds"),

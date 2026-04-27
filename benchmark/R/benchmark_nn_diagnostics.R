@@ -519,6 +519,9 @@ run_nn_holdout_diagnostics <- function(ctx, input_index_tbl, parameter_spec_tbl)
                 nn_prior_two_step_support = ctx$nn_prior_two_step_support_use,
                 nn_prior_two_step_support_min = ctx$nn_prior_two_step_support_min_use,
                 nn_prior_two_step_cap_floor = ctx$nn_prior_two_step_cap_floor_use,
+                cohort_contextual_apply_to = ctx$cohort_contextual_apply_to_use,
+                cohort_context_keep_baseline_when_sparse = ctx$cohort_context_keep_baseline_when_sparse_use,
+                cohort_context_lambda_sparse_unknown = ctx$cohort_context_lambda_sparse_unknown_use,
                 force_refit = ctx$force_refit_use
               ),
               error = function(e) tibble::tibble(status = "error", error_message = conditionMessage(e))
@@ -690,6 +693,9 @@ run_nn_simulation_diagnostics <- function(ctx, parameter_spec_tbl) {
           nn_prior_two_step_support = ctx$nn_prior_two_step_support_use,
           nn_prior_two_step_support_min = ctx$nn_prior_two_step_support_min_use,
           nn_prior_two_step_cap_floor = ctx$nn_prior_two_step_cap_floor_use,
+          cohort_contextual_apply_to = ctx$cohort_contextual_apply_to_use,
+          cohort_context_keep_baseline_when_sparse = ctx$cohort_context_keep_baseline_when_sparse_use,
+          cohort_context_lambda_sparse_unknown = ctx$cohort_context_lambda_sparse_unknown_use,
           force_refit = ctx$force_refit_use
         ),
         error = function(e) tibble::tibble(status = "error", error_message = conditionMessage(e))

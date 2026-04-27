@@ -260,6 +260,24 @@ build_benchmark_context <- function(params, repo_dir = resolve_repo_dir()) {
   } else {
     match.arg(as.character(params$cohort_transition_version), c("contextual", "v2", "v1"))
   }
+  cohort_contextual_apply_to_use <- if (is.null(params$cohort_contextual_apply_to)) {
+    "all"
+  } else {
+    match.arg(as.character(params$cohort_contextual_apply_to), c("zero_only", "low_information", "all"))
+  }
+  cohort_context_keep_baseline_when_sparse_use <- if (is.null(params$cohort_context_keep_baseline_when_sparse)) {
+    TRUE
+  } else {
+    isTRUE(params$cohort_context_keep_baseline_when_sparse)
+  }
+  cohort_context_lambda_sparse_unknown_use <- if (is.null(params$cohort_context_lambda_sparse_unknown)) {
+    0
+  } else {
+    suppressWarnings(as.numeric(params$cohort_context_lambda_sparse_unknown))
+  }
+  if (!is.finite(cohort_context_lambda_sparse_unknown_use) || cohort_context_lambda_sparse_unknown_use < 0) {
+    stop("cohort_context_lambda_sparse_unknown must be a non-negative finite number.")
+  }
 
   force_refit_use <- isTRUE(params$force_refit)
   rebuild_inputs_use <- isTRUE(params$rebuild_inputs)
@@ -358,6 +376,9 @@ build_benchmark_context <- function(params, repo_dir = resolve_repo_dir()) {
     nn_prior_two_step_support_min_use = nn_prior_two_step_support_min_use,
     nn_prior_two_step_cap_floor_use = nn_prior_two_step_cap_floor_use,
     cohort_transition_version_use = cohort_transition_version_use,
+    cohort_contextual_apply_to_use = cohort_contextual_apply_to_use,
+    cohort_context_keep_baseline_when_sparse_use = cohort_context_keep_baseline_when_sparse_use,
+    cohort_context_lambda_sparse_unknown_use = cohort_context_lambda_sparse_unknown_use,
     force_refit_use = force_refit_use,
     rebuild_inputs_use = rebuild_inputs_use,
     run_benchmark_use = run_benchmark_use,
@@ -1560,6 +1581,9 @@ run_benchmark_pipeline <- function(ctx) {
     nn_prior_two_step_support_min = ctx$nn_prior_two_step_support_min_use,
     nn_prior_two_step_cap_floor = ctx$nn_prior_two_step_cap_floor_use,
     cohort_transition_version = ctx$cohort_transition_version_use,
+    cohort_contextual_apply_to = ctx$cohort_contextual_apply_to_use,
+    cohort_context_keep_baseline_when_sparse = ctx$cohort_context_keep_baseline_when_sparse_use,
+    cohort_context_lambda_sparse_unknown = ctx$cohort_context_lambda_sparse_unknown_use,
     nboot = ctx$nboot_use,
     n0 = ctx$n0_use,
     nb = ctx$nb_use,
@@ -1589,7 +1613,11 @@ run_benchmark_pipeline <- function(ctx) {
       n0 = ctx$n0_use,
       nb = ctx$nb_use,
       correct_efflux = ctx$correct_efflux_use,
+      n_cores = ctx$n_cores_use,
       cohort_transition_version = ctx$cohort_transition_version_use,
+      cohort_contextual_apply_to = ctx$cohort_contextual_apply_to_use,
+      cohort_context_keep_baseline_when_sparse = ctx$cohort_context_keep_baseline_when_sparse_use,
+      cohort_context_lambda_sparse_unknown = ctx$cohort_context_lambda_sparse_unknown_use,
       diploid_state = ctx$diploid_state,
       force_refit = ctx$force_refit_use
     )

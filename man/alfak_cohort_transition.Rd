@@ -133,6 +133,8 @@ alfak_cohort_transition(
   cohort_transition_patient_shift_shrinkage_sd = 0.1,
   cohort_transition_zero_as_censoring_only = TRUE,
   cohort_transition_save_diagnostics = TRUE,
+  cohort_refit_cores = 1L,
+  cohort_refit_seed = NULL,
   ...
 )
 }
@@ -297,6 +299,12 @@ censoring can impose on a group mean away from observed transition effects.}
 evidence only, never fake observed delta labels.}
 
 \item{cohort_transition_save_diagnostics}{Save cohort diagnostic RDS files.}
+
+\item{cohort_refit_cores}{Number of patient refits to run in parallel. On
+non-Unix platforms this falls back to serial execution.}
+
+\item{cohort_refit_seed}{Optional integer seed used to make per-patient
+refits reproducible across serial and parallel execution.}
 
 \item{...}{Additional arguments forwarded to \code{alfak()}.}
 }

@@ -3941,7 +3941,7 @@ apply_contextual_cohort_overlay <- function(item,
   context_target <- parent_combined + combined$context_delta_mu[1]
   zero_multiplier <- if (isTRUE(child_is_zero)) pmin(1, pmax(0, zero_info$zero_informativeness_score[1])) else 1
   if (!is.finite(zero_multiplier) || isTRUE(non_identifiable_zero)) zero_multiplier <- 0
-  class_disallowed <- combined$context_effect_class %in% c("context_high_variable", "context_sparse_unknown", "context_conflicting_zero", "mixed_context")
+  class_disallowed <- combined$context_effect_class %in% c("context_conflicting_zero", "mixed_context")
   if (isTRUE(cohort_context_keep_baseline_when_high_variable) && isTRUE(combined$context_high_variable_flag[1])) class_disallowed <- TRUE
   if (isTRUE(cohort_context_keep_baseline_when_sparse) && isTRUE(combined$context_sparse_unknown_flag[1])) class_disallowed <- TRUE
   effective_lambda <- cohort_context_lambda * combined$context_lambda[1] * zero_multiplier * combined$context_support_score[1]
@@ -4852,6 +4852,10 @@ refit_patient_with_cohort_transition_prior <- function(patient,
 #' @param cohort_transition_zero_as_censoring_only Treat zeros as censoring
 #'   evidence only, never fake observed delta labels.
 #' @param cohort_transition_save_diagnostics Save cohort diagnostic RDS files.
+#' @param cohort_refit_cores Number of patient refits to run in parallel. On
+#'   non-Unix platforms this falls back to serial execution.
+#' @param cohort_refit_seed Optional integer seed used to make per-patient
+#'   refits reproducible across serial and parallel execution.
 #' @param ... Additional arguments forwarded to `alfak()`.
 #' @return Invisibly, a list with status tables, records, prior, diagnostics, and patient output paths.
 #' @export
@@ -5002,6 +5006,8 @@ alfak_cohort_transition <- function(patients,
                                     cohort_transition_patient_shift_shrinkage_sd = 0.10,
                                     cohort_transition_zero_as_censoring_only = TRUE,
                                     cohort_transition_save_diagnostics = TRUE,
+                                    cohort_refit_cores = 1L,
+                                    cohort_refit_seed = NULL,
                                     ...) {
   two_shell_integrity_check <- match.arg(two_shell_integrity_check)
   cohort_transition_grouping <- match.arg(cohort_transition_grouping)
@@ -5017,6 +5023,20 @@ alfak_cohort_transition <- function(patients,
   cohort_context_profile_transform <- match.arg(cohort_context_profile_transform)
   cohort_context_profile_distance <- match.arg(cohort_context_profile_distance)
   cohort_context_event_match <- match.arg(cohort_context_event_match)
+  cohort_refit_cores <- suppressWarnings(as.integer(cohort_refit_cores))
+  if (!length(cohort_refit_cores) || is.na(cohort_refit_cores[[1L]]) || cohort_refit_cores[[1L]] < 1L) {
+    cohort_refit_cores <- 1L
+  } else {
+    cohort_refit_cores <- cohort_refit_cores[[1L]]
+  }
+  if (!is.null(cohort_refit_seed)) {
+    cohort_refit_seed <- suppressWarnings(as.integer(cohort_refit_seed))
+    if (!length(cohort_refit_seed) || is.na(cohort_refit_seed[[1L]])) {
+      cohort_refit_seed <- NULL
+    } else {
+      cohort_refit_seed <- cohort_refit_seed[[1L]]
+    }
+  }
   dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
   alfak_run_log_path(file.path(outdir, "alfak_run.log"))
   alfak_log_event(
@@ -5229,9 +5249,27 @@ alfak_cohort_transition <- function(patients,
 
   patient_outdirs <- stats::setNames(file.path(outdir, patient_ids), patient_ids)
   cohort_log_path <- file.path(outdir, "alfak_run.log")
-  refit_status <- lapply(patient_ids, function(patient_id) {
+  refit_cores_use <- min(cohort_refit_cores, max(1L, length(patient_ids)))
+  alfak_run_log_path(cohort_log_path)
+  alfak_log_event(
+    level = "INFO",
+    component = "alfak_cohort_transition",
+    detail = sprintf(
+      "stage=patient_refit dispatch n_patients=%d cores=%d",
+      length(patient_ids),
+      refit_cores_use
+    )
+  )
+
+  refit_one_patient <- function(patient_index) {
+    patient_id <- patient_ids[[patient_index]]
     patient_outdir <- patient_outdirs[[patient_id]]
-    alfak_run_log_path(cohort_log_path)
+    patient_log_path <- file.path(patient_outdir, "alfak_run.log")
+    if (!is.null(cohort_refit_seed)) {
+      patient_seed <- as.integer(((as.numeric(cohort_refit_seed) + patient_index - 2) %% (.Machine$integer.max - 1)) + 1)
+      set.seed(patient_seed)
+    }
+    alfak_run_log_path(patient_log_path)
     alfak_log_event(
       level = "INFO",
       component = "alfak_cohort_transition",
@@ -5271,7 +5309,7 @@ alfak_cohort_transition <- function(patients,
           cohort_context_keep_baseline_when_high_variable = cohort_context_keep_baseline_when_high_variable,
           ...
         )
-        alfak_run_log_path(cohort_log_path)
+        alfak_run_log_path(patient_log_path)
         alfak_log_event(
           level = "INFO",
           component = "alfak_cohort_transition",
@@ -5280,7 +5318,7 @@ alfak_cohort_transition <- function(patients,
         list(ok = TRUE, error_message = NA_character_, xval = patient_fit)
       },
       error = function(e) {
-        alfak_run_log_path(cohort_log_path)
+        alfak_run_log_path(patient_log_path)
         alfak_log_event(
           level = "ERROR",
           component = "alfak_cohort_transition",
@@ -5296,9 +5334,30 @@ alfak_cohort_transition <- function(patients,
       error_message = res$error_message,
       stringsAsFactors = FALSE
     )
-  })
+  }
+  refit_status <- if (.Platform$OS.type == "unix" && refit_cores_use > 1L) {
+    parallel::mclapply(
+      seq_along(patient_ids),
+      refit_one_patient,
+      mc.cores = refit_cores_use,
+      mc.preschedule = FALSE,
+      mc.set.seed = is.null(cohort_refit_seed)
+    )
+  } else {
+    lapply(seq_along(patient_ids), refit_one_patient)
+  }
   refit_status <- do.call(rbind, refit_status)
   saveRDS(refit_status, file.path(outdir, "cohort_transition_refit_status.Rds"))
+  alfak_run_log_path(cohort_log_path)
+  alfak_log_event(
+    level = "INFO",
+    component = "alfak_cohort_transition",
+    detail = sprintf(
+      "stage=patient_refit complete ok=%d error=%d",
+      sum(refit_status$ok %in% TRUE),
+      sum(!(refit_status$ok %in% TRUE))
+    )
+  )
 
   invisible(list(
     two_shell_status = two_shell_status,

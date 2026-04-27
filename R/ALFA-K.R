@@ -4752,6 +4752,9 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	      nn_prior_diag$cohort_contextual_apply_to <- cohort_contextual_apply_to
 	      nn_prior_diag$cohort_contextual_overlay_base <- cohort_contextual_overlay_base
 	      nn_prior_diag$cohort_context_lambda <- cohort_context_lambda
+	      nn_prior_diag$cohort_context_keep_baseline_when_sparse <- cohort_context_keep_baseline_when_sparse
+	      nn_prior_diag$cohort_context_keep_baseline_when_high_variable <- cohort_context_keep_baseline_when_high_variable
+	      nn_prior_diag$cohort_context_lambda_sparse_unknown <- cohort_transition_prior_use$context_feature_config$lambda_sparse_unknown %||% NA_real_
 	      nn_prior_diag$n_cohort_overlay_nodes_updated <- sum(
 	        nn_cohort_transition_node_diagnostics$cohort_update_applied,
 	        na.rm = TRUE

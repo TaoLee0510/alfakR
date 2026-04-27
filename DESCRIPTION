@@ -16,6 +16,7 @@ Imports:
     fields,
     Matrix,
     methods,
+    parallel,
     quadprog,
     Rcpp,
     RSpectra,
@@ -28,3 +29,34 @@ Suggests:
     ggplot2,
     testthat (>= 3.0.0)
 Config/testthat/edition: 3
+Config/benchmark/working-directory: /Users/4482173/Documents/GitHub/alfakR
+Config/benchmark/full-run-command:
+    cd /Users/4482173/Documents/GitHub/alfakR
+    Rscript -e 'pkgload::load_all(".", quiet = TRUE); rmarkdown::render("benchmark/scr/run_benchmark_alfak.Rmd")'
+Config/benchmark/html-only-command:
+    cd /Users/4482173/Documents/GitHub/alfakR
+    Rscript -e 'pkgload::load_all(".", quiet = TRUE); rmarkdown::render("benchmark/scr/run_benchmark_alfak.Rmd", params = list(run_benchmark = FALSE, run_nn_holdout = FALSE))'
+Config/benchmark/override-cores-command:
+    cd /Users/4482173/Documents/GitHub/alfakR
+    Rscript -e 'pkgload::load_all(".", quiet = TRUE); rmarkdown::render("benchmark/scr/run_benchmark_alfak.Rmd", params = list(n_cores = 12))'
+Config/benchmark/defaults:
+    The benchmark Rmd defaults to run_benchmark = TRUE, force_refit = FALSE,
+    n_cores = 9, cohort_transition_version = "contextual",
+    cohort_contextual_apply_to = "all",
+    cohort_context_keep_baseline_when_sparse = FALSE,
+    cohort_context_lambda_sparse_unknown = 0.10, and run_nn_holdout = TRUE.
+Config/benchmark/behavior:
+    The command loads the current checkout with pkgload::load_all(), so it uses
+    this repository's source code rather than an already installed alfakR
+    package. Existing complete and version-compatible fit outputs are reused;
+    missing or incompatible outputs are run. For cohort_transition/contextual
+    outputs, cache compatibility requires both cohort_transition_version and
+    cohort_contextual_apply_to to match the requested benchmark settings.
+    Regular nn_prior tasks are parallelized with n_cores.
+    cohort_transition/contextual first learns one cohort prior per pm x minobs
+    group, then parallelizes per-patient contextual refits with the same n_cores
+    value on Unix platforms.
+Config/benchmark/output:
+    The default HTML report is written next to
+    benchmark/scr/run_benchmark_alfak.Rmd. Fit outputs are written under
+    benchmark/results/fits.

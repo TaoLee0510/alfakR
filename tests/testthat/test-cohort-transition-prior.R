@@ -639,6 +639,30 @@ test_that("high-variable and sparse contexts do not aggressively update", {
   expect_equal(sparse_fit$f_final, 0.2)
 })
 
+test_that("sparse contextual overlays can update when explicitly enabled", {
+  sparse_prior <- make_context_prior(
+    make_context_records("patient_A", delta = -0.1),
+    cohort_context_min_patients = 3L,
+    cohort_context_lambda_sparse_unknown = 0.10
+  )
+  sparse_fit <- alfakR::apply_contextual_cohort_overlay(
+    item = make_ct_overlay_item(child_obs = c(2, 2), projected_exposure = 10),
+    child_name = "2.2.3",
+    build_opt_fc = ct_overlay_builder,
+    search_interval = c(-1, 1),
+    prior_use = alfakR:::cohort_transition_prior_for_patient(sparse_prior, "patient_Z"),
+    f_two_shell_baseline = 0.2,
+    nn_present = TRUE,
+    cohort_contextual_apply_to = "all",
+    cohort_context_keep_baseline_when_sparse = FALSE,
+    cohort_context_max_borrowing_fraction = 0.9
+  )
+  expect_true(any(sparse_fit$diagnostics$context_sparse_unknown_flag))
+  expect_true(any(sparse_fit$diagnostics$cohort_update_applied))
+  expect_gt(max(sparse_fit$diagnostics$effective_context_lambda, na.rm = TRUE), 0)
+  expect_lt(sparse_fit$f_final, 0.2)
+})
+
 test_that("contextual lookup splits background-dependent effects for the same event", {
   low <- make_context_records(
     c("low_A", "low_B", "low_C"),
@@ -909,6 +933,57 @@ test_that("cohort wrapper refits patients separately and does not pool raw count
     refit_patient_with_cohort_transition_prior = function(patient, patient_id, outdir, cohort_transition_prior, ...) {
       seen$patient_ids <- c(seen$patient_ids, patient_id)
       seen$nrows <- c(seen$nrows, nrow(patient$x))
+      invisible(0)
+    },
+    .package = "alfakR"
+  )
+})
+
+test_that("cohort wrapper can refit patients in parallel", {
+  patients <- list(patient_A = make_ct_yi(), patient_B = make_ct_yi())
+  outdir <- tempfile("cohort_parallel_wrapper_")
+  prior <- alfakR::learn_cohort_transition_prior(
+    make_ct_records(c("patient_A", "patient_B"), c(0.1, 0.2)),
+    leave_one_patient_out = FALSE,
+    grouping = "gain_loss_chr",
+    cohort_transition_min_patients_per_group = 1L,
+    cohort_transition_min_effective_n = 1
+  )
+
+  testthat::with_mocked_bindings(
+    {
+      res <- alfakR::alfak_cohort_transition(
+        patients = patients,
+        outdir = outdir,
+        minobs = 20,
+        nboot = 1,
+        cohort_transition_grouping = "gain_loss_chr",
+        cohort_refit_cores = 2L,
+        cohort_refit_seed = 100L
+      )
+      marker_paths <- file.path(res$patient_outdirs, "parallel_marker.Rds")
+      expect_true(all(file.exists(marker_paths)))
+      markers <- lapply(marker_paths, readRDS)
+      expect_equal(vapply(markers, `[[`, character(1), "patient_id"), c("patient_A", "patient_B"))
+      expect_false(identical(markers[[1]]$seed_draw, markers[[2]]$seed_draw))
+    },
+    ensure_two_shell_fits = function(...) {
+      data.frame(
+        patient_id = c("patient_A", "patient_B"),
+        fit_dir = c("fit_A", "fit_B"),
+        pm_tag = "pm_0.00005",
+        minobs_tag = "MINIOBS20",
+        stringsAsFactors = FALSE
+      )
+    },
+    extract_cohort_transition_records = function(...) make_ct_records(c("patient_A", "patient_B"), c(0.1, 0.2)),
+    learn_cohort_transition_prior = function(...) prior,
+    refit_patient_with_cohort_transition_prior = function(patient, patient_id, outdir, cohort_transition_prior, ...) {
+      dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+      saveRDS(
+        list(patient_id = patient_id, seed_draw = stats::runif(1)),
+        file.path(outdir, "parallel_marker.Rds")
+      )
       invisible(0)
     },
     .package = "alfakR"
