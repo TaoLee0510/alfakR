@@ -51,6 +51,21 @@ params:
   nn_simulation_n: 50
   nn_simulation_seed: 161803
   nn_simulation_scenarios: ["sparse_zero_heavy", "moderate_observed", "two_step_supported"]
+  run_nn_grf_simulation: false
+  nn_grf_simulation_n: 12
+  nn_grf_seed: 424242
+  nn_grf_lambdas: [0.2, 0.4, 0.8, 1.6]
+  nn_grf_training_windows: [2, 4, 8]
+  nn_grf_nboot: 15
+  nn_grf_k_dim: 22
+  nn_grf_n_centroids: 64
+  nn_grf_time_max: 140
+  nn_grf_passage_interval: 20
+  nn_grf_sample_depth: 2000
+  nn_grf_abm_pop_size: 50000
+  nn_grf_abm_delta_t: 1
+  nn_grf_abm_max_pop: 2000000
+  nn_grf_abm_culling_survival: 0.01
   force_refit: false
   rebuild_inputs: false
   run_benchmark: true
@@ -324,6 +339,26 @@ if (nrow(nn_simulation_summary_tbl)) {
   emit_report_table(nn_simulation_summary_tbl, caption = "NN simulation truth-calibration summary")
 } else {
   emit_report_table(empty_note_tbl("NN simulation calibration was not run or produced no estimates."), caption = "NN simulation truth-calibration summary")
+}
+
+nn_grf_simulation_summary_tbl <- benchmark_run$nn_grf_simulation_summary_tbl
+if (nrow(nn_grf_simulation_summary_tbl)) {
+  emit_report_table(
+    nn_grf_simulation_summary_tbl %>%
+      dplyr::mutate(lambda = signif(lambda, 4)),
+    caption = "GRF ABM NN truth-calibration summary by wavelength and training window"
+  )
+} else {
+  emit_report_table(empty_note_tbl("GRF ABM NN calibration was not run or produced no estimates."), caption = "GRF ABM NN truth-calibration summary")
+}
+
+nn_grf_simulation_by_lambda_tbl <- benchmark_run$nn_grf_simulation_by_lambda_tbl
+if (nrow(nn_grf_simulation_by_lambda_tbl)) {
+  emit_report_table(
+    nn_grf_simulation_by_lambda_tbl %>%
+      dplyr::mutate(lambda = signif(lambda, 4)),
+    caption = "GRF ABM NN truth-calibration summary pooled over training windows"
+  )
 }
 ```
 

@@ -591,6 +591,491 @@ run_nn_holdout_diagnostics <- function(ctx, input_index_tbl, parameter_spec_tbl)
   list(summary_tbl = summary_tbl, prediction_tbl = prediction_tbl)
 }
 
+format_grf_label <- function(x) {
+  x <- format(as.numeric(x), scientific = FALSE, trim = TRUE)
+  gsub("[^A-Za-z0-9]+", "p", x)
+}
+
+compute_grf_fitness_truth <- function(karyotypes, centroids, lambda) {
+  karyotypes <- unique(as.character(karyotypes))
+  karyotypes <- karyotypes[nzchar(karyotypes)]
+  if (!length(karyotypes)) {
+    return(stats::setNames(numeric(0), character(0)))
+  }
+  if (!is.matrix(centroids) || !is.numeric(centroids) || !nrow(centroids)) {
+    stop("`centroids` must be a non-empty numeric matrix.", call. = FALSE)
+  }
+  if (!is.numeric(lambda) || length(lambda) != 1L || !is.finite(lambda) || lambda <= 0) {
+    stop("`lambda` must be a positive finite scalar.", call. = FALSE)
+  }
+
+  k_mat <- alfakR:::parse_karyotype_ids(karyotypes)
+  if (ncol(k_mat) != ncol(centroids)) {
+    stop("Karyotype dimension does not match GRF centroid dimension.", call. = FALSE)
+  }
+
+  out <- vapply(seq_len(nrow(k_mat)), function(i) {
+    diffs <- sweep(centroids, 2L, as.numeric(k_mat[i, ]), FUN = "-")
+    distances <- sqrt(rowSums(diffs^2))
+    sum(sin(distances / lambda)) / (pi * sqrt(nrow(centroids)))
+  }, numeric(1))
+  stats::setNames(out, rownames(k_mat))
+}
+
+make_nn_grf_initial_x0 <- function(k_dim = 22L) {
+  k_dim <- as.integer(k_dim)
+  if (!is.finite(k_dim) || k_dim < 2L) {
+    stop("`k_dim` must be an integer >= 2.", call. = FALSE)
+  }
+
+  base <- rep(2L, k_dim)
+  states <- list()
+  for (chr in seq_len(min(k_dim, 8L))) {
+    state <- base
+    state[[chr]] <- if (chr %% 3L == 0L) 1L else 3L
+    states[[length(states) + 1L]] <- state
+  }
+  if (k_dim >= 4L) {
+    state <- base
+    state[1:2] <- c(3L, 3L)
+    states[[length(states) + 1L]] <- state
+    state <- base
+    state[3:4] <- c(1L, 3L)
+    states[[length(states) + 1L]] <- state
+  }
+
+  ids <- unique(vapply(states, function(v) paste(v, collapse = "."), character(1)))
+  weights <- rev(seq_along(ids))
+  weights <- weights / sum(weights)
+  stats::setNames(as.numeric(weights), ids)
+}
+
+make_nn_grf_centroids <- function(lambda, initial_karyotypes, n_centroids, jitter_sd = NULL) {
+  initial_mat <- alfakR:::parse_karyotype_ids(initial_karyotypes)
+  k_dim <- ncol(initial_mat)
+  n_centroids <- as.integer(n_centroids)
+  if (!is.finite(n_centroids) || n_centroids < 1L) {
+    stop("`n_centroids` must be a positive integer.", call. = FALSE)
+  }
+  if (is.null(jitter_sd)) {
+    jitter_sd <- min(0.15, lambda * 0.10)
+  }
+
+  centroids <- matrix(NA_real_, nrow = n_centroids, ncol = k_dim)
+  for (i in seq_len(n_centroids)) {
+    source_idx <- ((i - 1L) %% nrow(initial_mat)) + 1L
+    state <- as.numeric(initial_mat[source_idx, ])
+    chr <- sample.int(k_dim, 1L)
+    direction <- sample(c(-1, 1), 1L)
+    shift <- lambda * pi / 2
+    if (state[[chr]] + direction * shift < 0.25) {
+      direction <- 1
+    }
+    state[[chr]] <- state[[chr]] + direction * shift
+    if (is.finite(jitter_sd) && jitter_sd > 0) {
+      state <- state + stats::rnorm(k_dim, mean = 0, sd = jitter_sd)
+    }
+    centroids[i, ] <- pmax(0.25, state)
+  }
+  centroids
+}
+
+select_nn_grf_training_times <- function(sim_times, training_window) {
+  sim_times <- sort(unique(as.numeric(sim_times)))
+  sim_times <- sim_times[is.finite(sim_times)]
+  training_window <- as.integer(training_window)
+  if (!length(sim_times) || !is.finite(training_window) || training_window < 2L) {
+    stop("At least two GRF training timepoints are required.", call. = FALSE)
+  }
+  if (length(sim_times) < training_window) {
+    stop("ABM output has fewer recorded timepoints than the requested training window.", call. = FALSE)
+  }
+
+  target_times <- seq(min(sim_times), max(sim_times), length.out = training_window)
+  selected_idx <- vapply(target_times, function(tt) which.min(abs(sim_times - tt)), integer(1))
+  selected_idx <- unique(selected_idx)
+  if (length(selected_idx) < training_window) {
+    missing_n <- training_window - length(selected_idx)
+    fill_idx <- setdiff(seq_along(sim_times), selected_idx)
+    selected_idx <- sort(c(selected_idx, utils::head(fill_idx, missing_n)))
+  }
+  sort(sim_times[selected_idx])
+}
+
+build_nn_grf_yi_from_abm <- function(sim_wide, training_window, sample_depth, seed) {
+  if (is.null(sim_wide) || !is.data.frame(sim_wide) || !"time" %in% names(sim_wide)) {
+    stop("`sim_wide` must be a data frame with a `time` column.", call. = FALSE)
+  }
+  training_times <- select_nn_grf_training_times(sim_wide$time, training_window)
+  sample_depth <- as.integer(sample_depth)
+  if (!is.finite(sample_depth) || sample_depth < 1L) {
+    stop("`sample_depth` must be a positive integer.", call. = FALSE)
+  }
+
+  set.seed(seed)
+  count_cols <- setdiff(names(sim_wide), "time")
+  if (!length(count_cols)) {
+    stop("ABM output contains no karyotype columns.", call. = FALSE)
+  }
+
+  count_mat <- matrix(
+    0,
+    nrow = length(count_cols),
+    ncol = length(training_times),
+    dimnames = list(count_cols, format(training_times, scientific = FALSE, trim = TRUE))
+  )
+  for (j in seq_along(training_times)) {
+    row_idx <- which.min(abs(as.numeric(sim_wide$time) - training_times[[j]]))
+    counts <- suppressWarnings(as.numeric(sim_wide[row_idx, count_cols, drop = TRUE]))
+    counts[!is.finite(counts) | counts < 0] <- 0
+    if (sum(counts) <= 0) {
+      stop("ABM output has zero population mass at a selected training time.", call. = FALSE)
+    }
+    count_mat[, j] <- as.integer(stats::rmultinom(1L, size = sample_depth, prob = counts / sum(counts))[, 1L])
+  }
+
+  count_mat <- count_mat[rowSums(count_mat, na.rm = TRUE) > 0, , drop = FALSE]
+  if (!nrow(count_mat)) {
+    stop("Sampled GRF count matrix contains no non-zero karyotypes.", call. = FALSE)
+  }
+  list(x = count_mat, dt = 1)
+}
+
+simulate_nn_prior_grf_abm <- function(seed,
+                                      lambda,
+                                      p,
+                                      k_dim,
+                                      n_centroids,
+                                      time_max,
+                                      passage_interval,
+                                      abm_pop_size,
+                                      abm_delta_t,
+                                      abm_max_pop,
+                                      abm_culling_survival) {
+  set.seed(seed)
+  x0 <- make_nn_grf_initial_x0(k_dim = k_dim)
+  centroids <- make_nn_grf_centroids(
+    lambda = lambda,
+    initial_karyotypes = names(x0),
+    n_centroids = n_centroids
+  )
+  sim_times <- seq(0, time_max, by = passage_interval)
+  if (length(sim_times) < 2L) {
+    stop("GRF simulation needs at least two requested timepoints.", call. = FALSE)
+  }
+  record_interval <- max(1L, as.integer(round(passage_interval / abm_delta_t)))
+
+  sim_wide <- suppressMessages(
+    alfakR::run_abm_simulation_grf(
+      centroids = centroids,
+      lambda = lambda,
+      p = p,
+      times = sim_times,
+      x0 = x0,
+      abm_pop_size = abm_pop_size,
+      abm_delta_t = abm_delta_t,
+      abm_max_pop = abm_max_pop,
+      abm_culling_survival = abm_culling_survival,
+      abm_record_interval = record_interval,
+      abm_seed = seed,
+      normalize_freq = FALSE
+    )
+  )
+
+  list(
+    sim_wide = sim_wide,
+    centroids = centroids,
+    lambda = lambda,
+    p = p,
+    x0 = x0,
+    seed = seed
+  )
+}
+
+extract_nn_grf_child_truth_tbl <- function(fit_row,
+                                           grf_sim,
+                                           yi,
+                                           simulation_id,
+                                           training_window,
+                                           lambda) {
+  if (is.null(fit_row) || !nrow(fit_row) || !identical(as.character(fit_row$status[[1]]), "ok")) {
+    return(tibble::tibble())
+  }
+  boot_obj <- safe_read_rds(file.path(as.character(fit_row$outdir[[1]]), "bootstrap_res.Rds"))
+  child_summary <- summarize_bootstrap_matrix_by_child(boot_obj$nn_fitness)
+  if (!nrow(child_summary)) {
+    return(tibble::tibble())
+  }
+
+  truth <- compute_grf_fitness_truth(child_summary$k, grf_sim$centroids, lambda = lambda)
+  training_counts <- rowSums(as.matrix(yi$x), na.rm = TRUE)
+  observed_count <- training_counts[match(child_summary$k, names(training_counts))]
+  observed_count[is.na(observed_count)] <- 0
+
+  child_summary %>%
+    dplyr::mutate(
+      simulation_id = as.integer(simulation_id),
+      lambda = as.numeric(lambda),
+      training_window = as.integer(training_window),
+      parameter_label = as.character(fit_row$parameter_label[[1]]),
+      nn_prior = as.character(fit_row$nn_prior[[1]]),
+      minobs = as.integer(fit_row$minobs[[1]]),
+      pm = as.numeric(fit_row$pm[[1]]),
+      status = as.character(fit_row$status[[1]]),
+      true_fitness = as.numeric(truth[match(k, names(truth))]),
+      estimated_fitness = as.numeric(bootstrap_mean),
+      training_total_count = as.numeric(observed_count),
+      observed_in_training = training_total_count > 0,
+      .before = 1
+    )
+}
+
+center_nn_grf_child_truth_tbl <- function(child_tbl) {
+  if (is.null(child_tbl) || !nrow(child_tbl)) {
+    return(tibble::tibble())
+  }
+
+  child_tbl %>%
+    dplyr::group_by(simulation_id, lambda, training_window, parameter_label, nn_prior) %>%
+    dplyr::mutate(
+      centered_true_fitness = true_fitness - mean(true_fitness, na.rm = TRUE),
+      centered_estimated_fitness = estimated_fitness - mean(estimated_fitness, na.rm = TRUE),
+      estimation_error = estimated_fitness - true_fitness,
+      centered_error = centered_estimated_fitness - centered_true_fitness
+    ) %>%
+    dplyr::ungroup()
+}
+
+safe_pair_cor <- function(x, y, method = "pearson") {
+  ok <- is.finite(x) & is.finite(y)
+  if (sum(ok) < 2L || stats::sd(x[ok]) == 0 || stats::sd(y[ok]) == 0) {
+    return(NA_real_)
+  }
+  suppressWarnings(stats::cor(x[ok], y[ok], method = method))
+}
+
+safe_centered_r2 <- function(pred, truth) {
+  ok <- is.finite(pred) & is.finite(truth)
+  if (sum(ok) < 2L) {
+    return(NA_real_)
+  }
+  den <- sum((truth[ok] - mean(truth[ok]))^2)
+  if (!is.finite(den) || den <= 0) {
+    return(NA_real_)
+  }
+  pred_c <- pred[ok] - mean(pred[ok])
+  truth_c <- truth[ok] - mean(truth[ok])
+  1 - sum((pred_c - truth_c)^2) / den
+}
+
+summarize_nn_grf_child_accuracy <- function(child_tbl, group_cols) {
+  if (is.null(child_tbl) || !nrow(child_tbl)) {
+    return(tibble::tibble())
+  }
+
+  child_tbl %>%
+    dplyr::filter(is.finite(true_fitness), is.finite(estimated_fitness)) %>%
+    dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>%
+    dplyr::summarise(
+      n_children = dplyr::n(),
+      n_simulations = dplyr::n_distinct(simulation_id),
+      observed_child_fraction = safe_fraction(observed_in_training),
+      rmse = sqrt(mean(estimation_error^2)),
+      mae = mean(abs(estimation_error)),
+      signed_bias = mean(estimation_error),
+      centered_rmse = sqrt(mean(centered_error^2)),
+      centered_mae = mean(abs(centered_error)),
+      pearson = safe_pair_cor(estimated_fitness, true_fitness, method = "pearson"),
+      spearman = safe_pair_cor(estimated_fitness, true_fitness, method = "spearman"),
+      centered_r2 = safe_centered_r2(estimated_fitness, true_fitness),
+      false_high_rate = mean(centered_estimated_fitness > 0 & centered_true_fitness <= 0, na.rm = TRUE),
+      sign_accuracy = mean(sign(centered_estimated_fitness) == sign(centered_true_fitness), na.rm = TRUE),
+      median_bootstrap_sd = safe_median(bootstrap_sd),
+      .groups = "drop"
+    )
+}
+
+run_nn_grf_simulation_diagnostics <- function(ctx, parameter_spec_tbl) {
+  if (!isTRUE(ctx$run_nn_grf_simulation_use)) {
+    empty <- tibble::tibble()
+    return(list(summary_tbl = empty, by_lambda_tbl = empty, child_tbl = empty, fit_tbl = empty))
+  }
+
+  sim_root <- file.path(ctx$results_dir, "fits_nn_grf_simulation")
+  dir.create(sim_root, recursive = TRUE, showWarnings = FALSE)
+  parameter_spec_tbl <- parameter_spec_tbl %>%
+    dplyr::filter(nn_prior != "cohort_transition")
+  if (!nrow(parameter_spec_tbl)) {
+    empty <- tibble::tibble()
+    return(list(summary_tbl = empty, by_lambda_tbl = empty, child_tbl = empty, fit_tbl = empty))
+  }
+
+  child_rows <- list()
+  fit_rows <- list()
+  child_idx <- 0L
+  fit_idx <- 0L
+  minobs_use <- min(ctx$minobs_values_use)
+  pm_use <- ctx$pm_values_use[[1L]]
+
+  for (sim_idx in seq_len(ctx$nn_grf_simulation_n_use)) {
+    for (lambda_idx in seq_along(ctx$nn_grf_lambdas_use)) {
+      lambda <- ctx$nn_grf_lambdas_use[[lambda_idx]]
+      lambda_label <- format_grf_label(lambda)
+      abm_seed <- ctx$nn_grf_seed_use + sim_idx * 10000L + lambda_idx * 100L
+      grf_sim <- tryCatch(
+        simulate_nn_prior_grf_abm(
+          seed = abm_seed,
+          lambda = lambda,
+          p = pm_use,
+          k_dim = ctx$nn_grf_k_dim_use,
+          n_centroids = ctx$nn_grf_n_centroids_use,
+          time_max = ctx$nn_grf_time_max_use,
+          passage_interval = ctx$nn_grf_passage_interval_use,
+          abm_pop_size = ctx$nn_grf_abm_pop_size_use,
+          abm_delta_t = ctx$nn_grf_abm_delta_t_use,
+          abm_max_pop = ctx$nn_grf_abm_max_pop_use,
+          abm_culling_survival = ctx$nn_grf_abm_culling_survival_use
+        ),
+        error = function(e) e
+      )
+
+      for (training_window in ctx$nn_grf_training_windows_use) {
+        patient_id <- paste0("grf_", sim_idx, "_lambda_", lambda_label, "_w", training_window)
+        if (inherits(grf_sim, "error")) {
+          for (param_i in seq_len(nrow(parameter_spec_tbl))) {
+            param_rr <- parameter_spec_tbl[param_i, , drop = FALSE]
+            fit_idx <- fit_idx + 1L
+            fit_rows[[fit_idx]] <- tibble::tibble(
+              simulation_id = as.integer(sim_idx),
+              lambda = as.numeric(lambda),
+              training_window = as.integer(training_window),
+              patient_id = patient_id,
+              parameter_label = as.character(param_rr$parameter_label),
+              nn_prior = as.character(param_rr$nn_prior),
+              status = "error",
+              error_message = conditionMessage(grf_sim)
+            )
+          }
+          next
+        }
+
+        yi <- tryCatch(
+          build_nn_grf_yi_from_abm(
+            sim_wide = grf_sim$sim_wide,
+            training_window = training_window,
+            sample_depth = ctx$nn_grf_sample_depth_use,
+            seed = abm_seed + as.integer(training_window)
+          ),
+          error = function(e) e
+        )
+        input_rds <- file.path(
+          ctx$cache_dir,
+          paste0("nn_grf_simulation_", patient_id, ".rds")
+        )
+
+        if (!inherits(yi, "error")) {
+          saveRDS(yi, input_rds)
+        }
+
+        for (param_i in seq_len(nrow(parameter_spec_tbl))) {
+          param_rr <- parameter_spec_tbl[param_i, , drop = FALSE]
+          outdir <- file.path(
+            sim_root,
+            paste0("lambda_", lambda_label),
+            paste0("window_", training_window),
+            as.character(param_rr$parameter_label),
+            paste0("pm_", pm_to_label(pm_use)),
+            paste0("MINOBS_", minobs_use),
+            patient_id
+          )
+
+          fit_res <- if (inherits(yi, "error")) {
+            tibble::tibble(status = "error", error_message = conditionMessage(yi))
+          } else {
+            tryCatch(
+              run_alfak_fit(
+                patient_id = patient_id,
+                input_rds = input_rds,
+                outdir = outdir,
+                minobs = minobs_use,
+                pm = pm_use,
+                nboot = max(2L, min(ctx$nboot_use, ctx$nn_grf_nboot_use)),
+                n0 = ctx$n0_use,
+                nb = ctx$nb_use,
+                benchmark_seed = abm_seed + param_i,
+                parameter_label = as.character(param_rr$parameter_label),
+                diploid_state = ctx$diploid_state,
+                correct_efflux = ctx$correct_efflux_use,
+                nn_prior = as.character(param_rr$nn_prior),
+                nn_prior_grid_n = ctx$selected_grid_n_use,
+                nn_prior_fit_subset = ctx$nn_prior_fit_subset_use,
+                nn_prior_zero_exposure_quantile = ctx$nn_prior_zero_exposure_quantile_use,
+                nn_prior_zero_weight_scale = ctx$nn_prior_zero_weight_scale_use,
+                nn_prior_zero_weight_cap_ratio = ctx$nn_prior_zero_weight_cap_ratio_use,
+                nn_prior_zero_birth_fallback_weight = ctx$nn_prior_zero_birth_fallback_weight_use,
+                nn_prior_zero_birth_child_floor = ctx$nn_prior_zero_birth_child_floor_use,
+                nn_prior_zero_birth_child_shape = ctx$nn_prior_zero_birth_child_shape_use,
+                nn_prior_zero_birth_replicate_floor = ctx$nn_prior_zero_birth_replicate_floor_use,
+                nn_prior_zero_birth_replicate_shape = ctx$nn_prior_zero_birth_replicate_shape_use,
+                nn_prior_two_step_support = ctx$nn_prior_two_step_support_use,
+                nn_prior_two_step_support_min = ctx$nn_prior_two_step_support_min_use,
+                nn_prior_two_step_cap_floor = ctx$nn_prior_two_step_cap_floor_use,
+                cohort_contextual_apply_to = ctx$cohort_contextual_apply_to_use,
+                cohort_context_keep_baseline_when_sparse = ctx$cohort_context_keep_baseline_when_sparse_use,
+                cohort_context_lambda_sparse_unknown = ctx$cohort_context_lambda_sparse_unknown_use,
+                force_refit = ctx$force_refit_use
+              ),
+              error = function(e) tibble::tibble(status = "error", error_message = conditionMessage(e))
+            )
+          }
+
+          fit_idx <- fit_idx + 1L
+          fit_rows[[fit_idx]] <- fit_res %>%
+            dplyr::mutate(
+              simulation_id = as.integer(sim_idx),
+              lambda = as.numeric(lambda),
+              training_window = as.integer(training_window),
+              .before = 1
+            )
+
+          if (!inherits(yi, "error")) {
+            child_tbl <- extract_nn_grf_child_truth_tbl(
+              fit_row = fit_res,
+              grf_sim = grf_sim,
+              yi = yi,
+              simulation_id = sim_idx,
+              training_window = training_window,
+              lambda = lambda
+            )
+            if (nrow(child_tbl)) {
+              child_idx <- child_idx + 1L
+              child_rows[[child_idx]] <- child_tbl
+            }
+          }
+        }
+      }
+    }
+  }
+
+  child_tbl <- center_nn_grf_child_truth_tbl(dplyr::bind_rows(child_rows))
+  fit_tbl <- dplyr::bind_rows(fit_rows)
+  summary_tbl <- summarize_nn_grf_child_accuracy(
+    child_tbl,
+    group_cols = c("lambda", "training_window", "parameter_label", "nn_prior")
+  )
+  by_lambda_tbl <- summarize_nn_grf_child_accuracy(
+    child_tbl,
+    group_cols = c("lambda", "parameter_label", "nn_prior")
+  )
+
+  list(
+    summary_tbl = summary_tbl,
+    by_lambda_tbl = by_lambda_tbl,
+    child_tbl = child_tbl,
+    fit_tbl = fit_tbl
+  )
+}
+
 simulate_nn_prior_counts <- function(seed, scenario, depth = c(1200, 1600, 2200)) {
   set.seed(seed)
   k_id <- function(vals) paste(vals, collapse = ".")
@@ -789,6 +1274,15 @@ build_benchmark_nn_diagnostics <- function(ctx,
   save_table_bundle(simulation$summary_tbl, file.path(ctx$tables_dir, "nn_simulation_summary"))
   save_table_bundle(simulation$child_tbl, file.path(ctx$tables_dir, "nn_simulation_by_child"))
 
+  grf_simulation <- run_nn_grf_simulation_diagnostics(
+    ctx = ctx,
+    parameter_spec_tbl = parameter_spec_tbl
+  )
+  save_table_bundle(grf_simulation$summary_tbl, file.path(ctx$tables_dir, "nn_grf_simulation_summary"))
+  save_table_bundle(grf_simulation$by_lambda_tbl, file.path(ctx$tables_dir, "nn_grf_simulation_by_lambda"))
+  save_table_bundle(grf_simulation$child_tbl, file.path(ctx$tables_dir, "nn_grf_simulation_by_child"))
+  save_table_bundle(grf_simulation$fit_tbl, file.path(ctx$tables_dir, "nn_grf_simulation_fit_results"))
+
   list(
     identifiability_replicate_tbl = ident$replicate_tbl,
     identifiability_summary_tbl = ident$summary_tbl,
@@ -799,6 +1293,10 @@ build_benchmark_nn_diagnostics <- function(ctx,
     holdout_summary_tbl = holdout$summary_tbl,
     holdout_prediction_tbl = holdout$prediction_tbl,
     simulation_summary_tbl = simulation$summary_tbl,
-    simulation_child_tbl = simulation$child_tbl
+    simulation_child_tbl = simulation$child_tbl,
+    grf_simulation_summary_tbl = grf_simulation$summary_tbl,
+    grf_simulation_by_lambda_tbl = grf_simulation$by_lambda_tbl,
+    grf_simulation_child_tbl = grf_simulation$child_tbl,
+    grf_simulation_fit_tbl = grf_simulation$fit_tbl
   )
 }

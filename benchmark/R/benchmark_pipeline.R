@@ -28,6 +28,14 @@ normalize_focus_pids <- function(params) {
   sort_pid_levels(focus_pids)
 }
 
+benchmark_param_scalar <- function(params, name, default = NA) {
+  value <- params[[name]]
+  if (is.null(value) || !length(value)) {
+    return(default)
+  }
+  value[[1L]]
+}
+
 focus_table_stem <- function(ctx, focus_pid, stem) {
   file.path(ctx$tables_dir, paste0("focus_", focus_pid, "_", stem))
 }
@@ -318,6 +326,67 @@ build_benchmark_context <- function(params, repo_dir = resolve_repo_dir()) {
   if (!length(nn_simulation_scenarios_use)) {
     nn_simulation_scenarios_use <- c("sparse_zero_heavy", "moderate_observed", "two_step_supported")
   }
+  run_nn_grf_simulation_use <- isTRUE(params$run_nn_grf_simulation)
+  nn_grf_simulation_n_use <- max(1L, suppressWarnings(as.integer(benchmark_param_scalar(params, "nn_grf_simulation_n"))))
+  if (!is.finite(nn_grf_simulation_n_use)) {
+    nn_grf_simulation_n_use <- 12L
+  }
+  nn_grf_seed_use <- suppressWarnings(as.integer(benchmark_param_scalar(params, "nn_grf_seed")))
+  if (!is.finite(nn_grf_seed_use)) {
+    nn_grf_seed_use <- 424242L
+  }
+  nn_grf_lambdas_use <- sort(unique(suppressWarnings(as.numeric(unlist(params$nn_grf_lambdas)))))
+  nn_grf_lambdas_use <- nn_grf_lambdas_use[is.finite(nn_grf_lambdas_use) & nn_grf_lambdas_use > 0]
+  if (!length(nn_grf_lambdas_use)) {
+    nn_grf_lambdas_use <- c(0.2, 0.4, 0.8, 1.6)
+  }
+  nn_grf_training_windows_use <- sort(unique(suppressWarnings(as.integer(unlist(params$nn_grf_training_windows)))))
+  nn_grf_training_windows_use <- nn_grf_training_windows_use[is.finite(nn_grf_training_windows_use) & nn_grf_training_windows_use >= 2L]
+  if (!length(nn_grf_training_windows_use)) {
+    nn_grf_training_windows_use <- c(2L, 4L, 8L)
+  }
+  nn_grf_nboot_use <- suppressWarnings(as.integer(benchmark_param_scalar(params, "nn_grf_nboot")))
+  if (!is.finite(nn_grf_nboot_use) || nn_grf_nboot_use < 1L) {
+    nn_grf_nboot_use <- 15L
+  }
+  nn_grf_k_dim_use <- suppressWarnings(as.integer(benchmark_param_scalar(params, "nn_grf_k_dim")))
+  if (!is.finite(nn_grf_k_dim_use) || nn_grf_k_dim_use < 2L) {
+    nn_grf_k_dim_use <- 22L
+  }
+  nn_grf_n_centroids_use <- suppressWarnings(as.integer(benchmark_param_scalar(params, "nn_grf_n_centroids")))
+  if (!is.finite(nn_grf_n_centroids_use) || nn_grf_n_centroids_use < 1L) {
+    nn_grf_n_centroids_use <- 64L
+  }
+  nn_grf_time_max_use <- suppressWarnings(as.numeric(benchmark_param_scalar(params, "nn_grf_time_max")))
+  if (!is.finite(nn_grf_time_max_use) || nn_grf_time_max_use <= 0) {
+    nn_grf_time_max_use <- 140
+  }
+  nn_grf_passage_interval_use <- suppressWarnings(as.numeric(benchmark_param_scalar(params, "nn_grf_passage_interval")))
+  if (!is.finite(nn_grf_passage_interval_use) || nn_grf_passage_interval_use <= 0) {
+    nn_grf_passage_interval_use <- 20
+  }
+  nn_grf_sample_depth_use <- suppressWarnings(as.integer(benchmark_param_scalar(params, "nn_grf_sample_depth")))
+  if (!is.finite(nn_grf_sample_depth_use) || nn_grf_sample_depth_use < 1L) {
+    nn_grf_sample_depth_use <- 2000L
+  }
+  nn_grf_abm_pop_size_use <- suppressWarnings(as.numeric(benchmark_param_scalar(params, "nn_grf_abm_pop_size")))
+  if (!is.finite(nn_grf_abm_pop_size_use) || nn_grf_abm_pop_size_use < 1) {
+    nn_grf_abm_pop_size_use <- 50000
+  }
+  nn_grf_abm_delta_t_use <- suppressWarnings(as.numeric(benchmark_param_scalar(params, "nn_grf_abm_delta_t")))
+  if (!is.finite(nn_grf_abm_delta_t_use) || nn_grf_abm_delta_t_use <= 0) {
+    nn_grf_abm_delta_t_use <- 1
+  }
+  nn_grf_abm_max_pop_use <- suppressWarnings(as.numeric(benchmark_param_scalar(params, "nn_grf_abm_max_pop")))
+  if (!is.finite(nn_grf_abm_max_pop_use)) {
+    nn_grf_abm_max_pop_use <- 2e6
+  }
+  nn_grf_abm_culling_survival_use <- suppressWarnings(as.numeric(benchmark_param_scalar(params, "nn_grf_abm_culling_survival")))
+  if (!is.finite(nn_grf_abm_culling_survival_use) ||
+      nn_grf_abm_culling_survival_use < 0 ||
+      nn_grf_abm_culling_survival_use > 1) {
+    nn_grf_abm_culling_survival_use <- 0.01
+  }
 
   focus_pids_use <- normalize_focus_pids(params)
   focus_minobs_use <- suppressWarnings(as.integer(params$focus_minobs))
@@ -396,6 +465,21 @@ build_benchmark_context <- function(params, repo_dir = resolve_repo_dir()) {
     nn_simulation_n_use = nn_simulation_n_use,
     nn_simulation_seed_use = nn_simulation_seed_use,
     nn_simulation_scenarios_use = nn_simulation_scenarios_use,
+    run_nn_grf_simulation_use = run_nn_grf_simulation_use,
+    nn_grf_simulation_n_use = nn_grf_simulation_n_use,
+    nn_grf_seed_use = nn_grf_seed_use,
+    nn_grf_lambdas_use = nn_grf_lambdas_use,
+    nn_grf_training_windows_use = nn_grf_training_windows_use,
+    nn_grf_nboot_use = nn_grf_nboot_use,
+    nn_grf_k_dim_use = nn_grf_k_dim_use,
+    nn_grf_n_centroids_use = nn_grf_n_centroids_use,
+    nn_grf_time_max_use = nn_grf_time_max_use,
+    nn_grf_passage_interval_use = nn_grf_passage_interval_use,
+    nn_grf_sample_depth_use = nn_grf_sample_depth_use,
+    nn_grf_abm_pop_size_use = nn_grf_abm_pop_size_use,
+    nn_grf_abm_delta_t_use = nn_grf_abm_delta_t_use,
+    nn_grf_abm_max_pop_use = nn_grf_abm_max_pop_use,
+    nn_grf_abm_culling_survival_use = nn_grf_abm_culling_survival_use,
     focus_pids_use = focus_pids_use,
     focus_minobs_use = focus_minobs_use,
     focus_pm_use = focus_pm_use,
@@ -1451,7 +1535,11 @@ build_benchmark_artifact_index <- function(ctx, focus_results) {
       "nn_holdout_summary",
       "nn_holdout_predictions",
       "nn_simulation_summary",
-      "nn_simulation_by_child"
+      "nn_simulation_by_child",
+      "nn_grf_simulation_summary",
+      "nn_grf_simulation_by_lambda",
+      "nn_grf_simulation_by_child",
+      "nn_grf_simulation_fit_results"
     ),
     path = file.path(
       ctx$tables_dir,
@@ -1482,7 +1570,11 @@ build_benchmark_artifact_index <- function(ctx, focus_results) {
         "nn_holdout_summary.tsv",
         "nn_holdout_predictions.tsv",
         "nn_simulation_summary.tsv",
-        "nn_simulation_by_child.tsv"
+        "nn_simulation_by_child.tsv",
+        "nn_grf_simulation_summary.tsv",
+        "nn_grf_simulation_by_lambda.tsv",
+        "nn_grf_simulation_by_child.tsv",
+        "nn_grf_simulation_fit_results.tsv"
       )
     )
   )
@@ -1851,6 +1943,10 @@ run_benchmark_pipeline <- function(ctx) {
     nn_holdout_prediction_tbl = nn_diagnostic_results$holdout_prediction_tbl,
     nn_simulation_summary_tbl = nn_diagnostic_results$simulation_summary_tbl,
     nn_simulation_child_tbl = nn_diagnostic_results$simulation_child_tbl,
+    nn_grf_simulation_summary_tbl = nn_diagnostic_results$grf_simulation_summary_tbl,
+    nn_grf_simulation_by_lambda_tbl = nn_diagnostic_results$grf_simulation_by_lambda_tbl,
+    nn_grf_simulation_child_tbl = nn_diagnostic_results$grf_simulation_child_tbl,
+    nn_grf_simulation_fit_tbl = nn_diagnostic_results$grf_simulation_fit_tbl,
     focus_results = focus_results,
     artifact_index_tbl = artifact_index_tbl
   )
