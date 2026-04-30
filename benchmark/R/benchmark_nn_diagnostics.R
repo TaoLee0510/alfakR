@@ -835,8 +835,13 @@ center_nn_grf_child_truth_tbl <- function(child_tbl) {
     return(tibble::tibble())
   }
 
+  group_cols <- c("simulation_id", "lambda", "training_window", "parameter_label", "nn_prior")
+  if ("minobs" %in% names(child_tbl)) {
+    group_cols <- c("simulation_id", "lambda", "training_window", "minobs", "parameter_label", "nn_prior")
+  }
+
   child_tbl %>%
-    dplyr::group_by(simulation_id, lambda, training_window, parameter_label, nn_prior) %>%
+    dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>%
     dplyr::mutate(
       centered_true_fitness = true_fitness - mean(true_fitness, na.rm = TRUE),
       centered_estimated_fitness = estimated_fitness - mean(estimated_fitness, na.rm = TRUE),
@@ -895,10 +900,149 @@ summarize_nn_grf_child_accuracy <- function(child_tbl, group_cols) {
     )
 }
 
+summarize_nn_grf_input_rows <- function(yi, minobs_values, diploid_state) {
+  if (is.null(yi) || is.null(yi$x) || is.null(dim(yi$x))) {
+    return(tibble::tibble(
+      minobs = as.integer(minobs_values),
+      input_row_count = NA_integer_,
+      input_row_count_minobs = NA_integer_
+    ))
+  }
+
+  x <- yi$x
+  if (!is.null(rownames(x)) && diploid_state %in% rownames(x)) {
+    x <- x[rownames(x) != diploid_state, , drop = FALSE]
+  }
+  row_totals <- rowSums(as.matrix(x), na.rm = TRUE)
+
+  tibble::tibble(
+    minobs = as.integer(minobs_values),
+    input_row_count = as.integer(length(row_totals)),
+    input_row_count_minobs = as.integer(vapply(
+      minobs_values,
+      function(minobs) sum(row_totals >= minobs, na.rm = TRUE),
+      integer(1L)
+    ))
+  )
+}
+
+complete_nn_grf_fit_tbl <- function(fit_res,
+                                    simulation_id,
+                                    lambda,
+                                    training_window,
+                                    patient_id,
+                                    outdir = NA_character_,
+                                    minobs,
+                                    pm,
+                                    input_row_count = NA_integer_,
+                                    input_row_count_minobs = NA_integer_,
+                                    param_rr) {
+  fit_res <- tibble::as_tibble(fit_res)
+  defaults <- list(
+    patient_id = as.character(patient_id),
+    outdir = as.character(outdir),
+    pm = as.numeric(pm),
+    pm_label = pm_to_label(pm),
+    minobs = as.integer(minobs),
+    input_row_count = as.integer(input_row_count),
+    input_row_count_minobs = as.integer(input_row_count_minobs),
+    parameter_label = as.character(param_rr$parameter_label[[1]]),
+    nn_prior = as.character(param_rr$nn_prior[[1]]),
+    status = "error",
+    error_message = NA_character_
+  )
+  for (nm in names(defaults)) {
+    if (!nm %in% names(fit_res)) {
+      fit_res[[nm]] <- defaults[[nm]]
+    }
+  }
+
+  fit_res %>%
+    dplyr::mutate(
+      simulation_id = as.integer(simulation_id),
+      lambda = as.numeric(lambda),
+      training_window = as.integer(training_window),
+      minobs = as.integer(minobs),
+      pm = as.numeric(pm),
+      input_row_count = as.integer(input_row_count),
+      input_row_count_minobs = as.integer(input_row_count_minobs),
+      parameter_label = as.character(param_rr$parameter_label[[1]]),
+      nn_prior = as.character(param_rr$nn_prior[[1]]),
+      .before = 1
+    )
+}
+
+run_nn_grf_fit_task <- function(rr, ctx) {
+  param_rr <- tibble::tibble(
+    parameter_label = as.character(rr$parameter_label[[1]]),
+    nn_prior = as.character(rr$nn_prior[[1]])
+  )
+  input_error <- if ("input_error_message" %in% names(rr)) {
+    msg <- as.character(rr$input_error_message[[1]])
+    !is.na(msg) && nzchar(msg)
+  } else {
+    FALSE
+  }
+
+  fit_res <- if (input_error) {
+    tibble::tibble(status = "error", error_message = as.character(rr$input_error_message[[1]]))
+  } else {
+    tryCatch(
+      run_alfak_fit(
+        patient_id = as.character(rr$patient_id[[1]]),
+        input_rds = as.character(rr$input_rds[[1]]),
+        outdir = as.character(rr$outdir[[1]]),
+        minobs = as.integer(rr$minobs[[1]]),
+        pm = as.numeric(rr$pm[[1]]),
+        nboot = max(2L, min(ctx$nboot_use, ctx$nn_grf_nboot_use)),
+        n0 = ctx$n0_use,
+        nb = ctx$nb_use,
+        benchmark_seed = as.integer(rr$benchmark_seed[[1]]),
+        parameter_label = as.character(rr$parameter_label[[1]]),
+        diploid_state = ctx$diploid_state,
+        correct_efflux = ctx$correct_efflux_use,
+        nn_prior = as.character(rr$nn_prior[[1]]),
+        nn_prior_grid_n = ctx$selected_grid_n_use,
+        nn_prior_fit_subset = ctx$nn_prior_fit_subset_use,
+        nn_prior_zero_exposure_quantile = ctx$nn_prior_zero_exposure_quantile_use,
+        nn_prior_zero_weight_scale = ctx$nn_prior_zero_weight_scale_use,
+        nn_prior_zero_weight_cap_ratio = ctx$nn_prior_zero_weight_cap_ratio_use,
+        nn_prior_zero_birth_fallback_weight = ctx$nn_prior_zero_birth_fallback_weight_use,
+        nn_prior_zero_birth_child_floor = ctx$nn_prior_zero_birth_child_floor_use,
+        nn_prior_zero_birth_child_shape = ctx$nn_prior_zero_birth_child_shape_use,
+        nn_prior_zero_birth_replicate_floor = ctx$nn_prior_zero_birth_replicate_floor_use,
+        nn_prior_zero_birth_replicate_shape = ctx$nn_prior_zero_birth_replicate_shape_use,
+        nn_prior_two_step_support = ctx$nn_prior_two_step_support_use,
+        nn_prior_two_step_support_min = ctx$nn_prior_two_step_support_min_use,
+        nn_prior_two_step_cap_floor = ctx$nn_prior_two_step_cap_floor_use,
+        cohort_contextual_apply_to = ctx$cohort_contextual_apply_to_use,
+        cohort_context_keep_baseline_when_sparse = ctx$cohort_context_keep_baseline_when_sparse_use,
+        cohort_context_lambda_sparse_unknown = ctx$cohort_context_lambda_sparse_unknown_use,
+        force_refit = ctx$force_refit_use
+      ),
+      error = function(e) tibble::tibble(status = "error", error_message = conditionMessage(e))
+    )
+  }
+
+  complete_nn_grf_fit_tbl(
+    fit_res = fit_res,
+    simulation_id = as.integer(rr$simulation_id[[1]]),
+    lambda = as.numeric(rr$lambda[[1]]),
+    training_window = as.integer(rr$training_window[[1]]),
+    patient_id = as.character(rr$patient_id[[1]]),
+    outdir = as.character(rr$outdir[[1]]),
+    minobs = as.integer(rr$minobs[[1]]),
+    pm = as.numeric(rr$pm[[1]]),
+    input_row_count = as.integer(rr$input_row_count[[1]]),
+    input_row_count_minobs = as.integer(rr$input_row_count_minobs[[1]]),
+    param_rr = param_rr
+  )
+}
+
 run_nn_grf_simulation_diagnostics <- function(ctx, parameter_spec_tbl) {
   if (!isTRUE(ctx$run_nn_grf_simulation_use)) {
     empty <- tibble::tibble()
-    return(list(summary_tbl = empty, by_lambda_tbl = empty, child_tbl = empty, fit_tbl = empty))
+    return(list(summary_tbl = empty, by_lambda_tbl = empty, child_tbl = empty, fit_tbl = empty, task_tbl = empty))
   }
 
   sim_root <- file.path(ctx$results_dir, "fits_nn_grf_simulation")
@@ -907,14 +1051,17 @@ run_nn_grf_simulation_diagnostics <- function(ctx, parameter_spec_tbl) {
     dplyr::filter(nn_prior != "cohort_transition")
   if (!nrow(parameter_spec_tbl)) {
     empty <- tibble::tibble()
-    return(list(summary_tbl = empty, by_lambda_tbl = empty, child_tbl = empty, fit_tbl = empty))
+    return(list(summary_tbl = empty, by_lambda_tbl = empty, child_tbl = empty, fit_tbl = empty, task_tbl = empty))
   }
 
-  child_rows <- list()
-  fit_rows <- list()
-  child_idx <- 0L
-  fit_idx <- 0L
-  minobs_use <- min(ctx$minobs_values_use)
+  task_rows <- list()
+  grf_lookup <- list()
+  task_idx <- 0L
+  minobs_values_use <- sort(unique(as.integer(ctx$minobs_values_use)))
+  minobs_values_use <- minobs_values_use[is.finite(minobs_values_use) & minobs_values_use > 0L]
+  if (!length(minobs_values_use)) {
+    minobs_values_use <- 5L
+  }
   pm_use <- ctx$pm_values_use[[1L]]
 
   for (sim_idx in seq_len(ctx$nn_grf_simulation_n_use)) {
@@ -938,141 +1085,176 @@ run_nn_grf_simulation_diagnostics <- function(ctx, parameter_spec_tbl) {
         ),
         error = function(e) e
       )
+      grf_key <- paste(sim_idx, lambda_label, sep = "__")
+      if (!inherits(grf_sim, "error")) {
+        grf_lookup[[grf_key]] <- grf_sim
+      }
 
       for (training_window in ctx$nn_grf_training_windows_use) {
         patient_id <- paste0("grf_", sim_idx, "_lambda_", lambda_label, "_w", training_window)
-        if (inherits(grf_sim, "error")) {
-          for (param_i in seq_len(nrow(parameter_spec_tbl))) {
-            param_rr <- parameter_spec_tbl[param_i, , drop = FALSE]
-            fit_idx <- fit_idx + 1L
-            fit_rows[[fit_idx]] <- tibble::tibble(
-              simulation_id = as.integer(sim_idx),
-              lambda = as.numeric(lambda),
-              training_window = as.integer(training_window),
-              patient_id = patient_id,
-              parameter_label = as.character(param_rr$parameter_label),
-              nn_prior = as.character(param_rr$nn_prior),
-              status = "error",
-              error_message = conditionMessage(grf_sim)
-            )
-          }
-          next
-        }
-
-        yi <- tryCatch(
-          build_nn_grf_yi_from_abm(
-            sim_wide = grf_sim$sim_wide,
-            training_window = training_window,
-            sample_depth = ctx$nn_grf_sample_depth_use,
-            seed = abm_seed + as.integer(training_window)
-          ),
-          error = function(e) e
-        )
         input_rds <- file.path(
           ctx$cache_dir,
           paste0("nn_grf_simulation_", patient_id, ".rds")
         )
-
-        if (!inherits(yi, "error")) {
-          saveRDS(yi, input_rds)
-        }
-
-        for (param_i in seq_len(nrow(parameter_spec_tbl))) {
-          param_rr <- parameter_spec_tbl[param_i, , drop = FALSE]
-          outdir <- file.path(
-            sim_root,
-            paste0("lambda_", lambda_label),
-            paste0("window_", training_window),
-            as.character(param_rr$parameter_label),
-            paste0("pm_", pm_to_label(pm_use)),
-            paste0("MINOBS_", minobs_use),
-            patient_id
+        yi_error_message <- NA_character_
+        input_row_tbl <- tibble::tibble(
+          minobs = as.integer(minobs_values_use),
+          input_row_count = NA_integer_,
+          input_row_count_minobs = NA_integer_
+        )
+        if (inherits(grf_sim, "error")) {
+          yi_error_message <- conditionMessage(grf_sim)
+        } else {
+          yi <- tryCatch(
+            build_nn_grf_yi_from_abm(
+              sim_wide = grf_sim$sim_wide,
+              training_window = training_window,
+              sample_depth = ctx$nn_grf_sample_depth_use,
+              seed = abm_seed + as.integer(training_window)
+            ),
+            error = function(e) e
           )
-
-          fit_res <- if (inherits(yi, "error")) {
-            tibble::tibble(status = "error", error_message = conditionMessage(yi))
+          if (inherits(yi, "error")) {
+            yi_error_message <- conditionMessage(yi)
           } else {
-            tryCatch(
-              run_alfak_fit(
-                patient_id = patient_id,
-                input_rds = input_rds,
-                outdir = outdir,
-                minobs = minobs_use,
-                pm = pm_use,
-                nboot = max(2L, min(ctx$nboot_use, ctx$nn_grf_nboot_use)),
-                n0 = ctx$n0_use,
-                nb = ctx$nb_use,
-                benchmark_seed = abm_seed + param_i,
-                parameter_label = as.character(param_rr$parameter_label),
-                diploid_state = ctx$diploid_state,
-                correct_efflux = ctx$correct_efflux_use,
-                nn_prior = as.character(param_rr$nn_prior),
-                nn_prior_grid_n = ctx$selected_grid_n_use,
-                nn_prior_fit_subset = ctx$nn_prior_fit_subset_use,
-                nn_prior_zero_exposure_quantile = ctx$nn_prior_zero_exposure_quantile_use,
-                nn_prior_zero_weight_scale = ctx$nn_prior_zero_weight_scale_use,
-                nn_prior_zero_weight_cap_ratio = ctx$nn_prior_zero_weight_cap_ratio_use,
-                nn_prior_zero_birth_fallback_weight = ctx$nn_prior_zero_birth_fallback_weight_use,
-                nn_prior_zero_birth_child_floor = ctx$nn_prior_zero_birth_child_floor_use,
-                nn_prior_zero_birth_child_shape = ctx$nn_prior_zero_birth_child_shape_use,
-                nn_prior_zero_birth_replicate_floor = ctx$nn_prior_zero_birth_replicate_floor_use,
-                nn_prior_zero_birth_replicate_shape = ctx$nn_prior_zero_birth_replicate_shape_use,
-                nn_prior_two_step_support = ctx$nn_prior_two_step_support_use,
-                nn_prior_two_step_support_min = ctx$nn_prior_two_step_support_min_use,
-                nn_prior_two_step_cap_floor = ctx$nn_prior_two_step_cap_floor_use,
-                cohort_contextual_apply_to = ctx$cohort_contextual_apply_to_use,
-                cohort_context_keep_baseline_when_sparse = ctx$cohort_context_keep_baseline_when_sparse_use,
-                cohort_context_lambda_sparse_unknown = ctx$cohort_context_lambda_sparse_unknown_use,
-                force_refit = ctx$force_refit_use
-              ),
-              error = function(e) tibble::tibble(status = "error", error_message = conditionMessage(e))
+            saveRDS(yi, input_rds)
+            input_row_tbl <- summarize_nn_grf_input_rows(
+              yi = yi,
+              minobs_values = minobs_values_use,
+              diploid_state = ctx$diploid_state
             )
           }
+        }
 
-          fit_idx <- fit_idx + 1L
-          fit_rows[[fit_idx]] <- fit_res %>%
-            dplyr::mutate(
+        for (minobs_use in minobs_values_use) {
+          input_row_rr <- input_row_tbl[input_row_tbl$minobs == minobs_use, , drop = FALSE]
+          if (!nrow(input_row_rr)) {
+            input_row_rr <- tibble::tibble(
+              minobs = as.integer(minobs_use),
+              input_row_count = NA_integer_,
+              input_row_count_minobs = NA_integer_
+            )
+          }
+          for (param_i in seq_len(nrow(parameter_spec_tbl))) {
+            param_rr <- parameter_spec_tbl[param_i, , drop = FALSE]
+            outdir <- file.path(
+              sim_root,
+              paste0("lambda_", lambda_label),
+              paste0("window_", training_window),
+              as.character(param_rr$parameter_label),
+              paste0("pm_", pm_to_label(pm_use)),
+              paste0("MINOBS_", minobs_use),
+              patient_id
+            )
+            task_idx <- task_idx + 1L
+            task_rows[[task_idx]] <- tibble::tibble(
               simulation_id = as.integer(sim_idx),
               lambda = as.numeric(lambda),
+              lambda_label = lambda_label,
               training_window = as.integer(training_window),
-              .before = 1
+              patient_id = patient_id,
+              input_rds = input_rds,
+              outdir = outdir,
+              minobs = as.integer(minobs_use),
+              pm = as.numeric(pm_use),
+              input_row_count = as.integer(input_row_rr$input_row_count[[1]]),
+              input_row_count_minobs = as.integer(input_row_rr$input_row_count_minobs[[1]]),
+              parameter_label = as.character(param_rr$parameter_label),
+              nn_prior = as.character(param_rr$nn_prior),
+              benchmark_seed = as.integer(abm_seed + training_window * 1000L + minobs_use * 100L + param_i),
+              input_error_message = yi_error_message
             )
-
-          if (!inherits(yi, "error")) {
-            child_tbl <- extract_nn_grf_child_truth_tbl(
-              fit_row = fit_res,
-              grf_sim = grf_sim,
-              yi = yi,
-              simulation_id = sim_idx,
-              training_window = training_window,
-              lambda = lambda
-            )
-            if (nrow(child_tbl)) {
-              child_idx <- child_idx + 1L
-              child_rows[[child_idx]] <- child_tbl
-            }
           }
         }
       }
     }
   }
 
-  child_tbl <- center_nn_grf_child_truth_tbl(dplyr::bind_rows(child_rows))
+  task_tbl <- dplyr::bind_rows(task_rows)
+  if (!nrow(task_tbl)) {
+    empty <- tibble::tibble()
+    return(list(summary_tbl = empty, by_lambda_tbl = empty, child_tbl = empty, fit_tbl = empty, task_tbl = empty))
+  }
+
+  task_tbl <- task_tbl %>%
+    dplyr::arrange(
+      minobs,
+      dplyr::desc(input_row_count_minobs),
+      dplyr::desc(input_row_count),
+      simulation_id,
+      lambda,
+      training_window,
+      factor(parameter_label, levels = parameter_spec_tbl$parameter_label)
+    )
+
+  fit_task_idx <- seq_len(nrow(task_tbl))
+  n_cores_use <- max(1L, min(as.integer(ctx$n_cores_use), length(fit_task_idx)))
+  if (.Platform$OS.type == "unix" && n_cores_use > 1L) {
+    fit_rows <- parallel::mclapply(
+      fit_task_idx,
+      function(i) run_nn_grf_fit_task(task_tbl[i, , drop = FALSE], ctx),
+      mc.cores = n_cores_use,
+      mc.preschedule = FALSE,
+      mc.set.seed = FALSE
+    )
+  } else {
+    fit_rows <- lapply(fit_task_idx, function(i) run_nn_grf_fit_task(task_tbl[i, , drop = FALSE], ctx))
+  }
   fit_tbl <- dplyr::bind_rows(fit_rows)
+
+  child_rows <- list()
+  child_idx <- 0L
+  yi_cache <- new.env(parent = emptyenv())
+  for (i in seq_len(nrow(fit_tbl))) {
+    fit_row <- fit_tbl[i, , drop = FALSE]
+    if (!identical(as.character(fit_row$status[[1]]), "ok")) {
+      next
+    }
+    lambda_label <- format_grf_label(as.numeric(fit_row$lambda[[1]]))
+    grf_key <- paste(as.integer(fit_row$simulation_id[[1]]), lambda_label, sep = "__")
+    grf_sim <- grf_lookup[[grf_key]]
+    if (is.null(grf_sim)) {
+      next
+    }
+    patient_id <- as.character(fit_row$patient_id[[1]])
+    if (!exists(patient_id, envir = yi_cache, inherits = FALSE)) {
+      input_rds <- file.path(ctx$cache_dir, paste0("nn_grf_simulation_", patient_id, ".rds"))
+      if (!file.exists(input_rds)) {
+        next
+      }
+      assign(patient_id, readRDS(input_rds), envir = yi_cache)
+    }
+    yi <- get(patient_id, envir = yi_cache, inherits = FALSE)
+    child_tbl <- extract_nn_grf_child_truth_tbl(
+      fit_row = fit_row,
+      grf_sim = grf_sim,
+      yi = yi,
+      simulation_id = as.integer(fit_row$simulation_id[[1]]),
+      training_window = as.integer(fit_row$training_window[[1]]),
+      lambda = as.numeric(fit_row$lambda[[1]])
+    )
+    if (nrow(child_tbl)) {
+      child_idx <- child_idx + 1L
+      child_rows[[child_idx]] <- child_tbl
+    }
+  }
+
+  child_tbl <- center_nn_grf_child_truth_tbl(dplyr::bind_rows(child_rows))
   summary_tbl <- summarize_nn_grf_child_accuracy(
     child_tbl,
-    group_cols = c("lambda", "training_window", "parameter_label", "nn_prior")
+    group_cols = c("lambda", "training_window", "minobs", "parameter_label", "nn_prior")
   )
   by_lambda_tbl <- summarize_nn_grf_child_accuracy(
     child_tbl,
-    group_cols = c("lambda", "parameter_label", "nn_prior")
+    group_cols = c("lambda", "minobs", "parameter_label", "nn_prior")
   )
 
   list(
     summary_tbl = summary_tbl,
     by_lambda_tbl = by_lambda_tbl,
     child_tbl = child_tbl,
-    fit_tbl = fit_tbl
+    fit_tbl = fit_tbl,
+    task_tbl = task_tbl
   )
 }
 
@@ -1282,6 +1464,7 @@ build_benchmark_nn_diagnostics <- function(ctx,
   save_table_bundle(grf_simulation$by_lambda_tbl, file.path(ctx$tables_dir, "nn_grf_simulation_by_lambda"))
   save_table_bundle(grf_simulation$child_tbl, file.path(ctx$tables_dir, "nn_grf_simulation_by_child"))
   save_table_bundle(grf_simulation$fit_tbl, file.path(ctx$tables_dir, "nn_grf_simulation_fit_results"))
+  save_table_bundle(grf_simulation$task_tbl, file.path(ctx$tables_dir, "nn_grf_simulation_tasks"))
 
   list(
     identifiability_replicate_tbl = ident$replicate_tbl,
@@ -1297,6 +1480,7 @@ build_benchmark_nn_diagnostics <- function(ctx,
     grf_simulation_summary_tbl = grf_simulation$summary_tbl,
     grf_simulation_by_lambda_tbl = grf_simulation$by_lambda_tbl,
     grf_simulation_child_tbl = grf_simulation$child_tbl,
-    grf_simulation_fit_tbl = grf_simulation$fit_tbl
+    grf_simulation_fit_tbl = grf_simulation$fit_tbl,
+    grf_simulation_task_tbl = grf_simulation$task_tbl
   )
 }

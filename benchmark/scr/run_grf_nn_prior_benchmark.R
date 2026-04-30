@@ -17,7 +17,7 @@ usage <- function() {
     "Advanced options:\n",
     "  --seed=424242\n",
     "  --pm=5e-05\n",
-    "  --minobs=5\n",
+    "  --minobs=5,10,20\n",
     "  --grid-n=81\n",
     "  --k-dim=22\n",
     "  --n-centroids=64\n",
@@ -303,6 +303,7 @@ main <- function() {
   message("Simulations: ", ctx$nn_grf_simulation_n_use)
   message("Lambdas: ", paste(ctx$nn_grf_lambdas_use, collapse = ", "))
   message("Training windows: ", paste(ctx$nn_grf_training_windows_use, collapse = ", "))
+  message("MINOBS: ", paste(ctx$minobs_values_use, collapse = ", "))
 
   grf <- run_nn_grf_simulation_diagnostics(
     ctx = ctx,
@@ -313,8 +314,10 @@ main <- function() {
   save_table_bundle(grf$by_lambda_tbl, file.path(ctx$tables_dir, "nn_grf_simulation_by_lambda"))
   save_table_bundle(grf$child_tbl, file.path(ctx$tables_dir, "nn_grf_simulation_by_child"))
   save_table_bundle(grf$fit_tbl, file.path(ctx$tables_dir, "nn_grf_simulation_fit_results"))
+  save_table_bundle(grf$task_tbl, file.path(ctx$tables_dir, "nn_grf_simulation_tasks"))
 
   message("Wrote:")
+  message("  ", file.path(ctx$tables_dir, "nn_grf_simulation_tasks.tsv"))
   message("  ", file.path(ctx$tables_dir, "nn_grf_simulation_summary.tsv"))
   message("  ", file.path(ctx$tables_dir, "nn_grf_simulation_by_lambda.tsv"))
   message("  ", file.path(ctx$tables_dir, "nn_grf_simulation_by_child.tsv"))
