@@ -59,10 +59,10 @@
 #'   it first falls back to a weak sample-pooled prior learned from the same
 #'   sample's observed neighbours before using no prior only as a final
 #'   fallback.
-#'   `"empirical_two_shell"` is an opt-in sparse two-timepoint correction. It
+#'   `"empirical_two_step"` is an opt-in sparse two-timepoint correction. It
 #'   first obtains the usual one-step neighbour estimates, estimates supported
 #'   two-step descendants from those one-step nodes, learns separate empirical
-#'   delta distributions for the 0->1 and 1->2 shells, then re-estimates each
+#'   delta distributions for the 0->1 and 1->2 steps, then re-estimates each
 #'   one-step neighbour once with the direct likelihood, inward frequent-parent
 #'   prior, and an uncertainty-inflated outward two-step prior. It does not
 #'   alternate repeated smoothing passes. If supported two-step evidence is
@@ -70,7 +70,7 @@
 #'   one-step behaviour.
 #'   `"cohort_transition"` uses a cohort-level prior on transition effects,
 #'   `child fitness - parent fitness`, learned from upstream patient-specific
-#'   two-shell fits. It requires `cohort_transition_prior` or
+#'   two-step fits. It requires `cohort_transition_prior` or
 #'   `cohort_transition_prior_path`, keeps the current patient's frequent
 #'   karyotype fitness estimates patient-specific, and does not pool raw patient
 #'   counts or absolute cohort fitness values.
@@ -86,7 +86,7 @@
 #'   `cohort_transition_v1` or `cohort_transition_v2` prior object.
 #' @param cohort_transition_patient_id Patient identifier for single-patient
 #'   cohort-transition refits. Required when the prior contains
-#'   leave-one-patient-out priors so the target patient's own two-shell
+#'   leave-one-patient-out priors so the target patient's own two-step
 #'   transitions can be excluded from its prior.
 #' @param cohort_transition_version Cohort-transition implementation version.
 #'   `"contextual"` is the default for `nn_prior = "cohort_transition"` and
@@ -95,30 +95,30 @@
 #'   `"v1"` preserves the original direct cohort-prior behavior.
 #' @param cohort_transition_apply_to Which NN nodes can receive the v2 overlay.
 #'   The default `"zero_only"` leaves observed NN estimates at their
-#'   patient-specific `empirical_two_shell` baseline.
+#'   patient-specific `empirical_two_step` baseline.
 #' @param cohort_transition_overlay_base Baseline used by v2. The default
-#'   `"empirical_two_shell"` runs the same patient-specific two-shell path first
+#'   `"empirical_two_step"` runs the same patient-specific two-step path first
 #'   and then applies the cohort overlay.
 #' @param cohort_transition_lambda Global multiplier for v2 cohort borrowing.
 #' @param cohort_transition_max_borrowing_fraction Maximum allowed v2 cohort
 #'   borrowing fraction before the update is skipped and marked dominated.
 #' @param cohort_transition_max_abs_delta_shift Optional maximum absolute change
-#'   from the two-shell baseline.
+#'   from the two-step baseline.
 #' @param cohort_contextual_apply_to Which NN nodes can receive contextual
 #'   overlay updates. If `NULL`, inherits `cohort_transition_apply_to`.
 #' @param cohort_contextual_overlay_base Baseline used by contextual mode. The
-#'   default `"empirical_two_shell"` preserves patient-specific two-shell
+#'   default `"empirical_two_step"` preserves patient-specific two-step
 #'   estimates before context borrowing.
 #' @param cohort_context_lambda Global multiplier for contextual cohort
 #'   borrowing.
 #' @param cohort_context_max_borrowing_fraction Maximum contextual borrowing
 #'   fraction before an update is skipped.
 #' @param cohort_context_max_abs_delta_shift Optional maximum contextual shift
-#'   from the two-shell baseline.
+#'   from the two-step baseline.
 #' @param cohort_context_sd_floor,cohort_context_patient_sd_floor Minimum
 #'   contextual transition SD and patient heterogeneity floors.
 #' @param cohort_context_keep_baseline_when_sparse,cohort_context_keep_baseline_when_high_variable
-#'   Guardrails that keep the two-shell baseline for sparse or high-variable
+#'   Guardrails that keep the two-step baseline for sparse or high-variable
 #'   contexts.
 #' @param cohort_transition_sd_floor Minimum transition-prior standard
 #'   deviation used by `nn_prior = "cohort_transition"`.
@@ -199,33 +199,33 @@
 #'   `nn_prior_two_step_support = "rescue"`. This sets the minimum fraction of a
 #'   fully supported 2-step rescue score that can contribute to the retained
 #'   zero-child support term used in effective-mass and weight calculations.
-#' @param nn_two_shell_min_delta_n Positive integer used only when
-#'   `nn_prior = "empirical_two_shell"`. It is the minimum number of usable
-#'   path-weighted 1->2 shell deltas required before fitting the outward prior;
+#' @param nn_two_step_min_delta_n Positive integer used only when
+#'   `nn_prior = "empirical_two_step"`. It is the minimum number of usable
+#'   path-weighted 1->2 step deltas required before fitting the outward prior;
 #'   otherwise the replicate falls back to the inward one-step estimate.
-#' @param nn_two_shell_min_exposure Optional non-negative numeric scalar used
-#'   only for `nn_prior = "empirical_two_shell"`. Unobserved two-step candidates
+#' @param nn_two_step_min_exposure Optional non-negative numeric scalar used
+#'   only for `nn_prior = "empirical_two_step"`. Unobserved two-step candidates
 #'   are retained only when their expected exposure reaches this threshold. When
 #'   `NULL`, an adaptive threshold based on the projected one-step exposure
 #'   distribution is used and reported in diagnostics.
-#' @param nn_two_shell_min_observed_count Non-negative integer count threshold
-#'   used only for `nn_prior = "empirical_two_shell"`. Two-step candidates with
+#' @param nn_two_step_min_observed_count Non-negative integer count threshold
+#'   used only for `nn_prior = "empirical_two_step"`. Two-step candidates with
 #'   at least this total observed count are retained automatically.
-#' @param nn_two_shell_max_weight_ratio Non-negative numeric scalar used only
-#'   for `nn_prior = "empirical_two_shell"`. It caps each one-step node's total
+#' @param nn_two_step_max_weight_ratio Non-negative numeric scalar used only
+#'   for `nn_prior = "empirical_two_step"`. It caps each one-step node's total
 #'   outward prior weight relative to its inward parent-prior weight.
-#' @param nn_two_shell_lambda Non-negative numeric scalar multiplying the
+#' @param nn_two_step_lambda Non-negative numeric scalar multiplying the
 #'   outward two-step prior term.
-#' @param nn_two_shell_reuse_sd Optional non-negative numeric scalar. It inflates
+#' @param nn_two_step_reuse_sd Optional non-negative numeric scalar. It inflates
 #'   the effective standard deviation of the outward prior because provisional
 #'   two-step estimates reuse the same count data. When `NULL`, a conservative
 #'   replicate-specific value based on `nn_prior_sd_floor` and the estimated
 #'   1->2 prior scale is used.
-#' @param nn_two_shell_uncertainty_floor Optional non-negative numeric scalar.
+#' @param nn_two_step_uncertainty_floor Optional non-negative numeric scalar.
 #'   Minimum standard error assigned to provisional two-step fitness estimates.
 #'   When `NULL`, a conservative package default is used.
-#' @param nn_two_shell_save_diagnostics Logical; if `TRUE` and
-#'   `nn_prior = "empirical_two_shell"`, `alfak()` saves
+#' @param nn_two_step_save_diagnostics Logical; if `TRUE` and
+#'   `nn_prior = "empirical_two_step"`, `alfak()` saves
 #'   `nn_prior_diagnostics.Rds` containing replicate and per-node diagnostics.
 #' @param krig_bootstrap_mode Character; `"marginal"` (default) samples
 #'   bootstrap fitness values independently by column, matching the original
@@ -287,7 +287,7 @@
 #' # Check for created files
 #' list.files(temp_output_dir)
 #'
-#' # Sparse two-timepoint use: opt into the two-shell correction and inspect
+#' # Sparse two-timepoint use: opt into the two-step correction and inspect
 #' # diagnostics if the outward term falls back or has little effect.
 #' sparse_counts <- matrix(
 #'   c(80, 60,
@@ -297,13 +297,13 @@
 #'   byrow = TRUE,
 #'   dimnames = list(c("2.2.2", "2.2.3", "2.2.4"), c("0", "1"))
 #' )
-#' sparse_dir <- tempfile("alfak_two_shell_")
+#' sparse_dir <- tempfile("alfak_two_step_")
 #' alfak(
 #'   yi = list(x = sparse_counts, dt = 1),
 #'   outdir = sparse_dir,
 #'   minobs = 20,
 #'   nboot = 5,
-#'   nn_prior = "empirical_two_shell"
+#'   nn_prior = "empirical_two_step"
 #' )
 #' readRDS(file.path(sparse_dir, "nn_prior_diagnostics.Rds"))$replicate
 #'
@@ -319,20 +319,20 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
                   allow_noninteger_counts = FALSE,
                   correct_efflux=FALSE,
                   landscape_data_output = FALSE,
-                  nn_prior = c("empirical_censored", "empirical_censored_weighted", "empirical_two_shell", "cohort_transition", "none", "empirical"),
+                  nn_prior = c("empirical_censored", "empirical_censored_weighted", "empirical_two_step", "cohort_transition", "none", "empirical"),
                   cohort_transition_prior = NULL,
                   cohort_transition_prior_path = NULL,
                   cohort_transition_patient_id = NULL,
                   cohort_transition_version = c("contextual", "v2", "v1"),
                   cohort_transition_apply_to = c("zero_only", "low_information", "all"),
-                  cohort_transition_overlay_base = c("empirical_two_shell", "direct"),
+                  cohort_transition_overlay_base = c("empirical_two_step", "direct"),
                   cohort_transition_lambda = 0.25,
                   cohort_transition_max_borrowing_fraction = 0.5,
                   cohort_transition_max_abs_delta_shift = NULL,
                   cohort_transition_sd_floor = 0.05,
                   cohort_transition_patient_sd_floor = 0.1,
                   cohort_contextual_apply_to = NULL,
-                  cohort_contextual_overlay_base = c("empirical_two_shell", "direct"),
+                  cohort_contextual_overlay_base = c("empirical_two_step", "direct"),
                   cohort_context_lambda = 0.25,
                   cohort_context_max_borrowing_fraction = 0.5,
                   cohort_context_max_abs_delta_shift = NULL,
@@ -357,14 +357,14 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
                   nn_prior_two_step_support = c("none", "rescue"),
                   nn_prior_two_step_support_min = 0.15,
                   nn_prior_two_step_cap_floor = 0.30,
-                  nn_two_shell_min_delta_n = 3L,
-                  nn_two_shell_min_exposure = NULL,
-                  nn_two_shell_min_observed_count = 1L,
-                  nn_two_shell_max_weight_ratio = 1.0,
-                  nn_two_shell_lambda = 1.0,
-                  nn_two_shell_reuse_sd = NULL,
-                  nn_two_shell_uncertainty_floor = NULL,
-                  nn_two_shell_save_diagnostics = TRUE,
+                  nn_two_step_min_delta_n = 3L,
+                  nn_two_step_min_exposure = NULL,
+                  nn_two_step_min_observed_count = 1L,
+                  nn_two_step_max_weight_ratio = 1.0,
+                  nn_two_step_lambda = 1.0,
+                  nn_two_step_reuse_sd = NULL,
+                  nn_two_step_uncertainty_floor = NULL,
+                  nn_two_step_save_diagnostics = TRUE,
                   krig_bootstrap_mode = c("marginal", "joint")) {
 
   # Note: library calls removed, dependencies handled by @importFrom or DESCRIPTION
@@ -378,7 +378,7 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
   validate_scalar_logical(allow_noninteger_counts, "allow_noninteger_counts")
   validate_scalar_logical(correct_efflux, "correct_efflux")
   validate_scalar_logical(landscape_data_output, "landscape_data_output")
-  validate_scalar_logical(nn_two_shell_save_diagnostics, "nn_two_shell_save_diagnostics")
+  validate_scalar_logical(nn_two_step_save_diagnostics, "nn_two_step_save_diagnostics")
   nn_prior <- validate_nn_prior_mode(nn_prior)
   alfak_log_event(
     level = "INFO",
@@ -445,13 +445,13 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
     nn_prior_two_step_support = nn_prior_two_step_support,
     nn_prior_two_step_support_min = nn_prior_two_step_support_min,
     nn_prior_two_step_cap_floor = nn_prior_two_step_cap_floor,
-    nn_two_shell_min_delta_n = nn_two_shell_min_delta_n,
-    nn_two_shell_min_exposure = nn_two_shell_min_exposure,
-    nn_two_shell_min_observed_count = nn_two_shell_min_observed_count,
-    nn_two_shell_max_weight_ratio = nn_two_shell_max_weight_ratio,
-    nn_two_shell_lambda = nn_two_shell_lambda,
-    nn_two_shell_reuse_sd = nn_two_shell_reuse_sd,
-    nn_two_shell_uncertainty_floor = nn_two_shell_uncertainty_floor
+    nn_two_step_min_delta_n = nn_two_step_min_delta_n,
+    nn_two_step_min_exposure = nn_two_step_min_exposure,
+    nn_two_step_min_observed_count = nn_two_step_min_observed_count,
+    nn_two_step_max_weight_ratio = nn_two_step_max_weight_ratio,
+    nn_two_step_lambda = nn_two_step_lambda,
+    nn_two_step_reuse_sd = nn_two_step_reuse_sd,
+    nn_two_step_uncertainty_floor = nn_two_step_uncertainty_floor
   )
   yi$x <- coerce_count_matrix(yi$x, allow_noninteger_counts = allow_noninteger_counts)
   validate_positive_depth(yi$x)
@@ -502,19 +502,19 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
                                      nn_prior_two_step_support = nn_prior_two_step_support,
                                      nn_prior_two_step_support_min = nn_prior_two_step_support_min,
                                      nn_prior_two_step_cap_floor = nn_prior_two_step_cap_floor,
-                                     nn_two_shell_min_delta_n = nn_two_shell_min_delta_n,
-                                     nn_two_shell_min_exposure = nn_two_shell_min_exposure,
-                                     nn_two_shell_min_observed_count = nn_two_shell_min_observed_count,
-                                     nn_two_shell_max_weight_ratio = nn_two_shell_max_weight_ratio,
-                                     nn_two_shell_lambda = nn_two_shell_lambda,
-                                     nn_two_shell_reuse_sd = nn_two_shell_reuse_sd,
-                                     nn_two_shell_uncertainty_floor = nn_two_shell_uncertainty_floor)
+                                     nn_two_step_min_delta_n = nn_two_step_min_delta_n,
+                                     nn_two_step_min_exposure = nn_two_step_min_exposure,
+                                     nn_two_step_min_observed_count = nn_two_step_min_observed_count,
+                                     nn_two_step_max_weight_ratio = nn_two_step_max_weight_ratio,
+                                     nn_two_step_lambda = nn_two_step_lambda,
+                                     nn_two_step_reuse_sd = nn_two_step_reuse_sd,
+                                     nn_two_step_uncertainty_floor = nn_two_step_uncertainty_floor)
   saveRDS(fq_boot, file = file.path(outdir, "bootstrap_res.Rds"))
-  if (nn_prior == "empirical_two_shell" && isTRUE(nn_two_shell_save_diagnostics)) {
+  if (nn_prior == "empirical_two_step" && isTRUE(nn_two_step_save_diagnostics)) {
     saveRDS(
       list(
         replicate = fq_boot$nn_prior_diagnostics,
-        node = fq_boot$nn_two_shell_node_diagnostics
+        node = fq_boot$nn_two_step_node_diagnostics
       ),
       file = file.path(outdir, "nn_prior_diagnostics.Rds")
     )
@@ -655,7 +655,7 @@ ALFAK_FEXP_DELTA_TOL <- 1e-8
 ALFAK_EFFLUX_VIABILITY_TOL <- 1e-6
 ALFAK_NN_PRIOR_SD_FLOOR <- 1e-3
 ALFAK_NN_PRIOR_CENSORED_GRID_POINTS <- 81L
-ALFAK_NN_TWO_SHELL_UNCERTAINTY_FLOOR <- 0.25
+ALFAK_NN_TWO_STEP_UNCERTAINTY_FLOOR <- 0.25
 ALFAK_COUNT_INTEGER_TOL <- sqrt(.Machine$double.eps)
 ALFAK_KRIG_NSTEP_CV <- 200L
 ALFAK_MAX_EXACT_INTEGER <- 2^53 - 1
@@ -892,7 +892,7 @@ sd_or_na <- function(x) {
 #' @keywords internal
 #' @noRd
 validate_nn_prior_mode <- function(nn_prior) {
-  match.arg(nn_prior, c("empirical_censored", "empirical_censored_weighted", "empirical_two_shell", "cohort_transition", "none", "empirical"))
+  match.arg(nn_prior, c("empirical_censored", "empirical_censored_weighted", "empirical_two_step", "cohort_transition", "none", "empirical"))
 }
 
 #' Validate weighted nearest-neighbour prior subset mode
@@ -929,13 +929,13 @@ validate_nn_prior_controls <- function(nn_prior_sd = NULL,
                                        nn_prior_two_step_support = c("none", "rescue"),
                                        nn_prior_two_step_support_min = 0.15,
                                        nn_prior_two_step_cap_floor = 0.30,
-                                       nn_two_shell_min_delta_n = 3L,
-                                       nn_two_shell_min_exposure = NULL,
-                                       nn_two_shell_min_observed_count = 1L,
-                                       nn_two_shell_max_weight_ratio = 1.0,
-                                       nn_two_shell_lambda = 1.0,
-                                       nn_two_shell_reuse_sd = NULL,
-                                       nn_two_shell_uncertainty_floor = NULL) {
+                                       nn_two_step_min_delta_n = 3L,
+                                       nn_two_step_min_exposure = NULL,
+                                       nn_two_step_min_observed_count = 1L,
+                                       nn_two_step_max_weight_ratio = 1.0,
+                                       nn_two_step_lambda = 1.0,
+                                       nn_two_step_reuse_sd = NULL,
+                                       nn_two_step_uncertainty_floor = NULL) {
   nn_prior_fit_subset <- validate_nn_prior_fit_subset(nn_prior_fit_subset)
   nn_prior_two_step_support <- validate_nn_prior_two_step_support(nn_prior_two_step_support)
   if (!is.null(nn_prior_sd)) {
@@ -964,18 +964,18 @@ validate_nn_prior_controls <- function(nn_prior_sd = NULL,
   validate_positive_integer(nn_prior_hybrid_min_obs, "nn_prior_hybrid_min_obs")
   validate_probability(nn_prior_two_step_support_min, "nn_prior_two_step_support_min", upper_inclusive = TRUE)
   validate_probability(nn_prior_two_step_cap_floor, "nn_prior_two_step_cap_floor", upper_inclusive = TRUE)
-  validate_positive_integer(nn_two_shell_min_delta_n, "nn_two_shell_min_delta_n")
-  validate_nonnegative_integer(nn_two_shell_min_observed_count, "nn_two_shell_min_observed_count")
-  if (!is.null(nn_two_shell_min_exposure)) {
-    validate_nonnegative_finite(nn_two_shell_min_exposure, "nn_two_shell_min_exposure")
+  validate_positive_integer(nn_two_step_min_delta_n, "nn_two_step_min_delta_n")
+  validate_nonnegative_integer(nn_two_step_min_observed_count, "nn_two_step_min_observed_count")
+  if (!is.null(nn_two_step_min_exposure)) {
+    validate_nonnegative_finite(nn_two_step_min_exposure, "nn_two_step_min_exposure")
   }
-  validate_nonnegative_finite(nn_two_shell_max_weight_ratio, "nn_two_shell_max_weight_ratio")
-  validate_nonnegative_finite(nn_two_shell_lambda, "nn_two_shell_lambda")
-  if (!is.null(nn_two_shell_reuse_sd)) {
-    validate_nonnegative_finite(nn_two_shell_reuse_sd, "nn_two_shell_reuse_sd")
+  validate_nonnegative_finite(nn_two_step_max_weight_ratio, "nn_two_step_max_weight_ratio")
+  validate_nonnegative_finite(nn_two_step_lambda, "nn_two_step_lambda")
+  if (!is.null(nn_two_step_reuse_sd)) {
+    validate_nonnegative_finite(nn_two_step_reuse_sd, "nn_two_step_reuse_sd")
   }
-  if (!is.null(nn_two_shell_uncertainty_floor)) {
-    validate_nonnegative_finite(nn_two_shell_uncertainty_floor, "nn_two_shell_uncertainty_floor")
+  if (!is.null(nn_two_step_uncertainty_floor)) {
+    validate_nonnegative_finite(nn_two_step_uncertainty_floor, "nn_two_step_uncertainty_floor")
   }
   invisible(NULL)
 }
@@ -2558,7 +2558,7 @@ new_nn_prior_diagnostics <- function(nn_prior_mode_requested,
     tau_reuse = NA_real_,
     total_inward_weight = 0,
     total_outward_weight = 0,
-    adaptive_two_shell_min_exposure = NA_real_,
+    adaptive_two_step_min_exposure = NA_real_,
     informative_child_count = NA_integer_,
     map_delta_lower_boundary_rate = NA_real_,
     map_delta_upper_boundary_rate = NA_real_,
@@ -2855,10 +2855,10 @@ normalize_nn_weights <- function(weights, fallback_n = length(weights)) {
   rep(1 / fallback_n, fallback_n)
 }
 
-#' Fit a weighted Gaussian shell-delta prior with robust floors
+#' Fit a weighted Gaussian step-delta prior with robust floors
 #' @keywords internal
 #' @noRd
-fit_shell_delta_prior <- function(delta, weights = NULL,
+fit_step_delta_prior <- function(delta, weights = NULL,
                                   sd_floor = ALFAK_NN_PRIOR_SD_FLOOR,
                                   fallback_mu = 0,
                                   fallback_sd = sd_floor) {
@@ -2890,15 +2890,15 @@ fit_shell_delta_prior <- function(delta, weights = NULL,
   list(mu = mu, sigma = max(sigma, sd_floor), n = length(delta), sum_weight = w_sum)
 }
 
-#' Resolve the two-shell provisional-fitness uncertainty floor
+#' Resolve the two-step provisional-fitness uncertainty floor
 #' @keywords internal
 #' @noRd
-resolve_nn_two_shell_uncertainty_floor <- function(nn_two_shell_uncertainty_floor,
+resolve_nn_two_step_uncertainty_floor <- function(nn_two_step_uncertainty_floor,
                                                    nn_prior_sd_floor) {
-  floor_val <- if (is.null(nn_two_shell_uncertainty_floor)) {
-    ALFAK_NN_TWO_SHELL_UNCERTAINTY_FLOOR
+  floor_val <- if (is.null(nn_two_step_uncertainty_floor)) {
+    ALFAK_NN_TWO_STEP_UNCERTAINTY_FLOOR
   } else {
-    nn_two_shell_uncertainty_floor
+    nn_two_step_uncertainty_floor
   }
   max(floor_val, nn_prior_sd_floor)
 }
@@ -2934,7 +2934,7 @@ estimate_scalar_objective_se <- function(objective_fn, optimum, search_interval,
   max(se_floor, sqrt(1 / curvature))
 }
 
-#' Build projected one-step anchor trajectories for two-shell fitting
+#' Build projected one-step anchor trajectories for two-step fitting
 #' @keywords internal
 #' @noRd
 build_one_step_anchor_states <- function(nn_child_contexts, f1_hat, timepoints,
@@ -2975,14 +2975,14 @@ build_one_step_anchor_states <- function(nn_child_contexts, f1_hat, timepoints,
   states[!vapply(states, is.null, logical(1))]
 }
 
-#' Resolve an adaptive two-shell exposure threshold
+#' Resolve an adaptive two-step exposure threshold
 #' @keywords internal
 #' @noRd
-resolve_two_shell_min_exposure <- function(nn_child_contexts, nn_present,
+resolve_two_step_min_exposure <- function(nn_child_contexts, nn_present,
                                            candidate_exposure,
-                                           nn_two_shell_min_exposure) {
-  if (!is.null(nn_two_shell_min_exposure)) {
-    return(as.numeric(nn_two_shell_min_exposure))
+                                           nn_two_step_min_exposure) {
+  if (!is.null(nn_two_step_min_exposure)) {
+    return(as.numeric(nn_two_step_min_exposure))
   }
   one_step_observed_exposure <- vapply(nn_child_contexts[nn_present], function(item) {
     item$projected_exposure
@@ -3000,10 +3000,10 @@ resolve_two_shell_min_exposure <- function(nn_child_contexts, nn_present,
 #' Build supported two-step candidate paths from provisional one-step anchors
 #' @keywords internal
 #' @noRd
-build_two_shell_candidates <- function(nn_child_contexts, f1_hat, boot_data, fpar,
+build_two_step_candidates <- function(nn_child_contexts, f1_hat, boot_data, fpar,
                                        timepoints, ntot, pm, nn_present,
-                                       nn_two_shell_min_exposure = NULL,
-                                       nn_two_shell_min_observed_count = 1L,
+                                       nn_two_step_min_exposure = NULL,
+                                       nn_two_step_min_observed_count = 1L,
                                        min_frequency = 0) {
   anchor_states <- build_one_step_anchor_states(
     nn_child_contexts = nn_child_contexts,
@@ -3077,14 +3077,14 @@ build_two_shell_candidates <- function(nn_child_contexts, f1_hat, boot_data, fpa
     FUN = function(x) sum(x[is.finite(x)], na.rm = TRUE)
   )
   candidates$expected_exposure <- as.numeric(total_expected)
-  adaptive_min_exposure <- resolve_two_shell_min_exposure(
+  adaptive_min_exposure <- resolve_two_step_min_exposure(
     nn_child_contexts = nn_child_contexts,
     nn_present = nn_present,
     candidate_exposure = candidates$expected_exposure,
-    nn_two_shell_min_exposure = nn_two_shell_min_exposure
+    nn_two_step_min_exposure = nn_two_step_min_exposure
   )
   retained <- candidates[
-    candidates$observed_count >= nn_two_shell_min_observed_count |
+    candidates$observed_count >= nn_two_step_min_observed_count |
       (is.finite(candidates$expected_exposure) & candidates$expected_exposure >= adaptive_min_exposure),
     ,
     drop = FALSE
@@ -3099,21 +3099,21 @@ build_two_shell_candidates <- function(nn_child_contexts, f1_hat, boot_data, fpa
   )
 }
 
-#' Compute path responsibilities for retained two-shell candidate paths
+#' Compute path responsibilities for retained two-step candidate paths
 #' @keywords internal
 #' @noRd
-compute_two_shell_path_responsibilities <- function(candidate_paths) {
+compute_two_step_path_responsibilities <- function(candidate_paths) {
   if (!is.data.frame(candidate_paths) || !nrow(candidate_paths)) {
     return(candidate_paths)
   }
   cpp_resp <- alfak_cpp_call(
-    "alfak_two_shell_path_responsibilities_cpp",
-    alfak_two_shell_path_responsibilities_cpp(
+    "alfak_two_step_path_responsibilities_cpp",
+    alfak_two_step_path_responsibilities_cpp(
       descendant = as.character(candidate_paths$descendant),
       parent_anchor_exposure = as.numeric(candidate_paths$parent_anchor_exposure),
       transition_probability = as.numeric(candidate_paths$transition_probability)
     ),
-    context = "compute_two_shell_path_responsibilities"
+    context = "compute_two_step_path_responsibilities"
   )
   if (is.list(cpp_resp) &&
       length(cpp_resp$path_supply) == nrow(candidate_paths) &&
@@ -3124,10 +3124,10 @@ compute_two_shell_path_responsibilities <- function(candidate_paths) {
   }
   alfak_log_event(
     level = "ERROR",
-    component = "cpp.alfak_two_shell_path_responsibilities_cpp",
-    detail = "C++ kernel returned malformed output in compute_two_shell_path_responsibilities."
+    component = "cpp.alfak_two_step_path_responsibilities_cpp",
+    detail = "C++ kernel returned malformed output in compute_two_step_path_responsibilities."
   )
-  stop("C++ kernel `alfak_two_shell_path_responsibilities_cpp` returned malformed output.", call. = FALSE)
+  stop("C++ kernel `alfak_two_step_path_responsibilities_cpp` returned malformed output.", call. = FALSE)
 }
 
 #' Estimate provisional two-step descendant fitness and uncertainty
@@ -3248,9 +3248,9 @@ estimate_provisional_two_step_fitness <- function(candidate_paths, anchor_states
 #' Compute capped outward prior path weights
 #' @keywords internal
 #' @noRd
-compute_two_shell_outward_weights <- function(candidate_paths, f2_fit, nn_child_contexts,
+compute_two_step_outward_weights <- function(candidate_paths, f2_fit, nn_child_contexts,
                                               sigma12, tau_reuse,
-                                              nn_two_shell_max_weight_ratio) {
+                                              nn_two_step_max_weight_ratio) {
   if (!is.data.frame(candidate_paths) || !nrow(candidate_paths) || !nrow(f2_fit)) {
     return(candidate_paths[FALSE, , drop = FALSE])
   }
@@ -3291,7 +3291,7 @@ compute_two_shell_outward_weights <- function(candidate_paths, f2_fit, nn_child_
     if (!is.finite(inward_sum) || inward_sum <= 0) {
       inward_sum <- 1
     }
-    nn_two_shell_max_weight_ratio * inward_sum
+    nn_two_step_max_weight_ratio * inward_sum
   }, numeric(1))
   cap_by_row <- cap_by_child[match(paths$one_step, child_names)]
   paths$outward_weight <- alfak_cpp_call(
@@ -3301,17 +3301,17 @@ compute_two_shell_outward_weights <- function(candidate_paths, f2_fit, nn_child_
       raw_weights = as.numeric(paths$outward_weight_raw),
       cap_by_row = as.numeric(cap_by_row)
     ),
-    context = "compute_two_shell_outward_weights"
+    context = "compute_two_step_outward_weights"
   )
   paths[is.finite(paths$outward_weight) & paths$outward_weight > 0, , drop = FALSE]
 }
 
-#' Apply the single two-shell backward correction to one-step fitness estimates
+#' Apply the single two-step backward correction to one-step fitness estimates
 #' @keywords internal
 #' @noRd
-apply_two_shell_backward_correction <- function(nn_child_contexts, f1_initial, outward_paths,
+apply_two_step_backward_correction <- function(nn_child_contexts, f1_initial, outward_paths,
                                                 mu01, sigma01, mu12, sigma12, tau_reuse,
-                                                nn_two_shell_lambda, timepoints, search_interval) {
+                                                nn_two_step_lambda, timepoints, search_interval) {
   corrected <- f1_initial
   node_rows <- vector("list", length(nn_child_contexts))
   names(node_rows) <- names(nn_child_contexts)
@@ -3335,8 +3335,8 @@ apply_two_shell_backward_correction <- function(nn_child_contexts, f1_initial, o
       sigma12_eff <- sqrt(sigma12^2 + child_paths$f2_var + tau_reuse^2)
       objective_fn <- function(fc_param) {
         alfak_cpp_call(
-          "alfak_neighbor_two_shell_objective_cpp",
-          alfak_neighbor_two_shell_objective_cpp(
+          "alfak_neighbor_two_step_objective_cpp",
+          alfak_neighbor_two_step_objective_cpp(
           fc_param = fc_param,
           parent_fitness = item$parent_fitness,
           pij_values = item$pij,
@@ -3353,10 +3353,10 @@ apply_two_shell_backward_correction <- function(nn_child_contexts, f1_initial, o
           outward_prior_mean = mu12,
           outward_prior_sd = sigma12_eff,
           outward_prior_weights = child_paths$outward_weight,
-          outward_lambda = nn_two_shell_lambda,
+          outward_lambda = nn_two_step_lambda,
           tol = ALFAK_FEXP_DELTA_TOL
           ),
-          context = sprintf("refit empirical_two_shell child %s", child_name)
+          context = sprintf("refit empirical_two_step child %s", child_name)
         )
       }
       local_interval <- range(c(search_interval, f1_initial[child_name], child_paths$f2_hat), na.rm = TRUE)
@@ -3368,10 +3368,10 @@ apply_two_shell_backward_correction <- function(nn_child_contexts, f1_initial, o
       res <- run_optimise_checked(
         objective_fn,
         interval = local_interval,
-        context = sprintf("optimise nearest-neighbour fitness with empirical_two_shell prior for child %s", child_name)
+        context = sprintf("optimise nearest-neighbour fitness with empirical_two_step prior for child %s", child_name)
       )
       if (is.null(res)) {
-        fallback_reason <- "two_shell_optimise_failed"
+        fallback_reason <- "two_step_optimise_failed"
       } else {
         corrected[child_name] <- res$minimum
         boundary_flag <- res$minimum <= local_interval[1] + sqrt(.Machine$double.eps) ||
@@ -3387,7 +3387,7 @@ apply_two_shell_backward_correction <- function(nn_child_contexts, f1_initial, o
       inward_weight_sum = inward_sum,
       outward_weight_sum = if (is.finite(outward_sum)) outward_sum else 0,
       f1_initial = unname(f1_initial[child_name]),
-      f1_two_shell = unname(corrected[child_name]),
+      f1_two_step = unname(corrected[child_name]),
       f1_delta_after_correction = unname(corrected[child_name] - f1_initial[child_name]),
       objective_boundary_flag = boundary_flag,
       prior_dominated_flag = sum(item$child_obs) == 0 && (inward_sum + outward_sum) > 0,
@@ -3399,23 +3399,23 @@ apply_two_shell_backward_correction <- function(nn_child_contexts, f1_initial, o
   list(f1 = corrected, node_diagnostics = do.call(rbind, node_rows))
 }
 
-#' Run the empirical two-shell correction for one bootstrap replicate
+#' Run the empirical two-step correction for one bootstrap replicate
 #' @keywords internal
 #' @noRd
-run_empirical_two_shell_correction <- function(nn_child_contexts, nn_present, f1_initial,
+run_empirical_two_step_correction <- function(nn_child_contexts, nn_present, f1_initial,
                                                fpar, boot_data, timepoints, ntot,
                                                pm, n0, search_interval,
                                                inward_prior_fit,
                                                nn_prior_sd_floor,
-                                               nn_two_shell_min_delta_n = 3L,
-                                               nn_two_shell_min_exposure = NULL,
-                                               nn_two_shell_min_observed_count = 1L,
-                                               nn_two_shell_max_weight_ratio = 1.0,
-                                               nn_two_shell_lambda = 1.0,
-                                               nn_two_shell_reuse_sd = NULL,
-                                               nn_two_shell_uncertainty_floor = NULL) {
-  uncertainty_floor <- resolve_nn_two_shell_uncertainty_floor(
-    nn_two_shell_uncertainty_floor = nn_two_shell_uncertainty_floor,
+                                               nn_two_step_min_delta_n = 3L,
+                                               nn_two_step_min_exposure = NULL,
+                                               nn_two_step_min_observed_count = 1L,
+                                               nn_two_step_max_weight_ratio = 1.0,
+                                               nn_two_step_lambda = 1.0,
+                                               nn_two_step_reuse_sd = NULL,
+                                               nn_two_step_uncertainty_floor = NULL) {
+  uncertainty_floor <- resolve_nn_two_step_uncertainty_floor(
+    nn_two_step_uncertainty_floor = nn_two_step_uncertainty_floor,
     nn_prior_sd_floor = nn_prior_sd_floor
   )
   empty_node_diag <- function(reason) {
@@ -3429,7 +3429,7 @@ run_empirical_two_shell_correction <- function(nn_child_contexts, nn_present, f1
         inward_weight_sum = numeric(0),
         outward_weight_sum = numeric(0),
         f1_initial = numeric(0),
-        f1_two_shell = numeric(0),
+        f1_two_step = numeric(0),
         f1_delta_after_correction = numeric(0),
         objective_boundary_flag = logical(0),
         prior_dominated_flag = logical(0),
@@ -3449,7 +3449,7 @@ run_empirical_two_shell_correction <- function(nn_child_contexts, nn_present, f1
         inward_weight_sum = sum(normalize_nn_weights(item$parent_opportunity_weights, fallback_n = length(item$parent_fitness))),
         outward_weight_sum = 0,
         f1_initial = unname(f1_initial[child_name]),
-        f1_two_shell = unname(f1_initial[child_name]),
+        f1_two_step = unname(f1_initial[child_name]),
         f1_delta_after_correction = 0,
         objective_boundary_flag = FALSE,
         prior_dominated_flag = FALSE,
@@ -3460,7 +3460,7 @@ run_empirical_two_shell_correction <- function(nn_child_contexts, nn_present, f1
     })
     do.call(rbind, rows)
   }
-  two_shell <- build_two_shell_candidates(
+  two_step <- build_two_step_candidates(
     nn_child_contexts = nn_child_contexts,
     f1_hat = f1_initial,
     boot_data = boot_data,
@@ -3469,12 +3469,12 @@ run_empirical_two_shell_correction <- function(nn_child_contexts, nn_present, f1
     ntot = ntot,
     pm = pm,
     nn_present = nn_present,
-    nn_two_shell_min_exposure = nn_two_shell_min_exposure,
-    nn_two_shell_min_observed_count = nn_two_shell_min_observed_count,
+    nn_two_step_min_exposure = nn_two_step_min_exposure,
+    nn_two_step_min_observed_count = nn_two_step_min_observed_count,
     min_frequency = 1 / n0
   )
-  candidates_total <- nrow(two_shell$candidates)
-  candidates_retained <- nrow(two_shell$retained)
+  candidates_total <- nrow(two_step$candidates)
+  candidates_retained <- nrow(two_step$retained)
   if (!candidates_retained) {
     return(list(
       f1 = f1_initial,
@@ -3492,14 +3492,14 @@ run_empirical_two_shell_correction <- function(nn_child_contexts, nn_present, f1
         tau_reuse = NA_real_,
         total_inward_weight = length(nn_child_contexts),
         total_outward_weight = 0,
-        adaptive_two_shell_min_exposure = two_shell$adaptive_min_exposure
+        adaptive_two_step_min_exposure = two_step$adaptive_min_exposure
       )
     ))
   }
-  retained <- compute_two_shell_path_responsibilities(two_shell$retained)
+  retained <- compute_two_step_path_responsibilities(two_step$retained)
   f2_fit <- estimate_provisional_two_step_fitness(
     candidate_paths = retained,
-    anchor_states = two_shell$anchor_states,
+    anchor_states = two_step$anchor_states,
     boot_data = boot_data,
     timepoints = timepoints,
     ntot = ntot,
@@ -3515,7 +3515,7 @@ run_empirical_two_shell_correction <- function(nn_child_contexts, nn_present, f1
         fallback_reason = "all_provisional_two_step_fits_failed",
         n_2step_candidates_total = candidates_total,
         n_2step_candidates_retained = candidates_retained,
-        n_2step_observed = as.integer(sum(f2_fit$observed_count >= nn_two_shell_min_observed_count, na.rm = TRUE)),
+        n_2step_observed = as.integer(sum(f2_fit$observed_count >= nn_two_step_min_observed_count, na.rm = TRUE)),
         n_2step_used_in_backward_term = 0L,
         mu01 = inward_prior_fit$prior_mean,
         sigma01 = inward_prior_fit$prior_sd,
@@ -3524,21 +3524,21 @@ run_empirical_two_shell_correction <- function(nn_child_contexts, nn_present, f1
         tau_reuse = NA_real_,
         total_inward_weight = length(nn_child_contexts),
         total_outward_weight = 0,
-        adaptive_two_shell_min_exposure = two_shell$adaptive_min_exposure
+        adaptive_two_step_min_exposure = two_step$adaptive_min_exposure
       )
     ))
   }
   retained <- retained[retained$descendant %in% usable_f2$karyotype, , drop = FALSE]
   fit_idx <- match(retained$descendant, usable_f2$karyotype)
   delta12 <- usable_f2$f2_hat[fit_idx] - f1_initial[retained$one_step]
-  shell12 <- fit_shell_delta_prior(
+  step12 <- fit_step_delta_prior(
     delta = delta12,
     weights = retained$path_responsibility,
     sd_floor = nn_prior_sd_floor,
     fallback_mu = inward_prior_fit$prior_mean,
     fallback_sd = inward_prior_fit$prior_sd
   )
-  if (shell12$n < nn_two_shell_min_delta_n) {
+  if (step12$n < nn_two_step_min_delta_n) {
     return(list(
       f1 = f1_initial,
       node_diagnostics = empty_node_diag("too_few_usable_delta12"),
@@ -3546,34 +3546,34 @@ run_empirical_two_shell_correction <- function(nn_child_contexts, nn_present, f1
         fallback_reason = "too_few_usable_delta12",
         n_2step_candidates_total = candidates_total,
         n_2step_candidates_retained = candidates_retained,
-        n_2step_observed = as.integer(sum(usable_f2$observed_count >= nn_two_shell_min_observed_count, na.rm = TRUE)),
+        n_2step_observed = as.integer(sum(usable_f2$observed_count >= nn_two_step_min_observed_count, na.rm = TRUE)),
         n_2step_used_in_backward_term = 0L,
         mu01 = inward_prior_fit$prior_mean,
         sigma01 = inward_prior_fit$prior_sd,
-        mu12 = shell12$mu,
-        sigma12 = shell12$sigma,
+        mu12 = step12$mu,
+        sigma12 = step12$sigma,
         tau_reuse = NA_real_,
         total_inward_weight = length(nn_child_contexts),
         total_outward_weight = 0,
-        adaptive_two_shell_min_exposure = two_shell$adaptive_min_exposure
+        adaptive_two_step_min_exposure = two_step$adaptive_min_exposure
       )
     ))
   }
-  tau_reuse <- if (is.null(nn_two_shell_reuse_sd)) {
-    max(nn_prior_sd_floor, shell12$sigma)
+  tau_reuse <- if (is.null(nn_two_step_reuse_sd)) {
+    max(nn_prior_sd_floor, step12$sigma)
   } else {
-    nn_two_shell_reuse_sd
+    nn_two_step_reuse_sd
   }
-  outward_paths <- compute_two_shell_outward_weights(
+  outward_paths <- compute_two_step_outward_weights(
     candidate_paths = retained,
     f2_fit = usable_f2,
     nn_child_contexts = nn_child_contexts,
-    sigma12 = shell12$sigma,
+    sigma12 = step12$sigma,
     tau_reuse = tau_reuse,
-    nn_two_shell_max_weight_ratio = nn_two_shell_max_weight_ratio
+    nn_two_step_max_weight_ratio = nn_two_step_max_weight_ratio
   )
   total_outward <- if (nrow(outward_paths)) sum(outward_paths$outward_weight) else 0
-  if (!is.finite(total_outward) || total_outward <= 0 || nn_two_shell_lambda <= 0) {
+  if (!is.finite(total_outward) || total_outward <= 0 || nn_two_step_lambda <= 0) {
     return(list(
       f1 = f1_initial,
       node_diagnostics = empty_node_diag("all_outward_weights_zero"),
@@ -3581,29 +3581,29 @@ run_empirical_two_shell_correction <- function(nn_child_contexts, nn_present, f1
         fallback_reason = "all_outward_weights_zero",
         n_2step_candidates_total = candidates_total,
         n_2step_candidates_retained = candidates_retained,
-        n_2step_observed = as.integer(sum(usable_f2$observed_count >= nn_two_shell_min_observed_count, na.rm = TRUE)),
+        n_2step_observed = as.integer(sum(usable_f2$observed_count >= nn_two_step_min_observed_count, na.rm = TRUE)),
         n_2step_used_in_backward_term = 0L,
         mu01 = inward_prior_fit$prior_mean,
         sigma01 = inward_prior_fit$prior_sd,
-        mu12 = shell12$mu,
-        sigma12 = shell12$sigma,
+        mu12 = step12$mu,
+        sigma12 = step12$sigma,
         tau_reuse = tau_reuse,
         total_inward_weight = length(nn_child_contexts),
         total_outward_weight = 0,
-        adaptive_two_shell_min_exposure = two_shell$adaptive_min_exposure
+        adaptive_two_step_min_exposure = two_step$adaptive_min_exposure
       )
     ))
   }
-  corrected <- apply_two_shell_backward_correction(
+  corrected <- apply_two_step_backward_correction(
     nn_child_contexts = nn_child_contexts,
     f1_initial = f1_initial,
     outward_paths = outward_paths,
     mu01 = inward_prior_fit$prior_mean,
     sigma01 = inward_prior_fit$prior_sd,
-    mu12 = shell12$mu,
-    sigma12 = shell12$sigma,
+    mu12 = step12$mu,
+    sigma12 = step12$sigma,
     tau_reuse = tau_reuse,
-    nn_two_shell_lambda = nn_two_shell_lambda,
+    nn_two_step_lambda = nn_two_step_lambda,
     timepoints = timepoints,
     search_interval = search_interval
   )
@@ -3614,16 +3614,16 @@ run_empirical_two_shell_correction <- function(nn_child_contexts, nn_present, f1
       fallback_reason = NA_character_,
       n_2step_candidates_total = candidates_total,
       n_2step_candidates_retained = candidates_retained,
-      n_2step_observed = as.integer(sum(usable_f2$observed_count >= nn_two_shell_min_observed_count, na.rm = TRUE)),
+      n_2step_observed = as.integer(sum(usable_f2$observed_count >= nn_two_step_min_observed_count, na.rm = TRUE)),
       n_2step_used_in_backward_term = length(unique(outward_paths$descendant)),
       mu01 = inward_prior_fit$prior_mean,
       sigma01 = inward_prior_fit$prior_sd,
-      mu12 = shell12$mu,
-      sigma12 = shell12$sigma,
+      mu12 = step12$mu,
+      sigma12 = step12$sigma,
       tau_reuse = tau_reuse,
       total_inward_weight = length(nn_child_contexts),
       total_outward_weight = total_outward,
-      adaptive_two_shell_min_exposure = two_shell$adaptive_min_exposure
+      adaptive_two_step_min_exposure = two_step$adaptive_min_exposure
     )
   )
 }
@@ -3954,19 +3954,19 @@ find_birth_times <- function(opt_res, time_range, minF) {
 #' @noRd
 solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, pm = 0.00005,
                                     n0, nb, passage_times = NULL, allow_noninteger_counts = FALSE, correct_efflux=FALSE,
-                                    nn_prior = c("empirical_censored", "empirical_censored_weighted", "empirical_two_shell", "cohort_transition", "none", "empirical"),
+                                    nn_prior = c("empirical_censored", "empirical_censored_weighted", "empirical_two_step", "cohort_transition", "none", "empirical"),
                                     cohort_transition_prior = NULL,
                                     cohort_transition_patient_id = NULL,
                                     cohort_transition_version = c("contextual", "v2", "v1"),
                                     cohort_transition_apply_to = c("zero_only", "low_information", "all"),
-                                    cohort_transition_overlay_base = c("empirical_two_shell", "direct"),
+                                    cohort_transition_overlay_base = c("empirical_two_step", "direct"),
                                     cohort_transition_lambda = 0.25,
                                     cohort_transition_max_borrowing_fraction = 0.5,
                                     cohort_transition_max_abs_delta_shift = NULL,
                                     cohort_transition_sd_floor = 0.05,
                                     cohort_transition_patient_sd_floor = 0.1,
                                     cohort_contextual_apply_to = NULL,
-                                    cohort_contextual_overlay_base = c("empirical_two_shell", "direct"),
+                                    cohort_contextual_overlay_base = c("empirical_two_step", "direct"),
                                     cohort_context_lambda = 0.25,
                                     cohort_context_max_borrowing_fraction = 0.5,
                                     cohort_context_max_abs_delta_shift = NULL,
@@ -3991,13 +3991,13 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
                                     nn_prior_two_step_support = c("none", "rescue"),
                                     nn_prior_two_step_support_min = 0.15,
                                     nn_prior_two_step_cap_floor = 0.30,
-                                    nn_two_shell_min_delta_n = 3L,
-                                    nn_two_shell_min_exposure = NULL,
-                                    nn_two_shell_min_observed_count = 1L,
-                                    nn_two_shell_max_weight_ratio = 1.0,
-                                    nn_two_shell_lambda = 1.0,
-                                    nn_two_shell_reuse_sd = NULL,
-                                    nn_two_shell_uncertainty_floor = NULL) {
+                                    nn_two_step_min_delta_n = 3L,
+                                    nn_two_step_min_exposure = NULL,
+                                    nn_two_step_min_observed_count = 1L,
+                                    nn_two_step_max_weight_ratio = 1.0,
+                                    nn_two_step_lambda = 1.0,
+                                    nn_two_step_reuse_sd = NULL,
+                                    nn_two_step_uncertainty_floor = NULL) {
   data$x <- coerce_count_matrix(data$x, allow_noninteger_counts = allow_noninteger_counts)
   validate_positive_depth(data$x)
   validate_positive_integer(nboot, "nboot")
@@ -4070,13 +4070,13 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
     nn_prior_two_step_support = nn_prior_two_step_support,
     nn_prior_two_step_support_min = nn_prior_two_step_support_min,
     nn_prior_two_step_cap_floor = nn_prior_two_step_cap_floor,
-    nn_two_shell_min_delta_n = nn_two_shell_min_delta_n,
-    nn_two_shell_min_exposure = nn_two_shell_min_exposure,
-    nn_two_shell_min_observed_count = nn_two_shell_min_observed_count,
-    nn_two_shell_max_weight_ratio = nn_two_shell_max_weight_ratio,
-    nn_two_shell_lambda = nn_two_shell_lambda,
-    nn_two_shell_reuse_sd = nn_two_shell_reuse_sd,
-    nn_two_shell_uncertainty_floor = nn_two_shell_uncertainty_floor
+    nn_two_step_min_delta_n = nn_two_step_min_delta_n,
+    nn_two_step_min_exposure = nn_two_step_min_exposure,
+    nn_two_step_min_observed_count = nn_two_step_min_observed_count,
+    nn_two_step_max_weight_ratio = nn_two_step_max_weight_ratio,
+    nn_two_step_lambda = nn_two_step_lambda,
+    nn_two_step_reuse_sd = nn_two_step_reuse_sd,
+    nn_two_step_uncertainty_floor = nn_two_step_uncertainty_floor
   )
   fq <- get_frequent_karyotypes(data$x, minobs)
   nn_info_list <- gen_nn_info(fq, pm) # Renamed 'nn' to 'nn_info_list' for clarity
@@ -4105,13 +4105,13 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
     effective_mass_reference = 0,
     exposure_reference = NA_real_
   )
-  cohort_transition_uses_two_shell_baseline <- identical(nn_prior, "cohort_transition") &&
+  cohort_transition_uses_two_step_baseline <- identical(nn_prior, "cohort_transition") &&
     ((identical(cohort_transition_version, "v2") &&
-        identical(cohort_transition_overlay_base, "empirical_two_shell")) ||
+        identical(cohort_transition_overlay_base, "empirical_two_step")) ||
        (identical(cohort_transition_version, "contextual") &&
-          identical(cohort_contextual_overlay_base, "empirical_two_shell")))
-  if ((nn_prior %in% c("empirical_censored_weighted", "empirical_two_shell") ||
-       isTRUE(cohort_transition_uses_two_shell_baseline)) &&
+          identical(cohort_contextual_overlay_base, "empirical_two_step")))
+  if ((nn_prior %in% c("empirical_censored_weighted", "empirical_two_step") ||
+       isTRUE(cohort_transition_uses_two_step_baseline)) &&
       length(nn_info_list) > 0) {
     weighted_sample_pooled_prior <- tryCatch(
       {
@@ -4184,8 +4184,8 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
     names(fc) <- names(nn_child_contexts) # Pre-name fc
 	    nn_prior_diag <- new_nn_prior_diagnostics(
 	      nn_prior_mode_requested = nn_prior,
-	      nn_prior_fit_subset_used = if (nn_prior %in% c("empirical_censored_weighted", "empirical_two_shell") ||
-                                       isTRUE(cohort_transition_uses_two_shell_baseline)) nn_prior_fit_subset else NA_character_
+	      nn_prior_fit_subset_used = if (nn_prior %in% c("empirical_censored_weighted", "empirical_two_step") ||
+                                       isTRUE(cohort_transition_uses_two_step_baseline)) nn_prior_fit_subset else NA_character_
 	    )
 	    nn_prior_diag$replicate_id <- as.integer(b_iter_idx)
 	    nn_prior_diag$n_frequent_parents <- as.integer(length(fpar))
@@ -4237,17 +4237,17 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	    use_empirical_prior <- nn_prior == "empirical"
 	    use_empirical_censored_prior <- nn_prior == "empirical_censored"
 	    use_empirical_censored_weighted_prior <- nn_prior == "empirical_censored_weighted"
-	    use_empirical_two_shell_prior <- nn_prior == "empirical_two_shell"
+	    use_empirical_two_step_prior <- nn_prior == "empirical_two_step"
 	    use_cohort_transition_prior <- nn_prior == "cohort_transition"
 	    use_cohort_transition_v2_overlay <- use_cohort_transition_prior && identical(cohort_transition_version, "v2")
 	    use_cohort_transition_contextual_overlay <- use_cohort_transition_prior && identical(cohort_transition_version, "contextual")
-	    run_two_shell_baseline <- use_empirical_two_shell_prior ||
-        (use_cohort_transition_v2_overlay && identical(cohort_transition_overlay_base, "empirical_two_shell")) ||
-        (use_cohort_transition_contextual_overlay && identical(cohort_contextual_overlay_base, "empirical_two_shell"))
-	    use_weighted_like_prior <- use_empirical_censored_weighted_prior || run_two_shell_baseline
+	    run_two_step_baseline <- use_empirical_two_step_prior ||
+        (use_cohort_transition_v2_overlay && identical(cohort_transition_overlay_base, "empirical_two_step")) ||
+        (use_cohort_transition_contextual_overlay && identical(cohort_contextual_overlay_base, "empirical_two_step"))
+	    use_weighted_like_prior <- use_empirical_censored_weighted_prior || run_two_step_baseline
 	    weighted_prior_config <- NULL
 	    weighted_sample_pooled_prior_use <- NULL
-	    two_shell_inward_prior_fit <- NULL
+	    two_step_inward_prior_fit <- NULL
 	    if (use_weighted_like_prior && any(!nn_present)) {
 	      weighted_prior_config <- prepare_weighted_nn_prior_fit(
         nn_child_contexts = nn_child_contexts,
@@ -4444,7 +4444,7 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	          error = NULL
 	        ),
 	        error = function(e) {
-	          if (isTRUE(run_two_shell_baseline)) {
+	          if (isTRUE(run_two_step_baseline)) {
 	            list(fit = NULL, error = conditionMessage(e))
 	          } else {
 	            stop(e)
@@ -4460,7 +4460,7 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	        nn_prior_diag$nn_prior_source_used <- "observed_replicate"
 	        nn_prior_diag$prior_mu_hat <- prior_fit$prior_mean
 	        nn_prior_diag$prior_sigma_hat <- prior_fit$prior_sd
-	        two_shell_inward_prior_fit <- list(prior_mean = prior_fit$prior_mean, prior_sd = prior_fit$prior_sd)
+	        two_step_inward_prior_fit <- list(prior_mean = prior_fit$prior_mean, prior_sd = prior_fit$prior_sd)
 	        if (!is.null(prior_fit$informative_child_count)) {
 	          nn_prior_diag$informative_child_count <- prior_fit$informative_child_count
 	        }
@@ -4518,7 +4518,7 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	      nn_prior_diag$nn_prior_source_used <- "sample_pooled"
 	      nn_prior_diag$prior_mu_hat <- weighted_sample_pooled_prior_use$prior_mean
 	      nn_prior_diag$prior_sigma_hat <- weighted_sample_pooled_prior_use$prior_sd
-	      two_shell_inward_prior_fit <- list(
+	      two_step_inward_prior_fit <- list(
 	        prior_mean = weighted_sample_pooled_prior_use$prior_mean,
 	        prior_sd = weighted_sample_pooled_prior_use$prior_sd
 	      )
@@ -4563,30 +4563,30 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	      }
 	    }
 
-	    nn_two_shell_node_diagnostics <- data.frame()
-	    if (isTRUE(run_two_shell_baseline)) {
-	      if (is.null(two_shell_inward_prior_fit) ||
-	          !is.finite(two_shell_inward_prior_fit$prior_mean) ||
-	          !is.finite(two_shell_inward_prior_fit$prior_sd) ||
-	          two_shell_inward_prior_fit$prior_sd <= 0) {
-	        shell01_fallback <- fit_shell_delta_prior(
+	    nn_two_step_node_diagnostics <- data.frame()
+	    if (isTRUE(run_two_step_baseline)) {
+	      if (is.null(two_step_inward_prior_fit) ||
+	          !is.finite(two_step_inward_prior_fit$prior_mean) ||
+	          !is.finite(two_step_inward_prior_fit$prior_sd) ||
+	          two_step_inward_prior_fit$prior_sd <= 0) {
+	        step01_fallback <- fit_step_delta_prior(
 	          delta = fc_prior_vals,
 	          sd_floor = nn_prior_sd_floor,
 	          fallback_mu = 0,
 	          fallback_sd = if (is.null(nn_prior_sd)) nn_prior_sd_floor else nn_prior_sd
 	        )
-	        two_shell_inward_prior_fit <- list(
-	          prior_mean = shell01_fallback$mu,
-	          prior_sd = shell01_fallback$sigma
+	        two_step_inward_prior_fit <- list(
+	          prior_mean = step01_fallback$mu,
+	          prior_sd = step01_fallback$sigma
 	        )
 	        if (!is.finite(nn_prior_diag$prior_mu_hat)) {
-	          nn_prior_diag$prior_mu_hat <- two_shell_inward_prior_fit$prior_mean
+	          nn_prior_diag$prior_mu_hat <- two_step_inward_prior_fit$prior_mean
 	        }
 	        if (!is.finite(nn_prior_diag$prior_sigma_hat)) {
-	          nn_prior_diag$prior_sigma_hat <- two_shell_inward_prior_fit$prior_sd
+	          nn_prior_diag$prior_sigma_hat <- two_step_inward_prior_fit$prior_sd
 	        }
 	      }
-	      two_shell_res <- run_empirical_two_shell_correction(
+	      two_step_res <- run_empirical_two_step_correction(
 	        nn_child_contexts = nn_child_contexts,
 	        nn_present = nn_present,
 	        f1_initial = fc,
@@ -4597,49 +4597,49 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	        pm = pm,
 	        n0 = current_n0,
 	        search_interval = search_interval,
-	        inward_prior_fit = two_shell_inward_prior_fit,
+	        inward_prior_fit = two_step_inward_prior_fit,
 	        nn_prior_sd_floor = nn_prior_sd_floor,
-	        nn_two_shell_min_delta_n = nn_two_shell_min_delta_n,
-	        nn_two_shell_min_exposure = nn_two_shell_min_exposure,
-	        nn_two_shell_min_observed_count = nn_two_shell_min_observed_count,
-	        nn_two_shell_max_weight_ratio = nn_two_shell_max_weight_ratio,
-	        nn_two_shell_lambda = nn_two_shell_lambda,
-	        nn_two_shell_reuse_sd = nn_two_shell_reuse_sd,
-	        nn_two_shell_uncertainty_floor = nn_two_shell_uncertainty_floor
+	        nn_two_step_min_delta_n = nn_two_step_min_delta_n,
+	        nn_two_step_min_exposure = nn_two_step_min_exposure,
+	        nn_two_step_min_observed_count = nn_two_step_min_observed_count,
+	        nn_two_step_max_weight_ratio = nn_two_step_max_weight_ratio,
+	        nn_two_step_lambda = nn_two_step_lambda,
+	        nn_two_step_reuse_sd = nn_two_step_reuse_sd,
+	        nn_two_step_uncertainty_floor = nn_two_step_uncertainty_floor
 	      )
-	      fc <- two_shell_res$f1
-	      nn_two_shell_node_diagnostics <- two_shell_res$node_diagnostics
-	      if (nrow(nn_two_shell_node_diagnostics)) {
-	        nn_two_shell_node_diagnostics$replicate_id <- as.integer(b_iter_idx)
-	        nn_two_shell_node_diagnostics <- nn_two_shell_node_diagnostics[
-	          c("replicate_id", setdiff(names(nn_two_shell_node_diagnostics), "replicate_id"))
+	      fc <- two_step_res$f1
+	      nn_two_step_node_diagnostics <- two_step_res$node_diagnostics
+	      if (nrow(nn_two_step_node_diagnostics)) {
+	        nn_two_step_node_diagnostics$replicate_id <- as.integer(b_iter_idx)
+	        nn_two_step_node_diagnostics <- nn_two_step_node_diagnostics[
+	          c("replicate_id", setdiff(names(nn_two_step_node_diagnostics), "replicate_id"))
 	        ]
-	        rownames(nn_two_shell_node_diagnostics) <- NULL
+	        rownames(nn_two_step_node_diagnostics) <- NULL
 	      }
-	      nn_prior_diag[names(two_shell_res$diagnostics)] <- two_shell_res$diagnostics
-	      if (is.na(two_shell_res$diagnostics$fallback_reason) ||
-	          !nzchar(two_shell_res$diagnostics$fallback_reason)) {
-	        nn_prior_diag$nn_prior_mode_used <- if (use_cohort_transition_prior) "cohort_transition" else "empirical_two_shell"
-	        nn_prior_diag$nn_prior_source_used <- if (use_cohort_transition_prior) "cohort_transition_two_shell_baseline" else "two_shell"
-	      } else if (identical(nn_prior_diag$nn_prior_mode_used, "empirical_two_shell") ||
+	      nn_prior_diag[names(two_step_res$diagnostics)] <- two_step_res$diagnostics
+	      if (is.na(two_step_res$diagnostics$fallback_reason) ||
+	          !nzchar(two_step_res$diagnostics$fallback_reason)) {
+	        nn_prior_diag$nn_prior_mode_used <- if (use_cohort_transition_prior) "cohort_transition" else "empirical_two_step"
+	        nn_prior_diag$nn_prior_source_used <- if (use_cohort_transition_prior) "cohort_transition_two_step_baseline" else "two_step"
+	      } else if (identical(nn_prior_diag$nn_prior_mode_used, "empirical_two_step") ||
                    (use_cohort_transition_prior && identical(nn_prior_diag$nn_prior_mode_used, "cohort_transition"))) {
 	        nn_prior_diag$nn_prior_mode_used <- "empirical_censored_weighted"
 	        nn_prior_diag$nn_prior_source_used <- "fallback_inward"
 	      }
-	      nn_prior_diag$mu01 <- two_shell_res$diagnostics$mu01
-	      nn_prior_diag$sigma01 <- two_shell_res$diagnostics$sigma01
-	      nn_prior_diag$prior_mu_hat <- two_shell_res$diagnostics$mu01
-	      nn_prior_diag$prior_sigma_hat <- two_shell_res$diagnostics$sigma01
+	      nn_prior_diag$mu01 <- two_step_res$diagnostics$mu01
+	      nn_prior_diag$sigma01 <- two_step_res$diagnostics$sigma01
+	      nn_prior_diag$prior_mu_hat <- two_step_res$diagnostics$mu01
+	      nn_prior_diag$prior_sigma_hat <- two_step_res$diagnostics$sigma01
 	    }
 
 	    if (use_cohort_transition_prior && identical(cohort_transition_version, "v2") && length(nn_child_contexts) > 0) {
 	      node_rows <- vector("list", length(nn_child_contexts))
 	      names(node_rows) <- names(nn_child_contexts)
 	      for (child_name in names(nn_child_contexts)) {
-	        two_shell_row <- nn_two_shell_node_diagnostics[FALSE, , drop = FALSE]
-	        if (nrow(nn_two_shell_node_diagnostics) && "karyotype" %in% names(nn_two_shell_node_diagnostics)) {
-	          two_shell_row <- nn_two_shell_node_diagnostics[nn_two_shell_node_diagnostics$karyotype == child_name, , drop = FALSE]
-	          if (nrow(two_shell_row) > 1L) two_shell_row <- two_shell_row[1L, , drop = FALSE]
+	        two_step_row <- nn_two_step_node_diagnostics[FALSE, , drop = FALSE]
+	        if (nrow(nn_two_step_node_diagnostics) && "karyotype" %in% names(nn_two_step_node_diagnostics)) {
+	          two_step_row <- nn_two_step_node_diagnostics[nn_two_step_node_diagnostics$karyotype == child_name, , drop = FALSE]
+	          if (nrow(two_step_row) > 1L) two_step_row <- two_step_row[1L, , drop = FALSE]
 	        }
 	        overlay_res <- apply_cohort_transition_overlay(
 	          item = nn_child_contexts[[child_name]],
@@ -4647,9 +4647,9 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	          build_opt_fc = build_opt_fc,
 	          search_interval = search_interval,
 	          prior_use = cohort_transition_prior_use,
-	          f_two_shell_baseline = fc[child_name],
+	          f_two_step_baseline = fc[child_name],
 	          nn_present = nn_present[child_name],
-	          two_shell_node_diagnostics = two_shell_row,
+	          two_step_node_diagnostics = two_step_row,
 	          cohort_transition_apply_to = cohort_transition_apply_to,
 	          cohort_transition_lambda = cohort_transition_lambda,
 	          cohort_transition_max_borrowing_fraction = cohort_transition_max_borrowing_fraction,
@@ -4702,10 +4702,10 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	      node_rows <- vector("list", length(nn_child_contexts))
 	      names(node_rows) <- names(nn_child_contexts)
 	      for (child_name in names(nn_child_contexts)) {
-	        two_shell_row <- nn_two_shell_node_diagnostics[FALSE, , drop = FALSE]
-	        if (nrow(nn_two_shell_node_diagnostics) && "karyotype" %in% names(nn_two_shell_node_diagnostics)) {
-	          two_shell_row <- nn_two_shell_node_diagnostics[nn_two_shell_node_diagnostics$karyotype == child_name, , drop = FALSE]
-	          if (nrow(two_shell_row) > 1L) two_shell_row <- two_shell_row[1L, , drop = FALSE]
+	        two_step_row <- nn_two_step_node_diagnostics[FALSE, , drop = FALSE]
+	        if (nrow(nn_two_step_node_diagnostics) && "karyotype" %in% names(nn_two_step_node_diagnostics)) {
+	          two_step_row <- nn_two_step_node_diagnostics[nn_two_step_node_diagnostics$karyotype == child_name, , drop = FALSE]
+	          if (nrow(two_step_row) > 1L) two_step_row <- two_step_row[1L, , drop = FALSE]
 	        }
 	        overlay_res <- apply_contextual_cohort_overlay(
 	          item = nn_child_contexts[[child_name]],
@@ -4713,9 +4713,9 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	          build_opt_fc = build_opt_fc,
 	          search_interval = search_interval,
 	          prior_use = cohort_transition_prior_use,
-	          f_two_shell_baseline = fc[child_name],
+	          f_two_step_baseline = fc[child_name],
 	          nn_present = nn_present[child_name],
-	          two_shell_node_diagnostics = two_shell_row,
+	          two_step_node_diagnostics = two_step_row,
 	          cohort_contextual_apply_to = cohort_contextual_apply_to,
 	          cohort_context_lambda = cohort_context_lambda,
 	          cohort_context_max_borrowing_fraction = cohort_context_max_borrowing_fraction,
@@ -4771,7 +4771,7 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	         x0_final = x0_final,
 	         f_nn = fc,
 	         nn_prior_diagnostics = nn_prior_diag,
-	         nn_two_shell_node_diagnostics = nn_two_shell_node_diagnostics,
+	         nn_two_step_node_diagnostics = nn_two_step_node_diagnostics,
 	         nn_cohort_transition_node_diagnostics = nn_cohort_transition_node_diagnostics)
   }
 
@@ -4795,16 +4795,16 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	    as.data.frame(x$nn_prior_diagnostics, stringsAsFactors = FALSE)
 	  }))
 	  rownames(nn_prior_diagnostics) <- NULL
-	  nn_two_shell_node_diagnostics <- do.call(rbind, lapply(boot_list, function(x) {
-	    if (is.null(x$nn_two_shell_node_diagnostics) || !nrow(x$nn_two_shell_node_diagnostics)) {
+	  nn_two_step_node_diagnostics <- do.call(rbind, lapply(boot_list, function(x) {
+	    if (is.null(x$nn_two_step_node_diagnostics) || !nrow(x$nn_two_step_node_diagnostics)) {
 	      return(NULL)
 	    }
-	    x$nn_two_shell_node_diagnostics
+	    x$nn_two_step_node_diagnostics
 	  }))
-	  if (is.null(nn_two_shell_node_diagnostics)) {
-	    nn_two_shell_node_diagnostics <- data.frame()
+	  if (is.null(nn_two_step_node_diagnostics)) {
+	    nn_two_step_node_diagnostics <- data.frame()
 	  } else {
-	    rownames(nn_two_shell_node_diagnostics) <- NULL
+	    rownames(nn_two_step_node_diagnostics) <- NULL
 	  }
 	  nn_cohort_transition_node_diagnostics <- do.call(rbind, lapply(boot_list, function(x) {
 	    if (is.null(x$nn_cohort_transition_node_diagnostics) || !nrow(x$nn_cohort_transition_node_diagnostics)) {
@@ -4835,7 +4835,7 @@ solve_fitness_bootstrap <- function(data, minobs, nboot = 1000, epsilon = 1e-6, 
 	       final_frequencies = x0_final_mat,
 	       nn_fitness = f_nn_mat,
 	       nn_prior_diagnostics = nn_prior_diagnostics,
-	       nn_two_shell_node_diagnostics = nn_two_shell_node_diagnostics,
+	       nn_two_step_node_diagnostics = nn_two_step_node_diagnostics,
 	       nn_cohort_transition_node_diagnostics = nn_cohort_transition_node_diagnostics)
 	}
 

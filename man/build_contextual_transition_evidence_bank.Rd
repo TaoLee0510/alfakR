@@ -21,7 +21,7 @@ build_contextual_transition_evidence_bank(
 )
 }
 \arguments{
-\item{records}{Transition records from upstream two-shell results.}
+\item{records}{Transition records from upstream two-step results.}
 
 \item{baseline_ploidy}{Copy-number baseline used for CNA burden.}
 

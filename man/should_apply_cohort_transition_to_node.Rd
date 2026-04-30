@@ -8,7 +8,7 @@ should_apply_cohort_transition_to_node(
   item,
   child_name,
   nn_present = NULL,
-  two_shell_node_diagnostics = NULL,
+  two_step_node_diagnostics = NULL,
   cohort_transition_apply_to = c("zero_only", "low_information", "all")
 )
 }
@@ -19,7 +19,7 @@ should_apply_cohort_transition_to_node(
 
 \item{nn_present}{Optional logical indicating whether the child is observed.}
 
-\item{two_shell_node_diagnostics}{Optional one-row two-shell diagnostics.}
+\item{two_step_node_diagnostics}{Optional one-row two-step diagnostics.}
 
 \item{cohort_transition_apply_to}{Overlay application mode.}
 }

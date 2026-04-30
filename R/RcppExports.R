@@ -41,16 +41,16 @@ alfak_nn_prior_marginal_negloglik_cpp <- function(loglik_mat, fc_grid, log_weigh
     .Call(`_alfakR_alfak_nn_prior_marginal_negloglik_cpp`, loglik_mat, fc_grid, log_weights, parent_means, child_weights, mu, sigma)
 }
 
-alfak_two_shell_path_responsibilities_cpp <- function(descendant, parent_anchor_exposure, transition_probability) {
-    .Call(`_alfakR_alfak_two_shell_path_responsibilities_cpp`, descendant, parent_anchor_exposure, transition_probability)
+alfak_two_step_path_responsibilities_cpp <- function(descendant, parent_anchor_exposure, transition_probability) {
+    .Call(`_alfakR_alfak_two_step_path_responsibilities_cpp`, descendant, parent_anchor_exposure, transition_probability)
 }
 
 alfak_group_cap_weights_cpp <- function(group, raw_weights, cap_by_row) {
     .Call(`_alfakR_alfak_group_cap_weights_cpp`, group, raw_weights, cap_by_row)
 }
 
-alfak_neighbor_two_shell_objective_cpp <- function(fc_param, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, child_obs, ntot, inward_prior_mean, inward_prior_sd, inward_prior_weights, do_inward_prior, outward_fitness, outward_prior_mean, outward_prior_sd, outward_prior_weights, outward_lambda, tol) {
-    .Call(`_alfakR_alfak_neighbor_two_shell_objective_cpp`, fc_param, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, child_obs, ntot, inward_prior_mean, inward_prior_sd, inward_prior_weights, do_inward_prior, outward_fitness, outward_prior_mean, outward_prior_sd, outward_prior_weights, outward_lambda, tol)
+alfak_neighbor_two_step_objective_cpp <- function(fc_param, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, child_obs, ntot, inward_prior_mean, inward_prior_sd, inward_prior_weights, do_inward_prior, outward_fitness, outward_prior_mean, outward_prior_sd, outward_prior_weights, outward_lambda, tol) {
+    .Call(`_alfakR_alfak_neighbor_two_step_objective_cpp`, fc_param, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, child_obs, ntot, inward_prior_mean, inward_prior_sd, inward_prior_weights, do_inward_prior, outward_fitness, outward_prior_mean, outward_prior_sd, outward_prior_weights, outward_lambda, tol)
 }
 
 alfak_qr_accum_cpp <- function(x_trim, dx_dt) {

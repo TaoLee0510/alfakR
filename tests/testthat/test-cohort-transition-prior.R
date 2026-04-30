@@ -9,7 +9,7 @@ make_ct_yi <- function() {
   list(x = x, dt = 1)
 }
 
-make_valid_two_shell_dir <- function(root, patient_id, pm_tag = "pm_0.00005", minobs_tag = "MINIOBS20",
+make_valid_two_step_dir <- function(root, patient_id, pm_tag = "pm_0.00005", minobs_tag = "MINIOBS20",
                                      child_observed_count = 3, projected_exposure = 5) {
   fit_dir <- file.path(root, pm_tag, minobs_tag, patient_id)
   dir.create(fit_dir, recursive = TRUE, showWarnings = FALSE)
@@ -30,7 +30,7 @@ make_valid_two_shell_dir <- function(root, patient_id, pm_tag = "pm_0.00005", mi
       initial_fitness = final,
       initial_frequencies = final,
       final_frequencies = final,
-      nn_prior_diagnostics = data.frame(nn_prior_mode_used = "empirical_two_shell")
+      nn_prior_diagnostics = data.frame(nn_prior_mode_used = "empirical_two_step")
     ),
     file.path(fit_dir, "bootstrap_res.Rds")
   )
@@ -43,9 +43,9 @@ make_valid_two_shell_dir <- function(root, patient_id, pm_tag = "pm_0.00005", mi
     list(
       replicate = data.frame(
         replicate_id = 1:2,
-        nn_prior_mode_requested = "empirical_two_shell",
-        nn_prior_mode_used = "empirical_two_shell",
-        nn_prior_source_used = "two_shell",
+        nn_prior_mode_requested = "empirical_two_step",
+        nn_prior_mode_used = "empirical_two_step",
+        nn_prior_source_used = "two_step",
         mu01 = 0.1,
         sigma01 = 0.2
       ),
@@ -90,7 +90,7 @@ make_ct_records <- function(patient_ids = c("patient_A", "patient_B", "patient_C
       parent_burden = parsed$parent_burden,
       child_burden = parsed$child_burden,
       parent_fitness = 0,
-      child_fitness_two_shell = delta[i],
+      child_fitness_two_step = delta[i],
       delta_hat = delta[i],
       delta_se = 0.05,
       child_observed_count = ifelse(source_type[i] == "informative_zero", 0, 2),
@@ -101,8 +101,8 @@ make_ct_records <- function(patient_ids = c("patient_A", "patient_B", "patient_C
       zero_informativeness_category = ifelse(expected[i] >= 3, "informative_zero", "uninformative_zero"),
       boundary_flag = FALSE,
       prior_dominated_flag = FALSE,
-      two_shell_used = TRUE,
-      two_shell_outward_weight = 0.2,
+      two_step_used = TRUE,
+      two_step_outward_weight = 0.2,
       path_responsibility = 1,
       replicate_id = 1L,
       bootstrap_id = 1L,
@@ -166,7 +166,7 @@ make_context_records <- function(patient_ids = c("patient_A", "patient_B", "pati
       parent_burden = parsed$parent_burden,
       child_burden = parsed$child_burden,
       parent_fitness = 0,
-      child_fitness_two_shell = delta[i],
+      child_fitness_two_step = delta[i],
       delta_hat = delta[i],
       delta_se = 0.04,
       child_observed_count = ifelse(source_type[i] == "informative_zero", 0, 2),
@@ -177,8 +177,8 @@ make_context_records <- function(patient_ids = c("patient_A", "patient_B", "pati
       zero_informativeness_category = ifelse(expected[i] >= 3, "informative_zero", "uninformative_zero"),
       boundary_flag = FALSE,
       prior_dominated_flag = FALSE,
-      two_shell_used = TRUE,
-      two_shell_outward_weight = 0.2,
+      two_step_used = TRUE,
+      two_step_outward_weight = 0.2,
       path_responsibility = 1,
       replicate_id = 1L,
       bootstrap_id = 1L,
@@ -204,13 +204,13 @@ make_context_prior <- function(records, ...) {
   do.call(alfakR::learn_cohort_transition_prior, defaults)
 }
 
-test_that("resolve_two_shell_fit_dirs returns expected cache paths", {
-  root <- tempfile("two_shell_root_")
+test_that("resolve_two_step_fit_dirs returns expected cache paths", {
+  root <- tempfile("two_step_root_")
   dir.create(file.path(root, "pm_0.00005", "MINIOBS20", "patient_A"), recursive = TRUE)
   dir.create(file.path(root, "pm_0.00005", "MINIOBS20", "patient_B"), recursive = TRUE)
 
-  resolved <- alfakR::resolve_two_shell_fit_dirs(
-    two_shell_root = root,
+  resolved <- alfakR::resolve_two_step_fit_dirs(
+    two_step_root = root,
     patient_ids = c("patient_A", "patient_B"),
     pm = 0.00005,
     minobs = 20
@@ -330,7 +330,7 @@ test_that("observed NN are unchanged by zero-only v2 overlay", {
     build_opt_fc = ct_overlay_builder,
     search_interval = c(-1, 1),
     prior_use = alfakR:::cohort_transition_prior_for_patient(prior),
-    f_two_shell_baseline = 0.2,
+    f_two_step_baseline = 0.2,
     nn_present = TRUE,
     cohort_transition_apply_to = "zero_only"
   )
@@ -352,7 +352,7 @@ test_that("high-exposure zero in consistent deleterious group receives weak over
     build_opt_fc = ct_overlay_builder,
     search_interval = c(-1, 1),
     prior_use = alfakR:::cohort_transition_prior_for_patient(prior),
-    f_two_shell_baseline = 0.2,
+    f_two_step_baseline = 0.2,
     nn_present = FALSE,
     cohort_transition_max_borrowing_fraction = 0.9
   )
@@ -374,7 +374,7 @@ test_that("low-exposure zero is marked non-identifiable and not aggressively upd
     build_opt_fc = ct_overlay_builder,
     search_interval = c(-1, 1),
     prior_use = alfakR:::cohort_transition_prior_for_patient(prior),
-    f_two_shell_baseline = 0.2,
+    f_two_step_baseline = 0.2,
     nn_present = FALSE
   )
 
@@ -395,7 +395,7 @@ test_that("overlay guardrail caps excessive cohort shifts", {
     build_opt_fc = ct_overlay_builder,
     search_interval = c(-1, 1),
     prior_use = alfakR:::cohort_transition_prior_for_patient(prior),
-    f_two_shell_baseline = 0.2,
+    f_two_step_baseline = 0.2,
     nn_present = FALSE,
     cohort_transition_max_abs_delta_shift = 0.01,
     cohort_transition_max_borrowing_fraction = 0.99
@@ -596,7 +596,7 @@ test_that("consistent deleterious context updates high-exposure zero downward", 
     build_opt_fc = ct_overlay_builder,
     search_interval = c(-1, 1),
     prior_use = alfakR:::cohort_transition_prior_for_patient(prior, "patient_Z"),
-    f_two_shell_baseline = 0.2,
+    f_two_step_baseline = 0.2,
     nn_present = FALSE,
     cohort_context_max_borrowing_fraction = 0.9
   )
@@ -616,7 +616,7 @@ test_that("high-variable and sparse contexts do not aggressively update", {
     build_opt_fc = ct_overlay_builder,
     search_interval = c(-1, 1),
     prior_use = alfakR:::cohort_transition_prior_for_patient(variable_prior, "patient_Z"),
-    f_two_shell_baseline = 0.2,
+    f_two_step_baseline = 0.2,
     nn_present = FALSE
   )
   expect_true(any(variable_fit$diagnostics$context_high_variable_flag))
@@ -632,7 +632,7 @@ test_that("high-variable and sparse contexts do not aggressively update", {
     build_opt_fc = ct_overlay_builder,
     search_interval = c(-1, 1),
     prior_use = alfakR:::cohort_transition_prior_for_patient(sparse_prior, "patient_Z"),
-    f_two_shell_baseline = 0.2,
+    f_two_step_baseline = 0.2,
     nn_present = FALSE
   )
   expect_true(any(sparse_fit$diagnostics$context_sparse_unknown_flag))
@@ -651,7 +651,7 @@ test_that("sparse contextual overlays can update when explicitly enabled", {
     build_opt_fc = ct_overlay_builder,
     search_interval = c(-1, 1),
     prior_use = alfakR:::cohort_transition_prior_for_patient(sparse_prior, "patient_Z"),
-    f_two_shell_baseline = 0.2,
+    f_two_step_baseline = 0.2,
     nn_present = TRUE,
     cohort_contextual_apply_to = "all",
     cohort_context_keep_baseline_when_sparse = FALSE,
@@ -728,7 +728,7 @@ test_that("contextual overlay leaves observed and low-exposure zero nodes unchan
     build_opt_fc = ct_overlay_builder,
     search_interval = c(-1, 1),
     prior_use = alfakR:::cohort_transition_prior_for_patient(prior, "patient_Z"),
-    f_two_shell_baseline = 0.2,
+    f_two_step_baseline = 0.2,
     nn_present = TRUE
   )
   expect_equal(observed$f_final, 0.2)
@@ -740,7 +740,7 @@ test_that("contextual overlay leaves observed and low-exposure zero nodes unchan
     build_opt_fc = ct_overlay_builder,
     search_interval = c(-1, 1),
     prior_use = alfakR:::cohort_transition_prior_for_patient(prior, "patient_Z"),
-    f_two_shell_baseline = 0.2,
+    f_two_step_baseline = 0.2,
     nn_present = FALSE
   )
   expect_equal(low_zero$f_final, 0.2)
@@ -764,7 +764,7 @@ test_that("contextual multiple-parent priors combine by responsibility and guard
     build_opt_fc = ct_overlay_builder,
     search_interval = c(-1, 1),
     prior_use = alfakR:::cohort_transition_prior_for_patient(prior, "patient_Z"),
-    f_two_shell_baseline = 0.2,
+    f_two_step_baseline = 0.2,
     nn_present = FALSE,
     cohort_context_max_abs_delta_shift = 0.01,
     cohort_context_max_borrowing_fraction = 0.99
@@ -774,80 +774,80 @@ test_that("contextual multiple-parent priors combine by responsibility and guard
   expect_lte(abs(fit$f_final - 0.2), 0.0101)
 })
 
-test_that("ensure_two_shell_fits reuses valid existing two-shell directories", {
-  root <- tempfile("two_shell_reuse_")
+test_that("ensure_two_step_fits reuses valid existing two-step directories", {
+  root <- tempfile("two_step_reuse_")
   outdir <- tempfile("cohort_out_")
-  make_valid_two_shell_dir(root, "patient_A")
-  make_valid_two_shell_dir(root, "patient_B")
+  make_valid_two_step_dir(root, "patient_A")
+  make_valid_two_step_dir(root, "patient_B")
   patients <- list(patient_A = make_ct_yi(), patient_B = make_ct_yi())
 
   testthat::with_mocked_bindings(
     {
-      status <- alfakR::ensure_two_shell_fits(
+      status <- alfakR::ensure_two_step_fits(
         patients = patients,
         outdir = outdir,
-        two_shell_root = root,
+        two_step_root = root,
         pm = 0.00005,
         minobs = 20
       )
       expect_equal(status$action, c("reused", "reused"))
       expect_false(any(status$rerun))
     },
-    alfak = function(...) stop("two-shell rerun should not be called"),
+    alfak = function(...) stop("two-step rerun should not be called"),
     .package = "alfakR"
   )
 })
 
-test_that("ensure_two_shell_fits reruns only missing patients", {
-  root <- tempfile("two_shell_missing_")
+test_that("ensure_two_step_fits reruns only missing patients", {
+  root <- tempfile("two_step_missing_")
   outdir <- tempfile("cohort_out_")
-  make_valid_two_shell_dir(root, "patient_A")
+  make_valid_two_step_dir(root, "patient_A")
   patients <- list(patient_A = make_ct_yi(), patient_B = make_ct_yi())
   called <- new.env(parent = emptyenv())
   called$outdirs <- character(0)
 
   testthat::with_mocked_bindings(
     {
-      status <- alfakR::ensure_two_shell_fits(
+      status <- alfakR::ensure_two_step_fits(
         patients = patients,
         outdir = outdir,
-        two_shell_root = root,
+        two_step_root = root,
         pm = 0.00005,
         minobs = 20
       )
       expect_equal(status$action, c("reused", "rerun_missing"))
       expect_equal(basename(called$outdirs), "patient_B")
-      expect_true(file.exists(file.path(outdir, "two_shell_fit_status.Rds")))
-      expect_true(file.exists(file.path(outdir, "two_shell_fit_status.tsv")))
+      expect_true(file.exists(file.path(outdir, "two_step_fit_status.Rds")))
+      expect_true(file.exists(file.path(outdir, "two_step_fit_status.tsv")))
     },
     alfak = function(yi, outdir, ...) {
       called$outdirs <- c(called$outdirs, outdir)
-      make_valid_two_shell_dir(dirname(dirname(dirname(outdir))), basename(outdir))
+      make_valid_two_step_dir(dirname(dirname(dirname(outdir))), basename(outdir))
       invisible(0)
     },
     .package = "alfakR"
   )
 })
 
-test_that("ensure_two_shell_fits backs up and reruns only corrupt patients", {
-  root <- tempfile("two_shell_corrupt_")
+test_that("ensure_two_step_fits backs up and reruns only corrupt patients", {
+  root <- tempfile("two_step_corrupt_")
   outdir <- tempfile("cohort_out_")
-  make_valid_two_shell_dir(root, "patient_A")
+  make_valid_two_step_dir(root, "patient_A")
   corrupt_dir <- file.path(root, "pm_0.00005", "MINIOBS20", "patient_B")
   dir.create(corrupt_dir, recursive = TRUE)
   writeLines("not an rds", file.path(corrupt_dir, "bootstrap_res.Rds"))
   saveRDS(data.frame(k = "2.2.2", mean = 0), file.path(corrupt_dir, "landscape.Rds"))
-  saveRDS(data.frame(nn_prior_mode_used = "empirical_two_shell"), file.path(corrupt_dir, "nn_prior_diagnostics.Rds"))
+  saveRDS(data.frame(nn_prior_mode_used = "empirical_two_step"), file.path(corrupt_dir, "nn_prior_diagnostics.Rds"))
   patients <- list(patient_A = make_ct_yi(), patient_B = make_ct_yi())
   called <- new.env(parent = emptyenv())
   called$outdirs <- character(0)
 
   testthat::with_mocked_bindings(
     {
-      status <- alfakR::ensure_two_shell_fits(
+      status <- alfakR::ensure_two_step_fits(
         patients = patients,
         outdir = outdir,
-        two_shell_root = root,
+        two_step_root = root,
         pm = 0.00005,
         minobs = 20
       )
@@ -857,14 +857,14 @@ test_that("ensure_two_shell_fits backs up and reruns only corrupt patients", {
     },
     alfak = function(yi, outdir, ...) {
       called$outdirs <- c(called$outdirs, outdir)
-      make_valid_two_shell_dir(dirname(dirname(dirname(outdir))), basename(outdir))
+      make_valid_two_step_dir(dirname(dirname(dirname(outdir))), basename(outdir))
       invisible(0)
     },
     .package = "alfakR"
   )
 })
 
-test_that("NULL two_shell_root writes base fits under outdir/two_shell_base", {
+test_that("NULL two_step_root writes base fits under outdir/two_step_base", {
   outdir <- tempfile("cohort_null_root_")
   patients <- list(patient_A = make_ct_yi(), patient_B = make_ct_yi())
   called <- new.env(parent = emptyenv())
@@ -872,20 +872,20 @@ test_that("NULL two_shell_root writes base fits under outdir/two_shell_base", {
 
   testthat::with_mocked_bindings(
     {
-      status <- alfakR::ensure_two_shell_fits(
+      status <- alfakR::ensure_two_step_fits(
         patients = patients,
         outdir = outdir,
-        two_shell_root = NULL,
+        two_step_root = NULL,
         pm = 0.00005,
         minobs = 20
       )
-      expect_true(all(grepl("two_shell_base", status$fit_dir, fixed = TRUE)))
+      expect_true(all(grepl("two_step_base", status$fit_dir, fixed = TRUE)))
       expect_equal(status$action, c("rerun_missing", "rerun_missing"))
       expect_equal(sort(basename(called$outdirs)), c("patient_A", "patient_B"))
     },
     alfak = function(yi, outdir, ...) {
       called$outdirs <- c(called$outdirs, outdir)
-      make_valid_two_shell_dir(dirname(dirname(dirname(outdir))), basename(outdir))
+      make_valid_two_step_dir(dirname(dirname(dirname(outdir))), basename(outdir))
       invisible(0)
     },
     .package = "alfakR"
@@ -919,7 +919,7 @@ test_that("cohort wrapper refits patients separately and does not pool raw count
       expect_equal(seen$nrows, c(nrow(patients$patient_A$x), nrow(patients$patient_B$x)))
       expect_equal(names(res$patient_outdirs), c("patient_A", "patient_B"))
     },
-    ensure_two_shell_fits = function(...) {
+    ensure_two_step_fits = function(...) {
       data.frame(
         patient_id = c("patient_A", "patient_B"),
         fit_dir = c("fit_A", "fit_B"),
@@ -967,7 +967,7 @@ test_that("cohort wrapper can refit patients in parallel", {
       expect_equal(vapply(markers, `[[`, character(1), "patient_id"), c("patient_A", "patient_B"))
       expect_false(identical(markers[[1]]$seed_draw, markers[[2]]$seed_draw))
     },
-    ensure_two_shell_fits = function(...) {
+    ensure_two_step_fits = function(...) {
       data.frame(
         patient_id = c("patient_A", "patient_B"),
         fit_dir = c("fit_A", "fit_B"),

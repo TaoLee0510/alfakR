@@ -17,20 +17,20 @@ alfak(
   correct_efflux = FALSE,
   landscape_data_output = FALSE,
   nn_prior = c("empirical_censored", "empirical_censored_weighted",
-    "empirical_two_shell", "cohort_transition", "none", "empirical"),
+    "empirical_two_step", "cohort_transition", "none", "empirical"),
   cohort_transition_prior = NULL,
   cohort_transition_prior_path = NULL,
   cohort_transition_patient_id = NULL,
   cohort_transition_version = c("contextual", "v2", "v1"),
   cohort_transition_apply_to = c("zero_only", "low_information", "all"),
-  cohort_transition_overlay_base = c("empirical_two_shell", "direct"),
+  cohort_transition_overlay_base = c("empirical_two_step", "direct"),
   cohort_transition_lambda = 0.25,
   cohort_transition_max_borrowing_fraction = 0.5,
   cohort_transition_max_abs_delta_shift = NULL,
   cohort_transition_sd_floor = 0.05,
   cohort_transition_patient_sd_floor = 0.1,
   cohort_contextual_apply_to = NULL,
-  cohort_contextual_overlay_base = c("empirical_two_shell", "direct"),
+  cohort_contextual_overlay_base = c("empirical_two_step", "direct"),
   cohort_context_lambda = 0.25,
   cohort_context_max_borrowing_fraction = 0.5,
   cohort_context_max_abs_delta_shift = NULL,
@@ -55,14 +55,14 @@ alfak(
   nn_prior_two_step_support = c("none", "rescue"),
   nn_prior_two_step_support_min = 0.15,
   nn_prior_two_step_cap_floor = 0.3,
-  nn_two_shell_min_delta_n = 3L,
-  nn_two_shell_min_exposure = NULL,
-  nn_two_shell_min_observed_count = 1L,
-  nn_two_shell_max_weight_ratio = 1,
-  nn_two_shell_lambda = 1,
-  nn_two_shell_reuse_sd = NULL,
-  nn_two_shell_uncertainty_floor = NULL,
-  nn_two_shell_save_diagnostics = TRUE,
+  nn_two_step_min_delta_n = 3L,
+  nn_two_step_min_exposure = NULL,
+  nn_two_step_min_observed_count = 1L,
+  nn_two_step_max_weight_ratio = 1,
+  nn_two_step_lambda = 1,
+  nn_two_step_reuse_sd = NULL,
+  nn_two_step_uncertainty_floor = NULL,
+  nn_two_step_save_diagnostics = TRUE,
   krig_bootstrap_mode = c("marginal", "joint")
 )
 }
@@ -132,10 +132,10 @@ prior, and when a bootstrap replicate has no observed neighbour children
 it first falls back to a weak sample-pooled prior learned from the same
 sample's observed neighbours before using no prior only as a final
 fallback.
-\code{"empirical_two_shell"} is an opt-in sparse two-timepoint correction. It
+\code{"empirical_two_step"} is an opt-in sparse two-timepoint correction. It
 first obtains the usual one-step neighbour estimates, estimates supported
 two-step descendants from those one-step nodes, learns separate empirical
-delta distributions for the 0->1 and 1->2 shells, then re-estimates each
+delta distributions for the 0->1 and 1->2 steps, then re-estimates each
 one-step neighbour once with the direct likelihood, inward frequent-parent
 prior, and an uncertainty-inflated outward two-step prior. It does not
 alternate repeated smoothing passes. If supported two-step evidence is
@@ -143,7 +143,7 @@ absent or too small, the replicate falls back to the weighted censored
 one-step behaviour.
 \code{"cohort_transition"} uses a cohort-level prior on transition effects,
 \verb{child fitness - parent fitness}, learned from upstream patient-specific
-two-shell fits. It requires \code{cohort_transition_prior} or
+two-step fits. It requires \code{cohort_transition_prior} or
 \code{cohort_transition_prior_path}, keeps the current patient's frequent
 karyotype fitness estimates patient-specific, and does not pool raw patient
 counts or absolute cohort fitness values.
@@ -162,7 +162,7 @@ supplied. If both are supplied, this object is used and a warning is issued.}
 
 \item{cohort_transition_patient_id}{Patient identifier for single-patient
 cohort-transition refits. Required when the prior contains
-leave-one-patient-out priors so the target patient's own two-shell
+leave-one-patient-out priors so the target patient's own two-step
 transitions can be excluded from its prior.}
 
 \item{cohort_transition_version}{Cohort-transition implementation version.
@@ -173,10 +173,10 @@ conditions Delta fitness on similar parent karyotype and CNA event context;
 
 \item{cohort_transition_apply_to}{Which NN nodes can receive the v2 overlay.
 The default \code{"zero_only"} leaves observed NN estimates at their
-patient-specific \code{empirical_two_shell} baseline.}
+patient-specific \code{empirical_two_step} baseline.}
 
 \item{cohort_transition_overlay_base}{Baseline used by v2. The default
-\code{"empirical_two_shell"} runs the same patient-specific two-shell path first
+\code{"empirical_two_step"} runs the same patient-specific two-step path first
 and then applies the cohort overlay.}
 
 \item{cohort_transition_lambda}{Global multiplier for v2 cohort borrowing.}
@@ -185,7 +185,7 @@ and then applies the cohort overlay.}
 borrowing fraction before the update is skipped and marked dominated.}
 
 \item{cohort_transition_max_abs_delta_shift}{Optional maximum absolute change
-from the two-shell baseline.}
+from the two-step baseline.}
 
 \item{cohort_transition_sd_floor}{Minimum transition-prior standard
 deviation used by \code{nn_prior = "cohort_transition"}.}
@@ -200,7 +200,7 @@ prior.}
 overlay updates. If \code{NULL}, inherits \code{cohort_transition_apply_to}.}
 
 \item{cohort_contextual_overlay_base}{Baseline used by contextual mode. The
-default \code{"empirical_two_shell"} preserves patient-specific two-shell
+default \code{"empirical_two_step"} preserves patient-specific two-step
 estimates before context borrowing.}
 
 \item{cohort_context_lambda}{Global multiplier for contextual cohort
@@ -210,12 +210,12 @@ borrowing.}
 fraction before an update is skipped.}
 
 \item{cohort_context_max_abs_delta_shift}{Optional maximum contextual shift
-from the two-shell baseline.}
+from the two-step baseline.}
 
 \item{cohort_context_sd_floor, cohort_context_patient_sd_floor}{Minimum
 contextual transition SD and patient heterogeneity floors.}
 
-\item{cohort_context_keep_baseline_when_sparse, cohort_context_keep_baseline_when_high_variable}{Guardrails that keep the two-shell baseline for sparse or high-variable
+\item{cohort_context_keep_baseline_when_sparse, cohort_context_keep_baseline_when_high_variable}{Guardrails that keep the two-step baseline for sparse or high-variable
 contexts.}
 
 \item{nn_prior_sd}{Optional numeric scalar. If supplied, this overrides the
@@ -307,40 +307,40 @@ threshold or its 2-step support score reaches this minimum.}
 fully supported 2-step rescue score that can contribute to the retained
 zero-child support term used in effective-mass and weight calculations.}
 
-\item{nn_two_shell_min_delta_n}{Positive integer used only when
-\code{nn_prior = "empirical_two_shell"}. It is the minimum number of usable
-path-weighted 1->2 shell deltas required before fitting the outward prior;
+\item{nn_two_step_min_delta_n}{Positive integer used only when
+\code{nn_prior = "empirical_two_step"}. It is the minimum number of usable
+path-weighted 1->2 step deltas required before fitting the outward prior;
 otherwise the replicate falls back to the inward one-step estimate.}
 
-\item{nn_two_shell_min_exposure}{Optional non-negative numeric scalar used
-only for \code{nn_prior = "empirical_two_shell"}. Unobserved two-step candidates
+\item{nn_two_step_min_exposure}{Optional non-negative numeric scalar used
+only for \code{nn_prior = "empirical_two_step"}. Unobserved two-step candidates
 are retained only when their expected exposure reaches this threshold. When
 \code{NULL}, an adaptive threshold based on the projected one-step exposure
 distribution is used and reported in diagnostics.}
 
-\item{nn_two_shell_min_observed_count}{Non-negative integer count threshold
-used only for \code{nn_prior = "empirical_two_shell"}. Two-step candidates with
+\item{nn_two_step_min_observed_count}{Non-negative integer count threshold
+used only for \code{nn_prior = "empirical_two_step"}. Two-step candidates with
 at least this total observed count are retained automatically.}
 
-\item{nn_two_shell_max_weight_ratio}{Non-negative numeric scalar used only
-for \code{nn_prior = "empirical_two_shell"}. It caps each one-step node's total
+\item{nn_two_step_max_weight_ratio}{Non-negative numeric scalar used only
+for \code{nn_prior = "empirical_two_step"}. It caps each one-step node's total
 outward prior weight relative to its inward parent-prior weight.}
 
-\item{nn_two_shell_lambda}{Non-negative numeric scalar multiplying the
+\item{nn_two_step_lambda}{Non-negative numeric scalar multiplying the
 outward two-step prior term.}
 
-\item{nn_two_shell_reuse_sd}{Optional non-negative numeric scalar. It inflates
+\item{nn_two_step_reuse_sd}{Optional non-negative numeric scalar. It inflates
 the effective standard deviation of the outward prior because provisional
 two-step estimates reuse the same count data. When \code{NULL}, a conservative
 replicate-specific value based on \code{nn_prior_sd_floor} and the estimated
 1->2 prior scale is used.}
 
-\item{nn_two_shell_uncertainty_floor}{Optional non-negative numeric scalar.
+\item{nn_two_step_uncertainty_floor}{Optional non-negative numeric scalar.
 Minimum standard error assigned to provisional two-step fitness estimates.
 When \code{NULL}, a conservative package default is used.}
 
-\item{nn_two_shell_save_diagnostics}{Logical; if \code{TRUE} and
-\code{nn_prior = "empirical_two_shell"}, \code{alfak()} saves
+\item{nn_two_step_save_diagnostics}{Logical; if \code{TRUE} and
+\code{nn_prior = "empirical_two_step"}, \code{alfak()} saves
 \code{nn_prior_diagnostics.Rds} containing replicate and per-node diagnostics.}
 
 \item{krig_bootstrap_mode}{Character; \code{"marginal"} (default) samples
@@ -405,7 +405,7 @@ print(paste("Cross-validation R-squared:", result_r_squared))
 # Check for created files
 list.files(temp_output_dir)
 
-# Sparse two-timepoint use: opt into the two-shell correction and inspect
+# Sparse two-timepoint use: opt into the two-step correction and inspect
 # diagnostics if the outward term falls back or has little effect.
 sparse_counts <- matrix(
   c(80, 60,
@@ -415,13 +415,13 @@ sparse_counts <- matrix(
   byrow = TRUE,
   dimnames = list(c("2.2.2", "2.2.3", "2.2.4"), c("0", "1"))
 )
-sparse_dir <- tempfile("alfak_two_shell_")
+sparse_dir <- tempfile("alfak_two_step_")
 alfak(
   yi = list(x = sparse_counts, dt = 1),
   outdir = sparse_dir,
   minobs = 20,
   nboot = 5,
-  nn_prior = "empirical_two_shell"
+  nn_prior = "empirical_two_step"
 )
 readRDS(file.path(sparse_dir, "nn_prior_diagnostics.Rds"))$replicate
 

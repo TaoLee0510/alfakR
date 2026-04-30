@@ -185,7 +185,7 @@ make_grf_params <- function(args) {
         "nn_prior_empirical",
         "nn_prior_empirical_censored",
         "nn_prior_empirical_censored_weighted",
-        "nn_prior_empirical_two_shell"
+        "nn_prior_empirical_two_step"
       )
     )
   )

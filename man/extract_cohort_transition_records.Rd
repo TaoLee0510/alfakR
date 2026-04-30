@@ -2,7 +2,7 @@
 % Please edit documentation in R/cohort-transition.R
 \name{extract_cohort_transition_records}
 \alias{extract_cohort_transition_records}
-\title{Extract cohort transition records from two-shell fits}
+\title{Extract cohort transition records from two-step fits}
 \usage{
 extract_cohort_transition_records(
   fit_dirs,
@@ -16,7 +16,7 @@ extract_cohort_transition_records(
 )
 }
 \arguments{
-\item{fit_dirs}{Character vector of two-shell fit directories.}
+\item{fit_dirs}{Character vector of two-step fit directories.}
 
 \item{patient_ids}{Patient IDs aligned with \code{fit_dirs}.}
 
@@ -38,5 +38,5 @@ exposure threshold for retaining zero children.}
 A data frame with one row per usable transition path and bootstrap.
 }
 \description{
-Extract cohort transition records from two-shell fits
+Extract cohort transition records from two-step fits
 }

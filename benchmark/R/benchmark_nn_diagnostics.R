@@ -217,7 +217,7 @@ build_nn_fitness_stability_tables <- function(fit_tbl) {
   weighted_empirical_tbl <- child_tbl %>%
     dplyr::filter(parameter_label %in% c(
       "nn_prior_empirical_censored_weighted",
-      "nn_prior_empirical_two_shell",
+      "nn_prior_empirical_two_step",
       "nn_prior_empirical"
     )) %>%
     dplyr::select(patient_id, minobs, pm, parameter_label, k, bootstrap_mean, bootstrap_sd, bootstrap_iqr) %>%
@@ -230,8 +230,8 @@ build_nn_fitness_stability_tables <- function(fit_tbl) {
   pair_specs <- tibble::tribble(
     ~lhs_label, ~rhs_label, ~comparison_label,
     "nn_prior_empirical_censored_weighted", "nn_prior_empirical", "weighted vs empirical",
-    "nn_prior_empirical_two_shell", "nn_prior_empirical", "empirical_two_shell vs empirical",
-    "nn_prior_empirical_censored_weighted", "nn_prior_empirical_two_shell", "weighted vs empirical_two_shell"
+    "nn_prior_empirical_two_step", "nn_prior_empirical", "empirical_two_step vs empirical",
+    "nn_prior_empirical_censored_weighted", "nn_prior_empirical_two_step", "weighted vs empirical_two_step"
   )
 
   if (nrow(weighted_empirical_tbl)) {
@@ -281,8 +281,8 @@ build_nn_fitness_stability_tables <- function(fit_tbl) {
           comparison_label,
           levels = c(
             "weighted vs empirical",
-            "empirical_two_shell vs empirical",
-            "weighted vs empirical_two_shell"
+            "empirical_two_step vs empirical",
+            "weighted vs empirical_two_step"
           )
         )
       ) %>%

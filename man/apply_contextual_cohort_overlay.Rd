@@ -10,9 +10,9 @@ apply_contextual_cohort_overlay(
   build_opt_fc,
   search_interval,
   prior_use,
-  f_two_shell_baseline,
+  f_two_step_baseline,
   nn_present = NULL,
-  two_shell_node_diagnostics = NULL,
+  two_step_node_diagnostics = NULL,
   cohort_contextual_apply_to = c("zero_only", "low_information", "all"),
   cohort_context_lambda = 0.25,
   cohort_context_max_borrowing_fraction = 0.5,
@@ -34,11 +34,11 @@ apply_contextual_cohort_overlay(
 
 \item{prior_use}{Contextual prior object for the target patient.}
 
-\item{f_two_shell_baseline}{Patient-specific two-shell baseline fitness.}
+\item{f_two_step_baseline}{Patient-specific two-step baseline fitness.}
 
 \item{nn_present}{Optional logical indicating whether the child is observed.}
 
-\item{two_shell_node_diagnostics}{Optional one-row two-shell diagnostics.}
+\item{two_step_node_diagnostics}{Optional one-row two-step diagnostics.}
 
 \item{cohort_contextual_apply_to}{Which nodes may receive contextual updates.}
 
@@ -51,13 +51,13 @@ apply_contextual_cohort_overlay(
 \item{cohort_context_sd_floor, cohort_context_patient_sd_floor}{Contextual SD
 floors.}
 
-\item{cohort_context_keep_baseline_when_sparse, cohort_context_keep_baseline_when_high_variable}{Keep the two-shell baseline for sparse/high-variable contexts.}
+\item{cohort_context_keep_baseline_when_sparse, cohort_context_keep_baseline_when_high_variable}{Keep the two-step baseline for sparse/high-variable contexts.}
 }
 \value{
 A list with final fitness and node diagnostics.
 }
 \description{
-The contextual overlay combines the patient-specific two-shell baseline with
+The contextual overlay combines the patient-specific two-step baseline with
 a target-specific Delta-fitness prior learned from similar parent karyotype
 backgrounds and CNA events. Observed NN are unchanged by default, sparse or
 high-variable contexts keep the baseline, and zero NN updates are capped by

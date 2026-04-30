@@ -1,10 +1,10 @@
-#' Resolve cached two-shell fit directories
+#' Resolve cached two-step fit directories
 #'
-#' Builds the expected two-shell cache paths without altering patient or sample
+#' Builds the expected two-step cache paths without altering patient or sample
 #' names. The layout is
-#' `<two_shell_root>/<pm_tag>/<minobs_tag>/<sample_name>/`.
+#' `<two_step_root>/<pm_tag>/<minobs_tag>/<sample_name>/`.
 #'
-#' @param two_shell_root Root directory containing upstream two-shell results.
+#' @param two_step_root Root directory containing upstream two-step results.
 #' @param patient_ids Character vector of patient identifiers.
 #' @param sample_names Optional character vector of sample directory names,
 #'   aligned with `patient_ids`.
@@ -18,7 +18,7 @@
 #'   sample directory names.
 #' @return A data frame describing expected cache paths and existence.
 #' @export
-resolve_two_shell_fit_dirs <- function(two_shell_root,
+resolve_two_step_fit_dirs <- function(two_step_root,
                                        patient_ids,
                                        sample_names = NULL,
                                        pm,
@@ -26,8 +26,8 @@ resolve_two_shell_fit_dirs <- function(two_shell_root,
                                        pm_tag = NULL,
                                        minobs_tag = NULL,
                                        sample_map = NULL) {
-  if (is.null(two_shell_root) || length(two_shell_root) != 1L || !nzchar(two_shell_root)) {
-    stop("`two_shell_root` must be a single non-empty path.", call. = FALSE)
+  if (is.null(two_step_root) || length(two_step_root) != 1L || !nzchar(two_step_root)) {
+    stop("`two_step_root` must be a single non-empty path.", call. = FALSE)
   }
   patient_ids <- as.character(patient_ids)
   if (!length(patient_ids) || any(!nzchar(patient_ids)) || anyDuplicated(patient_ids)) {
@@ -58,9 +58,9 @@ resolve_two_shell_fit_dirs <- function(two_shell_root,
   if (is.null(pm_tag)) {
     pm_tag <- paste0("pm_", format(pm, scientific = FALSE, trim = TRUE))
     pm_tag_resolution <- "derived"
-    derived_pm_dir <- file.path(two_shell_root, pm_tag)
-    if (!dir.exists(derived_pm_dir) && dir.exists(two_shell_root)) {
-      pm_dirs <- list.dirs(two_shell_root, recursive = FALSE, full.names = FALSE)
+    derived_pm_dir <- file.path(two_step_root, pm_tag)
+    if (!dir.exists(derived_pm_dir) && dir.exists(two_step_root)) {
+      pm_dirs <- list.dirs(two_step_root, recursive = FALSE, full.names = FALSE)
       pm_dirs <- pm_dirs[grepl("^pm_", pm_dirs)]
       pm_values <- suppressWarnings(as.numeric(sub("^pm_", "", pm_dirs)))
       tol <- max(1e-12, abs(pm) * 1e-8)
@@ -71,7 +71,7 @@ resolve_two_shell_fit_dirs <- function(two_shell_root,
       } else if (length(matches) > 1L) {
         stop(
           sprintf(
-            "Multiple `pm_*` directories under `two_shell_root` match pm=%s; supply `two_shell_pm_tag`.",
+            "Multiple `pm_*` directories under `two_step_root` match pm=%s; supply `two_step_pm_tag`.",
             format(pm, scientific = FALSE, trim = TRUE)
           ),
           call. = FALSE
@@ -97,7 +97,7 @@ resolve_two_shell_fit_dirs <- function(two_shell_root,
     minobs_tag_resolution <- "provided"
   }
 
-  expected_fit_dir <- file.path(two_shell_root, pm_tag, minobs_tag, sample_names)
+  expected_fit_dir <- file.path(two_step_root, pm_tag, minobs_tag, sample_names)
   exists <- dir.exists(expected_fit_dir)
   out <- data.frame(
     patient_id = patient_ids,
@@ -114,14 +114,14 @@ resolve_two_shell_fit_dirs <- function(two_shell_root,
   out
 }
 
-#' Check integrity of a cached two-shell fit
+#' Check integrity of a cached two-step fit
 #'
-#' @param fit_dir Directory containing cached two-shell output.
+#' @param fit_dir Directory containing cached two-step output.
 #' @param patient_id Optional patient identifier for messages.
 #' @param mode Integrity strictness: `"strict"`, `"basic"`, or `"none"`.
 #' @return A structured list with status, missing files, unreadable files, and warnings.
 #' @export
-check_two_shell_fit_integrity <- function(fit_dir,
+check_two_step_fit_integrity <- function(fit_dir,
                                           patient_id = NULL,
                                           mode = c("strict", "basic", "none")) {
   mode <- match.arg(mode)
@@ -227,7 +227,7 @@ check_two_shell_fit_integrity <- function(fit_dir,
     if (length(prior_cols)) {
       prior_vals <- unique(unlist(diag_all[prior_cols], use.names = FALSE))
       prior_vals <- prior_vals[!is.na(prior_vals)]
-      if (length(prior_vals) && !"empirical_two_shell" %in% prior_vals) {
+      if (length(prior_vals) && !"empirical_two_step" %in% prior_vals) {
         result$status <- "wrong_prior_mode"
         result$warnings <- c(result$warnings, paste0("prior_modes_seen:", paste(prior_vals, collapse = ",")))
         return(result)
@@ -235,7 +235,7 @@ check_two_shell_fit_integrity <- function(fit_dir,
     }
     if (!any(c("nn_prior_source_used", "mu01", "sigma01") %in% names(diag_all))) {
       result$status <- "invalid_object"
-      result$warnings <- c(result$warnings, "nn_prior_diagnostics_missing_recognizable_two_shell_fields")
+      result$warnings <- c(result$warnings, "nn_prior_diagnostics_missing_recognizable_two_step_fields")
       return(result)
     }
   }
@@ -245,31 +245,31 @@ check_two_shell_fit_integrity <- function(fit_dir,
   result
 }
 
-#' Ensure two-shell fits exist, reusing valid cached fits
+#' Ensure two-step fits exist, reusing valid cached fits
 #'
 #' @param patients Named list of patient inputs accepted by `alfak()`.
 #' @param patient_ids Patient identifiers aligned with `patients`.
-#' @param two_shell_root Cache root. If `NULL`, `outdir/two_shell_base` is used.
+#' @param two_step_root Cache root. If `NULL`, `outdir/two_step_base` is used.
 #' @param outdir Cohort output directory where status tables are saved.
-#' @param pm Mis-segregation probability for the upstream two-shell fit.
-#' @param minobs MINIOBS threshold for the upstream two-shell fit.
+#' @param pm Mis-segregation probability for the upstream two-step fit.
+#' @param minobs MINIOBS threshold for the upstream two-step fit.
 #' @param ... Additional arguments passed to `alfak()` when a sample must be rerun.
 #' @param sample_names Optional sample directory names aligned with `patient_ids`.
 #' @param pm_tag Optional exact PM cache tag.
 #' @param minobs_tag Optional exact MINIOBS cache tag.
 #' @param sample_map Optional named patient-to-sample directory map.
-#' @param reuse_two_shell Reuse valid cached fits.
-#' @param rerun_missing_two_shell Rerun only missing fits.
-#' @param rerun_corrupt_two_shell Back up and rerun only corrupt fits.
+#' @param reuse_two_step Reuse valid cached fits.
+#' @param rerun_missing_two_step Rerun only missing fits.
+#' @param rerun_corrupt_two_step Back up and rerun only corrupt fits.
 #' @param integrity_check Integrity mode used for existing and rerun fits.
 #' @param base_nn_prior NN prior mode used for rerun base fits.
 #' @param allow_incomplete_cohort If `TRUE`, record rerun failures instead of
 #'   stopping immediately.
 #' @return A data frame with before/after status and actions.
 #' @export
-ensure_two_shell_fits <- function(patients,
+ensure_two_step_fits <- function(patients,
                                   patient_ids = names(patients),
-                                  two_shell_root = NULL,
+                                  two_step_root = NULL,
                                   outdir,
                                   pm,
                                   minobs,
@@ -278,24 +278,24 @@ ensure_two_shell_fits <- function(patients,
                                   pm_tag = NULL,
                                   minobs_tag = NULL,
                                   sample_map = NULL,
-                                  reuse_two_shell = TRUE,
-                                  rerun_missing_two_shell = TRUE,
-                                  rerun_corrupt_two_shell = TRUE,
+                                  reuse_two_step = TRUE,
+                                  rerun_missing_two_step = TRUE,
+                                  rerun_corrupt_two_step = TRUE,
                                   integrity_check = c("strict", "basic", "none"),
-                                  base_nn_prior = "empirical_two_shell",
+                                  base_nn_prior = "empirical_two_step",
                                   allow_incomplete_cohort = FALSE) {
   integrity_check <- match.arg(integrity_check)
-  if (is.null(two_shell_root)) {
-    two_shell_root <- file.path(outdir, "two_shell_base")
+  if (is.null(two_step_root)) {
+    two_step_root <- file.path(outdir, "two_step_base")
   }
   dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
-  dir.create(two_shell_root, recursive = TRUE, showWarnings = FALSE)
+  dir.create(two_step_root, recursive = TRUE, showWarnings = FALSE)
   outer_log_path <- file.path(outdir, "alfak_run.log")
   alfak_run_log_path(outer_log_path)
   alfak_log_event(
     level = "INFO",
-    component = "ensure_two_shell_fits",
-    detail = sprintf("start n_patients=%d two_shell_root=%s integrity=%s", length(patient_ids), normalizePath(two_shell_root, mustWork = FALSE), integrity_check)
+    component = "ensure_two_step_fits",
+    detail = sprintf("start n_patients=%d two_step_root=%s integrity=%s", length(patient_ids), normalizePath(two_step_root, mustWork = FALSE), integrity_check)
   )
 
   patient_ids <- as.character(patient_ids)
@@ -304,8 +304,8 @@ ensure_two_shell_fits <- function(patients,
   }
   names(patients) <- patient_ids
 
-  resolved <- resolve_two_shell_fit_dirs(
-    two_shell_root = two_shell_root,
+  resolved <- resolve_two_step_fit_dirs(
+    two_step_root = two_step_root,
     patient_ids = patient_ids,
     sample_names = sample_names,
     pm = pm,
@@ -319,53 +319,53 @@ ensure_two_shell_fits <- function(patients,
   for (i in seq_len(nrow(resolved))) {
     patient_id <- resolved$patient_id[i]
     fit_dir <- resolved$expected_fit_dir[i]
-    before <- check_two_shell_fit_integrity(fit_dir, patient_id = patient_id, mode = integrity_check)
+    before <- check_two_step_fit_integrity(fit_dir, patient_id = patient_id, mode = integrity_check)
     action <- "none"
     backup_dir <- NA_character_
     error_message <- NA_character_
     after <- before
 
     needs_rerun <- FALSE
-    if (isTRUE(reuse_two_shell) && isTRUE(before$ok)) {
+    if (isTRUE(reuse_two_step) && isTRUE(before$ok)) {
       action <- "reused"
       alfak_log_event(
         level = "INFO",
-        component = "ensure_two_shell_fits",
+        component = "ensure_two_step_fits",
         detail = sprintf("patient=%s action=reused fit_dir=%s", patient_id, fit_dir)
       )
     } else {
       missing_dir <- identical(before$status, "missing_dir")
       if (missing_dir) {
-        if (!isTRUE(rerun_missing_two_shell)) {
+        if (!isTRUE(rerun_missing_two_step)) {
           alfak_log_event(
             level = "ERROR",
-            component = "ensure_two_shell_fits",
-            detail = sprintf("patient=%s missing fit_dir=%s rerun_missing_two_shell=FALSE", patient_id, fit_dir)
+            component = "ensure_two_step_fits",
+            detail = sprintf("patient=%s missing fit_dir=%s rerun_missing_two_step=FALSE", patient_id, fit_dir)
           )
-          stop(sprintf("Two-shell fit for patient `%s` is missing at `%s`.", patient_id, fit_dir), call. = FALSE)
+          stop(sprintf("Two-step fit for patient `%s` is missing at `%s`.", patient_id, fit_dir), call. = FALSE)
         }
         action <- "rerun_missing"
         needs_rerun <- TRUE
       } else {
-        if (!isTRUE(rerun_corrupt_two_shell)) {
+        if (!isTRUE(rerun_corrupt_two_step)) {
           alfak_log_event(
             level = "ERROR",
-            component = "ensure_two_shell_fits",
-            detail = sprintf("patient=%s invalid status=%s fit_dir=%s rerun_corrupt_two_shell=FALSE", patient_id, before$status, fit_dir)
+            component = "ensure_two_step_fits",
+            detail = sprintf("patient=%s invalid status=%s fit_dir=%s rerun_corrupt_two_step=FALSE", patient_id, before$status, fit_dir)
           )
           stop(
-            sprintf("Two-shell fit for patient `%s` is not reusable at `%s` (status: %s).",
+            sprintf("Two-step fit for patient `%s` is not reusable at `%s` (status: %s).",
                     patient_id, fit_dir, before$status),
             call. = FALSE
           )
         }
-        action <- if (isTRUE(reuse_two_shell)) "rerun_corrupt" else "rerun_reuse_disabled"
+        action <- if (isTRUE(reuse_two_step)) "rerun_corrupt" else "rerun_reuse_disabled"
         needs_rerun <- TRUE
       }
       if (isTRUE(needs_rerun)) {
         alfak_log_event(
           level = "INFO",
-          component = "ensure_two_shell_fits",
+          component = "ensure_two_step_fits",
           detail = sprintf("patient=%s action=%s status_before=%s fit_dir=%s", patient_id, action, before$status, fit_dir)
         )
       }
@@ -383,12 +383,12 @@ ensure_two_shell_fits <- function(patients,
               backup_dir <- file.path(dirname(fit_dir), paste0(basename(fit_dir), "__corrupt_", stamp, "_", suffix))
             }
             if (!file.rename(fit_dir, backup_dir)) {
-              stop(sprintf("Could not move corrupt two-shell directory `%s` to `%s`.", fit_dir, backup_dir), call. = FALSE)
+              stop(sprintf("Could not move corrupt two-step directory `%s` to `%s`.", fit_dir, backup_dir), call. = FALSE)
             }
             alfak_run_log_path(outer_log_path)
             alfak_log_event(
               level = "INFO",
-              component = "ensure_two_shell_fits",
+              component = "ensure_two_step_fits",
               detail = sprintf("patient=%s backed_up_corrupt_dir=%s", patient_id, backup_dir)
             )
           }
@@ -404,17 +404,17 @@ ensure_two_shell_fits <- function(patients,
           alfak_run_log_path(outer_log_path)
           alfak_log_event(
             level = "INFO",
-            component = "ensure_two_shell_fits",
+            component = "ensure_two_step_fits",
             detail = sprintf("patient=%s rerun_completed fit_dir=%s", patient_id, fit_dir)
           )
-          check_two_shell_fit_integrity(fit_dir, patient_id = patient_id, mode = integrity_check)
+          check_two_step_fit_integrity(fit_dir, patient_id = patient_id, mode = integrity_check)
         },
         error = function(e) {
           error_message <<- conditionMessage(e)
           alfak_run_log_path(outer_log_path)
           alfak_log_event(
             level = "ERROR",
-            component = "ensure_two_shell_fits",
+            component = "ensure_two_step_fits",
             detail = sprintf("patient=%s rerun_failed status_before=%s error=%s", patient_id, before$status, error_message)
           )
           list(ok = FALSE, status = "rerun_failed", missing_files = character(0),
@@ -426,11 +426,11 @@ ensure_two_shell_fits <- function(patients,
       if (!isTRUE(after$ok) && !isTRUE(allow_incomplete_cohort)) {
         alfak_log_event(
           level = "ERROR",
-          component = "ensure_two_shell_fits",
+          component = "ensure_two_step_fits",
           detail = sprintf("patient=%s integrity_after_failed status_after=%s error=%s", patient_id, after$status, ifelse(is.na(error_message), "", error_message))
         )
         stop(
-          sprintf("Two-shell rerun failed integrity checks for patient `%s` at `%s` (status: %s; error: %s).",
+          sprintf("Two-step rerun failed integrity checks for patient `%s` at `%s` (status: %s; error: %s).",
                   patient_id, fit_dir, after$status, ifelse(is.na(error_message), "", error_message)),
           call. = FALSE
         )
@@ -455,25 +455,25 @@ ensure_two_shell_fits <- function(patients,
     )
     alfak_log_event(
       level = "INFO",
-      component = "ensure_two_shell_fits",
+      component = "ensure_two_step_fits",
       detail = sprintf("patient=%s action=%s status_before=%s status_after=%s", patient_id, action, before$status, after$status)
     )
   }
 
   status <- do.call(rbind, rows)
   rownames(status) <- NULL
-  saveRDS(status, file.path(outdir, "two_shell_fit_status.Rds"))
+  saveRDS(status, file.path(outdir, "two_step_fit_status.Rds"))
   utils::write.table(
     status,
-    file = file.path(outdir, "two_shell_fit_status.tsv"),
+    file = file.path(outdir, "two_step_fit_status.tsv"),
     sep = "\t",
     quote = FALSE,
     row.names = FALSE
   )
   alfak_log_event(
     level = "INFO",
-    component = "ensure_two_shell_fits",
-    detail = sprintf("finished status_file=%s", file.path(outdir, "two_shell_fit_status.tsv"))
+    component = "ensure_two_step_fits",
+    detail = sprintf("finished status_file=%s", file.path(outdir, "two_step_fit_status.tsv"))
   )
   status
 }
@@ -575,9 +575,9 @@ cohort_transition_delta_se <- function(delta_values, fallback = ALFAK_NN_PRIOR_S
   if (is.null(x) || !length(x) || (length(x) == 1L && is.na(x))) y else x
 }
 
-#' Extract cohort transition records from two-shell fits
+#' Extract cohort transition records from two-step fits
 #'
-#' @param fit_dirs Character vector of two-shell fit directories.
+#' @param fit_dirs Character vector of two-step fit directories.
 #' @param patient_ids Patient IDs aligned with `fit_dirs`.
 #' @param pm Mis-segregation probability used to reconstruct NN parent paths.
 #' @param grouping Transition grouping mode.
@@ -724,7 +724,7 @@ extract_cohort_transition_records <- function(fit_dirs,
             parent_burden = parsed$parent_burden,
             child_burden = parsed$child_burden,
             parent_fitness = parent_fit,
-            child_fitness_two_shell = child_fit,
+            child_fitness_two_step = child_fit,
             delta_hat = child_fit - parent_fit,
             delta_se = delta_se_lookup[[paste(parent, child, sep = "\r")]],
             child_observed_count = child_observed_count,
@@ -735,8 +735,8 @@ extract_cohort_transition_records <- function(fit_dirs,
             zero_informativeness_category = zero_info$zero_informativeness_category,
             boundary_flag = as.logical(get_node_value("objective_boundary_flag", FALSE)),
             prior_dominated_flag = as.logical(get_node_value("prior_dominated_flag", FALSE)),
-            two_shell_used = TRUE,
-            two_shell_outward_weight = as.numeric(get_node_value("outward_weight_sum", NA_real_)),
+            two_step_used = TRUE,
+            two_step_outward_weight = as.numeric(get_node_value("outward_weight_sum", NA_real_)),
             path_responsibility = path_responsibility[parent_idx],
             replicate_id = as.integer(b),
             bootstrap_id = as.integer(b),
@@ -3255,7 +3255,7 @@ cohort_context_enrich_record <- function(record,
 
 #' Build contextual transition evidence banks
 #'
-#' @param records Transition records from upstream two-shell results.
+#' @param records Transition records from upstream two-step results.
 #' @inheritParams compute_karyotype_profile_features
 #' @param cohort_transition_use_prior_dominated_records Whether prior-dominated
 #'   observed records can enter the observed evidence bank.
@@ -3817,7 +3817,7 @@ context_label_for_overlay <- function(child_is_zero,
 
 #' Apply contextual cohort-transition overlay to one NN child
 #'
-#' The contextual overlay combines the patient-specific two-shell baseline with
+#' The contextual overlay combines the patient-specific two-step baseline with
 #' a target-specific Delta-fitness prior learned from similar parent karyotype
 #' backgrounds and CNA events. Observed NN are unchanged by default, sparse or
 #' high-variable contexts keep the baseline, and zero NN updates are capped by
@@ -3828,9 +3828,9 @@ context_label_for_overlay <- function(child_is_zero,
 #' @param build_opt_fc Objective builder used by `solve_fitness_bootstrap()`.
 #' @param search_interval Numeric optimization interval.
 #' @param prior_use Contextual prior object for the target patient.
-#' @param f_two_shell_baseline Patient-specific two-shell baseline fitness.
+#' @param f_two_step_baseline Patient-specific two-step baseline fitness.
 #' @param nn_present Optional logical indicating whether the child is observed.
-#' @param two_shell_node_diagnostics Optional one-row two-shell diagnostics.
+#' @param two_step_node_diagnostics Optional one-row two-step diagnostics.
 #' @param cohort_contextual_apply_to Which nodes may receive contextual updates.
 #' @param cohort_context_lambda Global contextual borrowing multiplier.
 #' @param cohort_context_max_borrowing_fraction Maximum borrowing fraction.
@@ -3838,7 +3838,7 @@ context_label_for_overlay <- function(child_is_zero,
 #' @param cohort_context_sd_floor,cohort_context_patient_sd_floor Contextual SD
 #'   floors.
 #' @param cohort_context_keep_baseline_when_sparse,cohort_context_keep_baseline_when_high_variable
-#'   Keep the two-shell baseline for sparse/high-variable contexts.
+#'   Keep the two-step baseline for sparse/high-variable contexts.
 #'
 #' @return A list with final fitness and node diagnostics.
 #' @export
@@ -3847,9 +3847,9 @@ apply_contextual_cohort_overlay <- function(item,
                                             build_opt_fc,
                                             search_interval,
                                             prior_use,
-                                            f_two_shell_baseline,
+                                            f_two_step_baseline,
                                             nn_present = NULL,
-                                            two_shell_node_diagnostics = NULL,
+                                            two_step_node_diagnostics = NULL,
                                             cohort_contextual_apply_to = c("zero_only", "low_information", "all"),
                                             cohort_context_lambda = 0.25,
                                             cohort_context_max_borrowing_fraction = 0.5,
@@ -3862,7 +3862,7 @@ apply_contextual_cohort_overlay <- function(item,
   direct_objective <- build_opt_fc(item, do_prior_param = FALSE)
   n_parents <- length(item$parent_fitness)
   if (n_parents == 0L) {
-    return(list(f_final = f_two_shell_baseline, diagnostics = data.frame()))
+    return(list(f_final = f_two_step_baseline, diagnostics = data.frame()))
   }
   parent_karyotypes <- item$nj
   if (is.null(parent_karyotypes) || length(parent_karyotypes) != n_parents ||
@@ -3875,7 +3875,7 @@ apply_contextual_cohort_overlay <- function(item,
     item = item,
     child_name = child_name,
     nn_present = nn_present,
-    two_shell_node_diagnostics = two_shell_node_diagnostics,
+    two_step_node_diagnostics = two_step_node_diagnostics,
     cohort_transition_apply_to = cohort_contextual_apply_to
   )
   expected_parent_like <- as.numeric(item$projected_exposure)
@@ -3930,13 +3930,13 @@ apply_contextual_cohort_overlay <- function(item,
   parent_combined <- sum(path_weights * parent_fit, na.rm = TRUE)
   direct_se <- estimate_scalar_objective_se(
     objective_fn = direct_objective,
-    optimum = if (is.finite(f_two_shell_baseline)) f_two_shell_baseline else mean(search_interval),
+    optimum = if (is.finite(f_two_step_baseline)) f_two_step_baseline else mean(search_interval),
     search_interval = search_interval,
     se_floor = max(cohort_context_sd_floor, cohort_context_patient_sd_floor)
   )
   anchor_sd <- max(cohort_context_sd_floor, cohort_context_patient_sd_floor, direct_se, na.rm = TRUE)
   if (!is.finite(anchor_sd) || anchor_sd <= 0) anchor_sd <- max(cohort_context_sd_floor, cohort_context_patient_sd_floor)
-  anchor_info <- if (is.finite(f_two_shell_baseline)) 1 / anchor_sd^2 else 0
+  anchor_info <- if (is.finite(f_two_step_baseline)) 1 / anchor_sd^2 else 0
   context_sd <- max(cohort_context_sd_floor, cohort_context_patient_sd_floor, combined$context_delta_sd[1])
   context_target <- parent_combined + combined$context_delta_mu[1]
   zero_multiplier <- if (isTRUE(child_is_zero)) pmin(1, pmax(0, zero_info$zero_informativeness_score[1])) else 1
@@ -3948,29 +3948,29 @@ apply_contextual_cohort_overlay <- function(item,
   if (isTRUE(class_disallowed) || !isTRUE(selector$apply)) effective_lambda <- 0
   if (!is.finite(effective_lambda) || effective_lambda < 0) effective_lambda <- 0
   prior_info <- effective_lambda / context_sd^2
-  f_overlay <- f_final <- f_two_shell_baseline
+  f_overlay <- f_final <- f_two_step_baseline
   update_applied <- FALSE
   guardrail_hit <- FALSE
   skipped_reason <- selector$reason
-  if (isTRUE(selector$apply) && prior_info > 0 && anchor_info > 0 && is.finite(f_two_shell_baseline)) {
-    f_overlay <- (anchor_info * f_two_shell_baseline + prior_info * context_target) / (anchor_info + prior_info)
+  if (isTRUE(selector$apply) && prior_info > 0 && anchor_info > 0 && is.finite(f_two_step_baseline)) {
+    f_overlay <- (anchor_info * f_two_step_baseline + prior_info * context_target) / (anchor_info + prior_info)
     borrowing <- prior_info / (prior_info + anchor_info)
     max_shift <- cohort_context_max_abs_delta_shift
     if (is.null(max_shift)) {
       max_shift <- max(2 * context_sd, 2 * anchor_sd, 0.10)
     }
-    shift <- f_overlay - f_two_shell_baseline
+    shift <- f_overlay - f_two_step_baseline
     if (is.finite(shift) && abs(shift) > max_shift) {
-      f_overlay <- f_two_shell_baseline + sign(shift) * max_shift
+      f_overlay <- f_two_step_baseline + sign(shift) * max_shift
       guardrail_hit <- TRUE
     }
     if (is.finite(borrowing) && borrowing > cohort_context_max_borrowing_fraction) {
-      f_final <- f_two_shell_baseline
+      f_final <- f_two_step_baseline
       guardrail_hit <- TRUE
       skipped_reason <- "borrowing_fraction_guardrail"
     } else {
       f_final <- f_overlay
-      update_applied <- is.finite(f_final) && abs(f_final - f_two_shell_baseline) > sqrt(.Machine$double.eps)
+      update_applied <- is.finite(f_final) && abs(f_final - f_two_step_baseline) > sqrt(.Machine$double.eps)
       if (!isTRUE(update_applied)) skipped_reason <- "overlay_shift_negligible"
     }
   } else if (isTRUE(selector$apply) && isTRUE(non_identifiable_zero)) {
@@ -4029,11 +4029,11 @@ apply_contextual_cohort_overlay <- function(item,
       context_prior_dominated_flag = isTRUE(child_is_zero) && is.finite(borrowing) && borrowing > cohort_context_max_borrowing_fraction,
       parent_fitness = parent_fit[idx],
       path_responsibility = path_weights[idx],
-      f_two_shell_baseline = f_two_shell_baseline,
+      f_two_step_baseline = f_two_step_baseline,
       f_contextual_overlay = f_overlay,
       f_cohort_overlay = f_overlay,
       f_final = f_final,
-      f_delta_from_two_shell = f_final - f_two_shell_baseline,
+      f_delta_from_two_step = f_final - f_two_step_baseline,
       delta_context_mean = combined$context_delta_mu,
       delta_context_sd = context_sd,
       delta_posterior_mean = f_final - parent_combined,
@@ -4422,14 +4422,14 @@ fit_cohort_transition_nn_child <- function(item,
 #' @param item NN child context object.
 #' @param child_name Child karyotype ID.
 #' @param nn_present Optional logical indicating whether the child is observed.
-#' @param two_shell_node_diagnostics Optional one-row two-shell diagnostics.
+#' @param two_step_node_diagnostics Optional one-row two-step diagnostics.
 #' @param cohort_transition_apply_to Overlay application mode.
 #' @return A list with apply decision, skip reason, and information flags.
 #' @export
 should_apply_cohort_transition_to_node <- function(item,
                                                    child_name,
                                                    nn_present = NULL,
-                                                   two_shell_node_diagnostics = NULL,
+                                                   two_step_node_diagnostics = NULL,
                                                    cohort_transition_apply_to = c("zero_only", "low_information", "all")) {
   cohort_transition_apply_to <- match.arg(cohort_transition_apply_to)
   child_observed_count <- sum(item$child_obs, na.rm = TRUE)
@@ -4438,12 +4438,12 @@ should_apply_cohort_transition_to_node <- function(item,
     child_is_zero <- TRUE
   }
   boundary <- prior_dominated <- FALSE
-  if (is.data.frame(two_shell_node_diagnostics) && nrow(two_shell_node_diagnostics)) {
-    if ("objective_boundary_flag" %in% names(two_shell_node_diagnostics)) {
-      boundary <- isTRUE(two_shell_node_diagnostics$objective_boundary_flag[1])
+  if (is.data.frame(two_step_node_diagnostics) && nrow(two_step_node_diagnostics)) {
+    if ("objective_boundary_flag" %in% names(two_step_node_diagnostics)) {
+      boundary <- isTRUE(two_step_node_diagnostics$objective_boundary_flag[1])
     }
-    if ("prior_dominated_flag" %in% names(two_shell_node_diagnostics)) {
-      prior_dominated <- isTRUE(two_shell_node_diagnostics$prior_dominated_flag[1])
+    if ("prior_dominated_flag" %in% names(two_step_node_diagnostics)) {
+      prior_dominated <- isTRUE(two_step_node_diagnostics$prior_dominated_flag[1])
     }
   }
   low_information <- child_is_zero || boundary || prior_dominated
@@ -4469,9 +4469,9 @@ should_apply_cohort_transition_to_node <- function(item,
 #' @param build_opt_fc Objective builder used by `solve_fitness_bootstrap()`.
 #' @param search_interval Numeric optimization interval.
 #' @param prior_use Patient-specific cohort transition prior.
-#' @param f_two_shell_baseline Patient-specific two-shell baseline fitness.
+#' @param f_two_step_baseline Patient-specific two-step baseline fitness.
 #' @param nn_present Optional logical indicating whether the child is observed.
-#' @param two_shell_node_diagnostics Optional one-row two-shell diagnostics.
+#' @param two_step_node_diagnostics Optional one-row two-step diagnostics.
 #' @param cohort_transition_apply_to Overlay application mode.
 #' @param cohort_transition_lambda Global borrowing multiplier.
 #' @param cohort_transition_max_borrowing_fraction Maximum borrowing fraction.
@@ -4485,9 +4485,9 @@ apply_cohort_transition_overlay <- function(item,
                                             build_opt_fc,
                                             search_interval,
                                             prior_use,
-                                            f_two_shell_baseline,
+                                            f_two_step_baseline,
                                             nn_present = NULL,
-                                            two_shell_node_diagnostics = NULL,
+                                            two_step_node_diagnostics = NULL,
                                             cohort_transition_apply_to = c("zero_only", "low_information", "all"),
                                             cohort_transition_lambda = 0.25,
                                             cohort_transition_max_borrowing_fraction = 0.5,
@@ -4506,7 +4506,7 @@ apply_cohort_transition_overlay <- function(item,
   direct_objective <- build_opt_fc(item, do_prior_param = FALSE)
   n_parents <- length(item$parent_fitness)
   if (n_parents == 0L) {
-    return(list(f_final = f_two_shell_baseline, diagnostics = data.frame()))
+    return(list(f_final = f_two_step_baseline, diagnostics = data.frame()))
   }
   parent_karyotypes <- item$nj
   if (is.null(parent_karyotypes) || length(parent_karyotypes) != n_parents ||
@@ -4536,7 +4536,7 @@ apply_cohort_transition_overlay <- function(item,
     item = item,
     child_name = child_name,
     nn_present = nn_present,
-    two_shell_node_diagnostics = two_shell_node_diagnostics,
+    two_step_node_diagnostics = two_step_node_diagnostics,
     cohort_transition_apply_to = cohort_transition_apply_to
   )
   child_observed_count <- sum(item$child_obs, na.rm = TRUE)
@@ -4545,21 +4545,21 @@ apply_cohort_transition_overlay <- function(item,
     (!is.finite(expected_parent_like) || expected_parent_like < 0.5)
   direct_se <- estimate_scalar_objective_se(
     objective_fn = direct_objective,
-    optimum = if (is.finite(f_two_shell_baseline)) f_two_shell_baseline else mean(search_interval),
+    optimum = if (is.finite(f_two_step_baseline)) f_two_step_baseline else mean(search_interval),
     search_interval = search_interval,
     se_floor = max(cohort_transition_sd_floor, cohort_transition_patient_sd_floor)
   )
-  if (!is.finite(f_two_shell_baseline)) {
+  if (!is.finite(f_two_step_baseline)) {
     opt <- run_optimise_checked(
       direct_objective,
       interval = search_interval,
       context = sprintf("optimise nearest-neighbour direct baseline for cohort overlay child %s", child_name)
     )
-    f_two_shell_baseline <- if (is.null(opt)) NA_real_ else opt$minimum
+    f_two_step_baseline <- if (is.null(opt)) NA_real_ else opt$minimum
   }
   anchor_sd <- max(cohort_transition_sd_floor, cohort_transition_patient_sd_floor, direct_se, na.rm = TRUE)
   if (!is.finite(anchor_sd) || anchor_sd <= 0) anchor_sd <- max(cohort_transition_sd_floor, cohort_transition_patient_sd_floor)
-  anchor_info <- if (is.finite(f_two_shell_baseline)) 1 / anchor_sd^2 else 0
+  anchor_info <- if (is.finite(f_two_step_baseline)) 1 / anchor_sd^2 else 0
   zero_multiplier <- if (isTRUE(child_is_zero)) {
     pmin(1, pmax(0, zero_info$zero_informativeness_score[1]))
   } else {
@@ -4585,12 +4585,12 @@ apply_cohort_transition_overlay <- function(item,
   prior_info_path[!is.finite(prior_info_path) | prior_info_path < 0] <- 0
   prior_info <- sum(prior_info_path)
   prior_targets <- parent_fit + prior_mu
-  f_overlay <- f_final <- f_two_shell_baseline
+  f_overlay <- f_final <- f_two_step_baseline
   guardrail_hit <- FALSE
   skipped_reason <- selector$reason
   update_applied <- FALSE
-  if (isTRUE(selector$apply) && prior_info > 0 && is.finite(f_two_shell_baseline) && anchor_info > 0) {
-    f_overlay <- (anchor_info * f_two_shell_baseline + sum(prior_info_path * prior_targets)) /
+  if (isTRUE(selector$apply) && prior_info > 0 && is.finite(f_two_step_baseline) && anchor_info > 0) {
+    f_overlay <- (anchor_info * f_two_step_baseline + sum(prior_info_path * prior_targets)) /
       (anchor_info + prior_info)
     borrowing <- prior_info / (prior_info + anchor_info)
     if (!is.finite(borrowing)) borrowing <- NA_real_
@@ -4598,18 +4598,18 @@ apply_cohort_transition_overlay <- function(item,
     if (is.null(max_shift)) {
       max_shift <- max(cohort_transition_patient_sd_floor, min(0.25, stats::median(prior_sd, na.rm = TRUE)))
     }
-    shift <- f_overlay - f_two_shell_baseline
+    shift <- f_overlay - f_two_step_baseline
     if (is.finite(shift) && abs(shift) > max_shift) {
-      f_overlay <- f_two_shell_baseline + sign(shift) * max_shift
+      f_overlay <- f_two_step_baseline + sign(shift) * max_shift
       guardrail_hit <- TRUE
     }
     if (is.finite(borrowing) && borrowing > cohort_transition_max_borrowing_fraction) {
-      f_final <- f_two_shell_baseline
+      f_final <- f_two_step_baseline
       guardrail_hit <- TRUE
       skipped_reason <- "borrowing_fraction_guardrail"
     } else {
       f_final <- f_overlay
-      update_applied <- is.finite(f_final) && abs(f_final - f_two_shell_baseline) > sqrt(.Machine$double.eps)
+      update_applied <- is.finite(f_final) && abs(f_final - f_two_step_baseline) > sqrt(.Machine$double.eps)
       if (!isTRUE(update_applied)) skipped_reason <- "overlay_shift_negligible"
     }
   } else if (isTRUE(selector$apply) && prior_info <= 0) {
@@ -4643,11 +4643,11 @@ apply_cohort_transition_overlay <- function(item,
       patient_delta_shift_n_records = prior_use$patient_delta_shift_n_records,
       patient_delta_shift_reliability = prior_use$patient_delta_shift_reliability,
       parent_fitness = parent_fit[idx],
-      f_two_shell_baseline = f_two_shell_baseline,
+      f_two_step_baseline = f_two_step_baseline,
       f_cohort_overlay = f_overlay,
       f_final = f_final,
-      f_delta_from_two_shell = f_final - f_two_shell_baseline,
-      delta_two_shell_baseline = f_two_shell_baseline - parent_fit[idx],
+      f_delta_from_two_step = f_final - f_two_step_baseline,
+      delta_two_step_baseline = f_two_step_baseline - parent_fit[idx],
       delta_cohort_overlay = f_overlay - parent_fit[idx],
       delta_final = f_final - parent_fit[idx],
       f_map = f_final,
@@ -4710,23 +4710,23 @@ refit_patient_with_cohort_transition_prior <- function(patient,
 #'
 #' `alfak_cohort_transition()` learns a cohort-level prior on CNA transition
 #' effects, Delta fitness = child fitness - parent fitness, from upstream
-#' patient-specific two-shell results. It then refits every patient separately.
+#' patient-specific two-step results. It then refits every patient separately.
 #' Raw patient count matrices are never concatenated and no pooled absolute
 #' cohort fitness landscape is estimated.
 #'
 #' @details
-#' The upstream two-shell cache is resolved as
-#' `<two_shell_root>/pm_<xxxx>/MINIOBS<xxx>/<sample_name>/`. For example,
-#' `existing_two_shell_results/pm_0.00005/MINIOBS20/patient_A/` should contain
+#' The upstream two-step cache is resolved as
+#' `<two_step_root>/pm_<xxxx>/MINIOBS<xxx>/<sample_name>/`. For example,
+#' `existing_two_step_results/pm_0.00005/MINIOBS20/patient_A/` should contain
 #' `bootstrap_res.Rds`, `landscape.Rds`, and `nn_prior_diagnostics.Rds`, with
 #' `landscape_posterior_samples.Rds` preferred when available. If
-#' `two_shell_root` is `NULL`, the same layout is created under
-#' `file.path(outdir, "two_shell_base")`.
+#' `two_step_root` is `NULL`, the same layout is created under
+#' `file.path(outdir, "two_step_base")`.
 #'
-#' Valid cached two-shell fits are reused. A missing patient directory triggers
-#' a rerun only for that patient when `rerun_missing_two_shell = TRUE`. A corrupt
+#' Valid cached two-step fits are reused. A missing patient directory triggers
+#' a rerun only for that patient when `rerun_missing_two_step = TRUE`. A corrupt
 #' or incomplete patient directory is backed up with a `__corrupt_<timestamp>`
-#' suffix and rerun only for that patient when `rerun_corrupt_two_shell = TRUE`.
+#' suffix and rerun only for that patient when `rerun_corrupt_two_step = TRUE`.
 #'
 #' The default contextual cohort model is fit on transition effects, not
 #' absolute fitness: `Delta = child fitness - parent fitness`. It builds an
@@ -4736,7 +4736,7 @@ refit_patient_with_cohort_transition_prior <- function(patient,
 #' similarity. Raw bootstrap/path records are not treated as independent
 #' patients, zero NN are censoring evidence only, and low-exposure zero NN remain
 #' non-identifiable. High-variable or sparse contexts keep the patient-specific
-#' two-shell baseline and receive uncertainty labels instead of forced cohort
+#' two-step baseline and receive uncertainty labels instead of forced cohort
 #' imputation.
 #'
 #' Version `"v2"` remains available as a group-level fallback/comparison mode.
@@ -4744,7 +4744,7 @@ refit_patient_with_cohort_transition_prior <- function(patient,
 #' classifies groups for cross-patient consistency, and borrows only weakly from
 #' supported groups. With leave-one-patient-out enabled, patient `p` is refit
 #' using evidence from the other patients; this avoids borrowing that patient's
-#' own two-shell transition effects back into its refit.
+#' own two-step transition effects back into its refit.
 #'
 #' Patient-level diagnostics include cohort borrowing fractions and flags for
 #' prior-dominated or non-identifiable zero nearest neighbours. A
@@ -4754,14 +4754,14 @@ refit_patient_with_cohort_transition_prior <- function(patient,
 #' @param patients Named list of patient inputs accepted by `alfak()`.
 #' @param outdir Output directory for cohort diagnostics and patient refits.
 #' @param patient_ids Patient IDs. Defaults to `names(patients)`.
-#' @param two_shell_root Optional root containing existing two-shell results.
-#' @param two_shell_pm,two_shell_minobs Upstream two-shell PM and MINIOBS values.
-#' @param two_shell_pm_tag,two_shell_minobs_tag Optional exact cache directory tags.
-#' @param two_shell_sample_map Optional named patient-to-sample directory map.
-#' @param reuse_two_shell Reuse valid two-shell fit directories.
-#' @param rerun_missing_two_shell Rerun only missing two-shell fits.
-#' @param rerun_corrupt_two_shell Back up and rerun only corrupt two-shell fits.
-#' @param two_shell_integrity_check Integrity mode for cached fits.
+#' @param two_step_root Optional root containing existing two-step results.
+#' @param two_step_pm,two_step_minobs Upstream two-step PM and MINIOBS values.
+#' @param two_step_pm_tag,two_step_minobs_tag Optional exact cache directory tags.
+#' @param two_step_sample_map Optional named patient-to-sample directory map.
+#' @param reuse_two_step Reuse valid two-step fit directories.
+#' @param rerun_missing_two_step Rerun only missing two-step fits.
+#' @param rerun_corrupt_two_step Back up and rerun only corrupt two-step fits.
+#' @param two_step_integrity_check Integrity mode for cached fits.
 #' @param base_nn_prior Upstream prior mode used when rerunning base fits.
 #' @param minobs,nboot,n0,nb,pm,passage_times,allow_noninteger_counts,correct_efflux Arguments forwarded to `alfak()`.
 #' @param cohort_transition_grouping Transition grouping mode.
@@ -4770,14 +4770,14 @@ refit_patient_with_cohort_transition_prior <- function(patient,
 #'   keeps the group-level heterogeneity-aware selective-borrowing overlay.
 #' @param cohort_transition_apply_to Which NN nodes can receive the v2 overlay.
 #'   The default `"zero_only"` leaves observed NN estimates at the
-#'   patient-specific two-shell baseline.
+#'   patient-specific two-step baseline.
 #' @param cohort_transition_overlay_base Baseline used by v2, by default
-#'   `"empirical_two_shell"`.
+#'   `"empirical_two_step"`.
 #' @param cohort_transition_lambda Global multiplier for v2 cohort borrowing.
 #' @param cohort_transition_max_borrowing_fraction Maximum borrowing fraction
 #'   allowed before a v2 update is skipped.
 #' @param cohort_transition_max_abs_delta_shift Optional maximum absolute change
-#'   from the two-shell baseline.
+#'   from the two-step baseline.
 #' @param cohort_contextual_apply_to Which NN nodes can receive contextual
 #'   overlay updates. If `NULL`, inherits `cohort_transition_apply_to`.
 #' @param cohort_contextual_overlay_base Baseline used by contextual mode.
@@ -4816,9 +4816,9 @@ refit_patient_with_cohort_transition_prior <- function(patient,
 #' @param cohort_context_max_borrowing_fraction Maximum contextual borrowing
 #'   fraction before an update is skipped.
 #' @param cohort_context_max_abs_delta_shift Optional maximum contextual shift
-#'   from the two-shell baseline.
+#'   from the two-step baseline.
 #' @param cohort_context_keep_baseline_when_sparse,cohort_context_keep_baseline_when_high_variable
-#'   Keep the two-shell baseline for sparse or high-variable contexts.
+#'   Keep the two-step baseline for sparse or high-variable contexts.
 #' @param cohort_context_leave_one_patient_out Exclude the target patient from
 #'   contextual evidence lookup during refit.
 #' @param cohort_transition_leave_one_patient_out Store LOO priors and use them
@@ -4870,12 +4870,12 @@ refit_patient_with_cohort_transition_prior <- function(patient,
 #' alfak_cohort_transition(
 #'   patients = patients,
 #'   outdir = "cohort_transition_fit",
-#'   two_shell_root = "existing_two_shell_results",
+#'   two_step_root = "existing_two_step_results",
 #'   pm = 0.00005,
 #'   minobs = 20,
-#'   two_shell_pm_tag = "pm_0.00005",
-#'   two_shell_minobs_tag = "MINIOBS20",
-#'   base_nn_prior = "empirical_two_shell",
+#'   two_step_pm_tag = "pm_0.00005",
+#'   two_step_minobs_tag = "MINIOBS20",
+#'   base_nn_prior = "empirical_two_step",
 #'   cohort_transition_grouping = "gain_loss_chr",
 #'   cohort_transition_leave_one_patient_out = TRUE
 #' )
@@ -4883,17 +4883,17 @@ refit_patient_with_cohort_transition_prior <- function(patient,
 alfak_cohort_transition <- function(patients,
                                     outdir,
                                     patient_ids = names(patients),
-                                    two_shell_root = NULL,
-                                    two_shell_pm = pm,
-                                    two_shell_minobs = minobs,
-                                    two_shell_pm_tag = NULL,
-                                    two_shell_minobs_tag = NULL,
-                                    two_shell_sample_map = NULL,
-                                    reuse_two_shell = TRUE,
-                                    rerun_missing_two_shell = TRUE,
-                                    rerun_corrupt_two_shell = TRUE,
-                                    two_shell_integrity_check = c("strict", "basic", "none"),
-                                    base_nn_prior = "empirical_two_shell",
+                                    two_step_root = NULL,
+                                    two_step_pm = pm,
+                                    two_step_minobs = minobs,
+                                    two_step_pm_tag = NULL,
+                                    two_step_minobs_tag = NULL,
+                                    two_step_sample_map = NULL,
+                                    reuse_two_step = TRUE,
+                                    rerun_missing_two_step = TRUE,
+                                    rerun_corrupt_two_step = TRUE,
+                                    two_step_integrity_check = c("strict", "basic", "none"),
+                                    base_nn_prior = "empirical_two_step",
                                     minobs = 20,
                                     nboot = 45,
                                     n0 = 1e5,
@@ -4905,12 +4905,12 @@ alfak_cohort_transition <- function(patients,
                                     cohort_transition_grouping = c("gain_loss", "gain_loss_chr", "gain_loss_chr_burden", "exact_event"),
                                     cohort_transition_version = c("contextual", "v2", "v1"),
                                     cohort_transition_apply_to = c("zero_only", "low_information", "all"),
-                                    cohort_transition_overlay_base = c("empirical_two_shell", "direct"),
+                                    cohort_transition_overlay_base = c("empirical_two_step", "direct"),
                                     cohort_transition_lambda = 0.25,
                                     cohort_transition_max_borrowing_fraction = 0.5,
                                     cohort_transition_max_abs_delta_shift = NULL,
                                     cohort_contextual_apply_to = NULL,
-                                    cohort_contextual_overlay_base = c("empirical_two_shell", "direct"),
+                                    cohort_contextual_overlay_base = c("empirical_two_step", "direct"),
                                     cohort_context_baseline_ploidy = 2,
                                     cohort_context_chromosome_weights = NULL,
                                     cohort_context_profile_transform = c("mass", "centered", "zscore", "raw"),
@@ -5009,7 +5009,7 @@ alfak_cohort_transition <- function(patients,
                                     cohort_refit_cores = 1L,
                                     cohort_refit_seed = NULL,
                                     ...) {
-  two_shell_integrity_check <- match.arg(two_shell_integrity_check)
+  two_step_integrity_check <- match.arg(two_step_integrity_check)
   cohort_transition_grouping <- match.arg(cohort_transition_grouping)
   cohort_transition_version <- match.arg(cohort_transition_version)
   cohort_transition_apply_to <- match.arg(cohort_transition_apply_to)
@@ -5057,30 +5057,30 @@ alfak_cohort_transition <- function(patients,
     stop("`patients` and `patient_ids` must have the same length.", call. = FALSE)
   }
   names(patients) <- patient_ids
-  if (is.null(two_shell_root)) {
-    two_shell_root <- file.path(outdir, "two_shell_base")
+  if (is.null(two_step_root)) {
+    two_step_root <- file.path(outdir, "two_step_base")
   }
 
-  two_shell_status <- ensure_two_shell_fits(
+  two_step_status <- ensure_two_step_fits(
     patients = patients,
     patient_ids = patient_ids,
-    two_shell_root = two_shell_root,
+    two_step_root = two_step_root,
     outdir = outdir,
-    pm = two_shell_pm,
-    minobs = two_shell_minobs,
+    pm = two_step_pm,
+    minobs = two_step_minobs,
     nboot = nboot,
     n0 = n0,
     nb = nb,
     passage_times = passage_times,
     allow_noninteger_counts = allow_noninteger_counts,
     correct_efflux = correct_efflux,
-    pm_tag = two_shell_pm_tag,
-    minobs_tag = two_shell_minobs_tag,
-    sample_map = two_shell_sample_map,
-    reuse_two_shell = reuse_two_shell,
-    rerun_missing_two_shell = rerun_missing_two_shell,
-    rerun_corrupt_two_shell = rerun_corrupt_two_shell,
-    integrity_check = two_shell_integrity_check,
+    pm_tag = two_step_pm_tag,
+    minobs_tag = two_step_minobs_tag,
+    sample_map = two_step_sample_map,
+    reuse_two_step = reuse_two_step,
+    rerun_missing_two_step = rerun_missing_two_step,
+    rerun_corrupt_two_step = rerun_corrupt_two_step,
+    integrity_check = two_step_integrity_check,
     base_nn_prior = base_nn_prior,
     ...
   )
@@ -5088,7 +5088,7 @@ alfak_cohort_transition <- function(patients,
   alfak_log_event(
     level = "INFO",
     component = "alfak_cohort_transition",
-    detail = sprintf("stage=two_shell complete reused=%d rerun=%d", sum(two_shell_status$reused), sum(two_shell_status$rerun))
+    detail = sprintf("stage=two_step complete reused=%d rerun=%d", sum(two_step_status$reused), sum(two_step_status$rerun))
   )
 
   alfak_log_event(
@@ -5097,9 +5097,9 @@ alfak_cohort_transition <- function(patients,
     detail = "stage=extract_transition_records start"
   )
   records <- extract_cohort_transition_records(
-    fit_dirs = two_shell_status$fit_dir,
-    patient_ids = two_shell_status$patient_id,
-    pm = two_shell_pm,
+    fit_dirs = two_step_status$fit_dir,
+    patient_ids = two_step_status$patient_id,
+    pm = two_step_pm,
     grouping = cohort_transition_grouping,
     cohort_transition_use_zero = cohort_transition_use_zero,
     cohort_transition_zero_min_expected_count = cohort_transition_zero_min_expected_count,
@@ -5216,9 +5216,9 @@ alfak_cohort_transition <- function(patients,
     detail = sprintf("stage=learn_prior complete prior_version=%s", prior$version %||% "unknown")
   )
   diagnostics <- prior$diagnostics
-  diagnostics$two_shell_root <- two_shell_root
-  diagnostics$pm_tag <- unique(two_shell_status$pm_tag)
-  diagnostics$minobs_tag <- unique(two_shell_status$minobs_tag)
+  diagnostics$two_step_root <- two_step_root
+  diagnostics$pm_tag <- unique(two_step_status$pm_tag)
+  diagnostics$minobs_tag <- unique(two_step_status$minobs_tag)
 
   if (isTRUE(cohort_transition_save_diagnostics)) {
     saveRDS(records, file.path(outdir, "cohort_transition_records.Rds"))
@@ -5360,7 +5360,7 @@ alfak_cohort_transition <- function(patients,
   )
 
   invisible(list(
-    two_shell_status = two_shell_status,
+    two_step_status = two_step_status,
     records = records,
     prior = prior,
     diagnostics = diagnostics,

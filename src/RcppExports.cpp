@@ -182,16 +182,16 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// alfak_two_shell_path_responsibilities_cpp
-Rcpp::List alfak_two_shell_path_responsibilities_cpp(Rcpp::CharacterVector descendant, Rcpp::NumericVector parent_anchor_exposure, Rcpp::NumericVector transition_probability);
-RcppExport SEXP _alfakR_alfak_two_shell_path_responsibilities_cpp(SEXP descendantSEXP, SEXP parent_anchor_exposureSEXP, SEXP transition_probabilitySEXP) {
+// alfak_two_step_path_responsibilities_cpp
+Rcpp::List alfak_two_step_path_responsibilities_cpp(Rcpp::CharacterVector descendant, Rcpp::NumericVector parent_anchor_exposure, Rcpp::NumericVector transition_probability);
+RcppExport SEXP _alfakR_alfak_two_step_path_responsibilities_cpp(SEXP descendantSEXP, SEXP parent_anchor_exposureSEXP, SEXP transition_probabilitySEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type descendant(descendantSEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type parent_anchor_exposure(parent_anchor_exposureSEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type transition_probability(transition_probabilitySEXP);
-    rcpp_result_gen = Rcpp::wrap(alfak_two_shell_path_responsibilities_cpp(descendant, parent_anchor_exposure, transition_probability));
+    rcpp_result_gen = Rcpp::wrap(alfak_two_step_path_responsibilities_cpp(descendant, parent_anchor_exposure, transition_probability));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -208,9 +208,9 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// alfak_neighbor_two_shell_objective_cpp
-double alfak_neighbor_two_shell_objective_cpp(double fc_param, Rcpp::NumericVector parent_fitness, Rcpp::NumericVector pij_values, Rcpp::NumericVector parent_birth_times, Rcpp::NumericVector timepoints, Rcpp::NumericMatrix parent_xfit, Rcpp::NumericVector child_obs, Rcpp::NumericVector ntot, double inward_prior_mean, double inward_prior_sd, Rcpp::NumericVector inward_prior_weights, bool do_inward_prior, Rcpp::NumericVector outward_fitness, double outward_prior_mean, Rcpp::NumericVector outward_prior_sd, Rcpp::NumericVector outward_prior_weights, double outward_lambda, double tol);
-RcppExport SEXP _alfakR_alfak_neighbor_two_shell_objective_cpp(SEXP fc_paramSEXP, SEXP parent_fitnessSEXP, SEXP pij_valuesSEXP, SEXP parent_birth_timesSEXP, SEXP timepointsSEXP, SEXP parent_xfitSEXP, SEXP child_obsSEXP, SEXP ntotSEXP, SEXP inward_prior_meanSEXP, SEXP inward_prior_sdSEXP, SEXP inward_prior_weightsSEXP, SEXP do_inward_priorSEXP, SEXP outward_fitnessSEXP, SEXP outward_prior_meanSEXP, SEXP outward_prior_sdSEXP, SEXP outward_prior_weightsSEXP, SEXP outward_lambdaSEXP, SEXP tolSEXP) {
+// alfak_neighbor_two_step_objective_cpp
+double alfak_neighbor_two_step_objective_cpp(double fc_param, Rcpp::NumericVector parent_fitness, Rcpp::NumericVector pij_values, Rcpp::NumericVector parent_birth_times, Rcpp::NumericVector timepoints, Rcpp::NumericMatrix parent_xfit, Rcpp::NumericVector child_obs, Rcpp::NumericVector ntot, double inward_prior_mean, double inward_prior_sd, Rcpp::NumericVector inward_prior_weights, bool do_inward_prior, Rcpp::NumericVector outward_fitness, double outward_prior_mean, Rcpp::NumericVector outward_prior_sd, Rcpp::NumericVector outward_prior_weights, double outward_lambda, double tol);
+RcppExport SEXP _alfakR_alfak_neighbor_two_step_objective_cpp(SEXP fc_paramSEXP, SEXP parent_fitnessSEXP, SEXP pij_valuesSEXP, SEXP parent_birth_timesSEXP, SEXP timepointsSEXP, SEXP parent_xfitSEXP, SEXP child_obsSEXP, SEXP ntotSEXP, SEXP inward_prior_meanSEXP, SEXP inward_prior_sdSEXP, SEXP inward_prior_weightsSEXP, SEXP do_inward_priorSEXP, SEXP outward_fitnessSEXP, SEXP outward_prior_meanSEXP, SEXP outward_prior_sdSEXP, SEXP outward_prior_weightsSEXP, SEXP outward_lambdaSEXP, SEXP tolSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -232,7 +232,7 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type outward_prior_weights(outward_prior_weightsSEXP);
     Rcpp::traits::input_parameter< double >::type outward_lambda(outward_lambdaSEXP);
     Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
-    rcpp_result_gen = Rcpp::wrap(alfak_neighbor_two_shell_objective_cpp(fc_param, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, child_obs, ntot, inward_prior_mean, inward_prior_sd, inward_prior_weights, do_inward_prior, outward_fitness, outward_prior_mean, outward_prior_sd, outward_prior_weights, outward_lambda, tol));
+    rcpp_result_gen = Rcpp::wrap(alfak_neighbor_two_step_objective_cpp(fc_param, parent_fitness, pij_values, parent_birth_times, timepoints, parent_xfit, child_obs, ntot, inward_prior_mean, inward_prior_sd, inward_prior_weights, do_inward_prior, outward_fitness, outward_prior_mean, outward_prior_sd, outward_prior_weights, outward_lambda, tol));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -577,9 +577,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_alfakR_alfak_weighted_parent_mean_cpp", (DL_FUNC) &_alfakR_alfak_weighted_parent_mean_cpp, 3},
     {"_alfakR_alfak_neighbor_loglik_grid_cpp", (DL_FUNC) &_alfakR_alfak_neighbor_loglik_grid_cpp, 9},
     {"_alfakR_alfak_nn_prior_marginal_negloglik_cpp", (DL_FUNC) &_alfakR_alfak_nn_prior_marginal_negloglik_cpp, 7},
-    {"_alfakR_alfak_two_shell_path_responsibilities_cpp", (DL_FUNC) &_alfakR_alfak_two_shell_path_responsibilities_cpp, 3},
+    {"_alfakR_alfak_two_step_path_responsibilities_cpp", (DL_FUNC) &_alfakR_alfak_two_step_path_responsibilities_cpp, 3},
     {"_alfakR_alfak_group_cap_weights_cpp", (DL_FUNC) &_alfakR_alfak_group_cap_weights_cpp, 3},
-    {"_alfakR_alfak_neighbor_two_shell_objective_cpp", (DL_FUNC) &_alfakR_alfak_neighbor_two_shell_objective_cpp, 18},
+    {"_alfakR_alfak_neighbor_two_step_objective_cpp", (DL_FUNC) &_alfakR_alfak_neighbor_two_step_objective_cpp, 18},
     {"_alfakR_alfak_qr_accum_cpp", (DL_FUNC) &_alfakR_alfak_qr_accum_cpp, 2},
     {"_alfakR_context_kernel_weights_cpp", (DL_FUNC) &_alfakR_context_kernel_weights_cpp, 28},
     {"_alfakR_context_bandwidths_cpp", (DL_FUNC) &_alfakR_context_bandwidths_cpp, 12},

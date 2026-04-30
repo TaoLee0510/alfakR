@@ -141,7 +141,7 @@ weighted_prior_cache_matches <- function(cached,
     return(FALSE)
   }
 
-  if (!nn_prior %in% c("empirical_censored_weighted", "empirical_two_shell")) {
+  if (!nn_prior %in% c("empirical_censored_weighted", "empirical_two_step")) {
     return(TRUE)
   }
 
@@ -549,7 +549,7 @@ run_alfak_fit <- function(patient_id,
     " | parameter_label=", parameter_label,
     " | nn_prior=", nn_prior,
     " | grid=", nn_prior_grid_n,
-    if (nn_prior %in% c("empirical_censored_weighted", "empirical_two_shell")) paste0(
+    if (nn_prior %in% c("empirical_censored_weighted", "empirical_two_step")) paste0(
       " | fit_subset=", nn_prior_fit_subset,
       " | zero_q=", signif(nn_prior_zero_exposure_quantile, 4),
       " | zero_scale=", signif(nn_prior_zero_weight_scale, 4),
@@ -1220,7 +1220,7 @@ run_cohort_transition_task_group <- function(task_tbl,
   ) {
     base_results_tbl %>%
       dplyr::filter(
-        parameter_label == "nn_prior_empirical_two_shell",
+        parameter_label == "nn_prior_empirical_two_step",
         status == "ok",
         minobs == minobs_value,
         abs(pm - pm_value) <= max(1e-12, abs(pm_value) * 1e-8)
@@ -1236,7 +1236,7 @@ run_cohort_transition_task_group <- function(task_tbl,
       pm,
       base_outdir = purrr::pmap_chr(
         list(patient_id, minobs, pm),
-        ~ task_outdir_parameter(fit_root, ..1, ..2, ..3, "nn_prior_empirical_two_shell")
+        ~ task_outdir_parameter(fit_root, ..1, ..2, ..3, "nn_prior_empirical_two_step")
       )
     ) %>%
     dplyr::filter(vapply(base_outdir, has_complete_alfak_outputs, logical(1))) %>%
@@ -1251,7 +1251,7 @@ run_cohort_transition_task_group <- function(task_tbl,
 
   missing_base_rows <- build_task_error_rows(
     missing_base_task_tbl,
-    "Missing successful nn_prior_empirical_two_shell prerequisite for cohort_transition."
+    "Missing successful nn_prior_empirical_two_step prerequisite for cohort_transition."
   )
   if (!nrow(eligible_task_tbl)) {
     return(missing_base_rows)
@@ -1264,7 +1264,7 @@ run_cohort_transition_task_group <- function(task_tbl,
   }
 
   cohort_outdir <- dirname(as.character(eligible_task_tbl$outdir[[1]]))
-  two_shell_root <- file.path(fit_root, "nn_prior_empirical_two_shell")
+  two_step_root <- file.path(fit_root, "nn_prior_empirical_two_step")
   cohort_started_at <- Sys.time()
   cohort_error <- NULL
 
@@ -1299,16 +1299,16 @@ run_cohort_transition_task_group <- function(task_tbl,
         patients = patients,
         patient_ids = as.character(eligible_task_tbl$patient_id),
         outdir = cohort_outdir,
-        two_shell_root = two_shell_root,
-        two_shell_pm = pm_value,
-        two_shell_minobs = minobs_value,
-        two_shell_pm_tag = paste0("pm_", pm_to_label(pm_value)),
-        two_shell_minobs_tag = paste0("MINOBS_", minobs_value),
-        reuse_two_shell = TRUE,
-        rerun_missing_two_shell = FALSE,
-        rerun_corrupt_two_shell = FALSE,
-        two_shell_integrity_check = "strict",
-        base_nn_prior = "empirical_two_shell",
+        two_step_root = two_step_root,
+        two_step_pm = pm_value,
+        two_step_minobs = minobs_value,
+        two_step_pm_tag = paste0("pm_", pm_to_label(pm_value)),
+        two_step_minobs_tag = paste0("MINOBS_", minobs_value),
+        reuse_two_step = TRUE,
+        rerun_missing_two_step = FALSE,
+        rerun_corrupt_two_step = FALSE,
+        two_step_integrity_check = "strict",
+        base_nn_prior = "empirical_two_step",
         cohort_transition_version = cohort_transition_version,
         cohort_contextual_apply_to = cohort_contextual_apply_to,
         cohort_context_keep_baseline_when_sparse = cohort_context_keep_baseline_when_sparse,

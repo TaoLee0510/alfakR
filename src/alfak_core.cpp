@@ -544,12 +544,12 @@ double alfak_nn_prior_marginal_negloglik_cpp(Rcpp::NumericMatrix loglik_mat,
 }
 
 // [[Rcpp::export]]
-Rcpp::List alfak_two_shell_path_responsibilities_cpp(Rcpp::CharacterVector descendant,
+Rcpp::List alfak_two_step_path_responsibilities_cpp(Rcpp::CharacterVector descendant,
                                                      Rcpp::NumericVector parent_anchor_exposure,
                                                      Rcpp::NumericVector transition_probability) {
   const int n = descendant.size();
   if (parent_anchor_exposure.size() != n || transition_probability.size() != n) {
-    Rcpp::stop("Two-shell path responsibility inputs must be aligned.");
+    Rcpp::stop("Two-step path responsibility inputs must be aligned.");
   }
   Rcpp::NumericVector path_supply(n);
   Rcpp::NumericVector path_responsibility(n);
@@ -623,7 +623,7 @@ Rcpp::NumericVector alfak_group_cap_weights_cpp(Rcpp::CharacterVector group,
 }
 
 // [[Rcpp::export]]
-double alfak_neighbor_two_shell_objective_cpp(double fc_param,
+double alfak_neighbor_two_step_objective_cpp(double fc_param,
                                               Rcpp::NumericVector parent_fitness,
                                               Rcpp::NumericVector pij_values,
                                               Rcpp::NumericVector parent_birth_times,

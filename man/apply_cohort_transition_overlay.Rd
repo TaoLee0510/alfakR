@@ -10,9 +10,9 @@ apply_cohort_transition_overlay(
   build_opt_fc,
   search_interval,
   prior_use,
-  f_two_shell_baseline,
+  f_two_step_baseline,
   nn_present = NULL,
-  two_shell_node_diagnostics = NULL,
+  two_step_node_diagnostics = NULL,
   cohort_transition_apply_to = c("zero_only", "low_information", "all"),
   cohort_transition_lambda = 0.25,
   cohort_transition_max_borrowing_fraction = 0.5,
@@ -32,11 +32,11 @@ apply_cohort_transition_overlay(
 
 \item{prior_use}{Patient-specific cohort transition prior.}
 
-\item{f_two_shell_baseline}{Patient-specific two-shell baseline fitness.}
+\item{f_two_step_baseline}{Patient-specific two-step baseline fitness.}
 
 \item{nn_present}{Optional logical indicating whether the child is observed.}
 
-\item{two_shell_node_diagnostics}{Optional one-row two-shell diagnostics.}
+\item{two_step_node_diagnostics}{Optional one-row two-step diagnostics.}
 
 \item{cohort_transition_apply_to}{Overlay application mode.}
 

@@ -8,17 +8,17 @@ alfak_cohort_transition(
   patients,
   outdir,
   patient_ids = names(patients),
-  two_shell_root = NULL,
-  two_shell_pm = pm,
-  two_shell_minobs = minobs,
-  two_shell_pm_tag = NULL,
-  two_shell_minobs_tag = NULL,
-  two_shell_sample_map = NULL,
-  reuse_two_shell = TRUE,
-  rerun_missing_two_shell = TRUE,
-  rerun_corrupt_two_shell = TRUE,
-  two_shell_integrity_check = c("strict", "basic", "none"),
-  base_nn_prior = "empirical_two_shell",
+  two_step_root = NULL,
+  two_step_pm = pm,
+  two_step_minobs = minobs,
+  two_step_pm_tag = NULL,
+  two_step_minobs_tag = NULL,
+  two_step_sample_map = NULL,
+  reuse_two_step = TRUE,
+  rerun_missing_two_step = TRUE,
+  rerun_corrupt_two_step = TRUE,
+  two_step_integrity_check = c("strict", "basic", "none"),
+  base_nn_prior = "empirical_two_step",
   minobs = 20,
   nboot = 45,
   n0 = 1e+05,
@@ -31,12 +31,12 @@ alfak_cohort_transition(
     "exact_event"),
   cohort_transition_version = c("contextual", "v2", "v1"),
   cohort_transition_apply_to = c("zero_only", "low_information", "all"),
-  cohort_transition_overlay_base = c("empirical_two_shell", "direct"),
+  cohort_transition_overlay_base = c("empirical_two_step", "direct"),
   cohort_transition_lambda = 0.25,
   cohort_transition_max_borrowing_fraction = 0.5,
   cohort_transition_max_abs_delta_shift = NULL,
   cohort_contextual_apply_to = NULL,
-  cohort_contextual_overlay_base = c("empirical_two_shell", "direct"),
+  cohort_contextual_overlay_base = c("empirical_two_step", "direct"),
   cohort_context_baseline_ploidy = 2,
   cohort_context_chromosome_weights = NULL,
   cohort_context_profile_transform = c("mass", "centered", "zscore", "raw"),
@@ -145,21 +145,21 @@ alfak_cohort_transition(
 
 \item{patient_ids}{Patient IDs. Defaults to \code{names(patients)}.}
 
-\item{two_shell_root}{Optional root containing existing two-shell results.}
+\item{two_step_root}{Optional root containing existing two-step results.}
 
-\item{two_shell_pm, two_shell_minobs}{Upstream two-shell PM and MINIOBS values.}
+\item{two_step_pm, two_step_minobs}{Upstream two-step PM and MINIOBS values.}
 
-\item{two_shell_pm_tag, two_shell_minobs_tag}{Optional exact cache directory tags.}
+\item{two_step_pm_tag, two_step_minobs_tag}{Optional exact cache directory tags.}
 
-\item{two_shell_sample_map}{Optional named patient-to-sample directory map.}
+\item{two_step_sample_map}{Optional named patient-to-sample directory map.}
 
-\item{reuse_two_shell}{Reuse valid two-shell fit directories.}
+\item{reuse_two_step}{Reuse valid two-step fit directories.}
 
-\item{rerun_missing_two_shell}{Rerun only missing two-shell fits.}
+\item{rerun_missing_two_step}{Rerun only missing two-step fits.}
 
-\item{rerun_corrupt_two_shell}{Back up and rerun only corrupt two-shell fits.}
+\item{rerun_corrupt_two_step}{Back up and rerun only corrupt two-step fits.}
 
-\item{two_shell_integrity_check}{Integrity mode for cached fits.}
+\item{two_step_integrity_check}{Integrity mode for cached fits.}
 
 \item{base_nn_prior}{Upstream prior mode used when rerunning base fits.}
 
@@ -173,10 +173,10 @@ keeps the group-level heterogeneity-aware selective-borrowing overlay.}
 
 \item{cohort_transition_apply_to}{Which NN nodes can receive the v2 overlay.
 The default \code{"zero_only"} leaves observed NN estimates at the
-patient-specific two-shell baseline.}
+patient-specific two-step baseline.}
 
 \item{cohort_transition_overlay_base}{Baseline used by v2, by default
-\code{"empirical_two_shell"}.}
+\code{"empirical_two_step"}.}
 
 \item{cohort_transition_lambda}{Global multiplier for v2 cohort borrowing.}
 
@@ -184,7 +184,7 @@ patient-specific two-shell baseline.}
 allowed before a v2 update is skipped.}
 
 \item{cohort_transition_max_abs_delta_shift}{Optional maximum absolute change
-from the two-shell baseline.}
+from the two-step baseline.}
 
 \item{cohort_contextual_apply_to}{Which NN nodes can receive contextual
 overlay updates. If \code{NULL}, inherits \code{cohort_transition_apply_to}.}
@@ -238,9 +238,9 @@ count for contextual zero censoring evidence.}
 fraction before an update is skipped.}
 
 \item{cohort_context_max_abs_delta_shift}{Optional maximum contextual shift
-from the two-shell baseline.}
+from the two-step baseline.}
 
-\item{cohort_context_keep_baseline_when_sparse, cohort_context_keep_baseline_when_high_variable}{Keep the two-shell baseline for sparse or high-variable contexts.}
+\item{cohort_context_keep_baseline_when_sparse, cohort_context_keep_baseline_when_high_variable}{Keep the two-step baseline for sparse or high-variable contexts.}
 
 \item{cohort_context_leave_one_patient_out}{Exclude the target patient from
 contextual evidence lookup during refit.}
@@ -314,23 +314,23 @@ Invisibly, a list with status tables, records, prior, diagnostics, and patient o
 \description{
 \code{alfak_cohort_transition()} learns a cohort-level prior on CNA transition
 effects, Delta fitness = child fitness - parent fitness, from upstream
-patient-specific two-shell results. It then refits every patient separately.
+patient-specific two-step results. It then refits every patient separately.
 Raw patient count matrices are never concatenated and no pooled absolute
 cohort fitness landscape is estimated.
 }
 \details{
-The upstream two-shell cache is resolved as
-\verb{<two_shell_root>/pm_<xxxx>/MINIOBS<xxx>/<sample_name>/}. For example,
-\verb{existing_two_shell_results/pm_0.00005/MINIOBS20/patient_A/} should contain
+The upstream two-step cache is resolved as
+\verb{<two_step_root>/pm_<xxxx>/MINIOBS<xxx>/<sample_name>/}. For example,
+\verb{existing_two_step_results/pm_0.00005/MINIOBS20/patient_A/} should contain
 \code{bootstrap_res.Rds}, \code{landscape.Rds}, and \code{nn_prior_diagnostics.Rds}, with
 \code{landscape_posterior_samples.Rds} preferred when available. If
-\code{two_shell_root} is \code{NULL}, the same layout is created under
-\code{file.path(outdir, "two_shell_base")}.
+\code{two_step_root} is \code{NULL}, the same layout is created under
+\code{file.path(outdir, "two_step_base")}.
 
-Valid cached two-shell fits are reused. A missing patient directory triggers
-a rerun only for that patient when \code{rerun_missing_two_shell = TRUE}. A corrupt
+Valid cached two-step fits are reused. A missing patient directory triggers
+a rerun only for that patient when \code{rerun_missing_two_step = TRUE}. A corrupt
 or incomplete patient directory is backed up with a \verb{__corrupt_<timestamp>}
-suffix and rerun only for that patient when \code{rerun_corrupt_two_shell = TRUE}.
+suffix and rerun only for that patient when \code{rerun_corrupt_two_step = TRUE}.
 
 The default contextual cohort model is fit on transition effects, not
 absolute fitness: \verb{Delta = child fitness - parent fitness}. It builds an
@@ -340,7 +340,7 @@ CNA burden, changed chromosome, direction, local copy state, and event
 similarity. Raw bootstrap/path records are not treated as independent
 patients, zero NN are censoring evidence only, and low-exposure zero NN remain
 non-identifiable. High-variable or sparse contexts keep the patient-specific
-two-shell baseline and receive uncertainty labels instead of forced cohort
+two-step baseline and receive uncertainty labels instead of forced cohort
 imputation.
 
 Version \code{"v2"} remains available as a group-level fallback/comparison mode.
@@ -348,7 +348,7 @@ It aggregates raw bootstrap/path records within patient and transition group,
 classifies groups for cross-patient consistency, and borrows only weakly from
 supported groups. With leave-one-patient-out enabled, patient \code{p} is refit
 using evidence from the other patients; this avoids borrowing that patient's
-own two-shell transition effects back into its refit.
+own two-step transition effects back into its refit.
 
 Patient-level diagnostics include cohort borrowing fractions and flags for
 prior-dominated or non-identifiable zero nearest neighbours. A
@@ -366,12 +366,12 @@ patients <- list(
 alfak_cohort_transition(
   patients = patients,
   outdir = "cohort_transition_fit",
-  two_shell_root = "existing_two_shell_results",
+  two_step_root = "existing_two_step_results",
   pm = 0.00005,
   minobs = 20,
-  two_shell_pm_tag = "pm_0.00005",
-  two_shell_minobs_tag = "MINIOBS20",
-  base_nn_prior = "empirical_two_shell",
+  two_step_pm_tag = "pm_0.00005",
+  two_step_minobs_tag = "MINIOBS20",
+  base_nn_prior = "empirical_two_step",
   cohort_transition_grouping = "gain_loss_chr",
   cohort_transition_leave_one_patient_out = TRUE
 )
