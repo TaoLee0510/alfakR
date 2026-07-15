@@ -168,6 +168,30 @@ test_that("abm_max_pop accepts unlimited and capped semantics in regular and GRF
   expect_identical(grf_caps, c(-1, 0, 5))
 })
 
+test_that("ABM culling enforces max_population_size even with high survival fraction", {
+  abm_res <- suppressWarnings(
+    alfakR:::run_karyotype_abm(
+      initial_population_r = stats::setNames(list(50), "2.2"),
+      fitness_map_r = stats::setNames(list(20), "2.2"),
+      p_missegregation = 0,
+      dt = 0.1,
+      n_steps = 8L,
+      max_population_size = 50,
+      culling_survival_fraction = 0.999,
+      record_interval = 1L,
+      seed = 123L,
+      grf_centroids = matrix(0, 0, 0),
+      grf_lambda = NA_real_
+    )
+  )
+
+  recorded_totals <- vapply(abm_res, function(counts) sum(as.numeric(counts)), numeric(1))
+  post_initial_totals <- recorded_totals[names(recorded_totals) != "0"]
+
+  expect_true(length(post_initial_totals) > 0)
+  expect_true(all(post_initial_totals <= 50))
+})
+
 test_that("ABM wrappers pass through cull-only mode and return recorded ABM steps", {
   lscape <- data.frame(k = c("2.2", "3.1"), mean = c(0.1, 0.2), stringsAsFactors = FALSE)
   x0 <- c("2.2" = 0.25, "3.1" = 0.75)
