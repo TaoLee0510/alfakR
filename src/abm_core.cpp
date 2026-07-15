@@ -54,6 +54,84 @@ long long validate_initial_population_count(double count_r, const std::string& k
   return static_cast<long long>(count_r);
 }
 
+long long total_population_count(const PopulationMap& population) {
+  long long total = 0;
+  for (const auto& pair : population) {
+    if (pair.second > 0) {
+      total += pair.second;
+    }
+  }
+  return total;
+}
+
+PopulationMap trim_population_to_cap(const PopulationMap& population,
+                                     long long max_population_size,
+                                     std::mt19937& rng_engine) {
+  PopulationMap trimmed_population;
+  if (max_population_size <= 0) {
+    return trimmed_population;
+  }
+
+  const long long current_total = total_population_count(population);
+  if (current_total <= max_population_size) {
+    return population;
+  }
+
+  struct AllocationRemainder {
+    std::vector<int> cn;
+    long double fractional_remainder;
+    double random_tie_breaker;
+  };
+
+  std::vector<AllocationRemainder> allocations;
+  allocations.reserve(population.size());
+  std::uniform_real_distribution<double> uniform_dist(0.0, 1.0);
+  const long double sampling_fraction =
+    static_cast<long double>(max_population_size) / static_cast<long double>(current_total);
+  long long assigned_total = 0;
+
+  for (const auto& pair : population) {
+    if (pair.second <= 0) {
+      continue;
+    }
+    const long double exact_count = static_cast<long double>(pair.second) * sampling_fraction;
+    const long long base_count = static_cast<long long>(std::floor(exact_count));
+    const long double fractional_remainder = exact_count - static_cast<long double>(base_count);
+
+    if (base_count > 0) {
+      trimmed_population[pair.first] = base_count;
+      assigned_total += base_count;
+    }
+    allocations.push_back(
+      AllocationRemainder{pair.first, fractional_remainder, uniform_dist(rng_engine)}
+    );
+  }
+
+  long long remaining = max_population_size - assigned_total;
+  if (remaining > 0) {
+    std::sort(
+      allocations.begin(),
+      allocations.end(),
+      [](const AllocationRemainder& lhs, const AllocationRemainder& rhs) {
+        if (lhs.fractional_remainder == rhs.fractional_remainder) {
+          return lhs.random_tie_breaker < rhs.random_tie_breaker;
+        }
+        return lhs.fractional_remainder > rhs.fractional_remainder;
+      }
+    );
+
+    for (const auto& allocation : allocations) {
+      if (remaining <= 0) {
+        break;
+      }
+      trimmed_population[allocation.cn] += 1;
+      --remaining;
+    }
+  }
+
+  return trimmed_population;
+}
+
 } // namespace
 
 // --- Helper Function Definitions ---
@@ -473,15 +551,14 @@ Rcpp::List run_karyotype_abm(
       }
     }
     
-    long long current_total_pop = 0; // Renamed from next_total_pop
     for (auto it = population.begin(); it != population.end(); ) {
       if (it->second <= 0 || (!use_grf && !fitness_map.count(it->first))) {
         it = population.erase(it);
       } else {
-        current_total_pop += it->second;
         ++it;
       }
     }
+    long long current_total_pop = total_population_count(population);
     
     if (max_population_size > 0 && current_total_pop > max_population_size) {
       
@@ -496,7 +573,10 @@ Rcpp::List run_karyotype_abm(
         results_over_time.push_back(counts_cull, std::to_string(step));
       }
       
-      double sampling_fraction = culling_survival_fraction; 
+      double sampling_fraction = std::min(
+        culling_survival_fraction,
+        static_cast<double>(max_population_size) / static_cast<double>(current_total_pop)
+      );
       // Rcpp::Rcout << "Step " << step << ": Population " << current_total_pop // Optional verbose logging
       //             << " exceeded cap " << max_population_size
       //             << ". Culling to approx. " << static_cast<long long>(round(current_total_pop * sampling_fraction)) << " cells." << std::endl;
@@ -516,8 +596,11 @@ Rcpp::List run_karyotype_abm(
         population.clear(); 
       }
       // Recalculate current_total_pop after culling for accurate reporting if needed immediately
-      current_total_pop = 0;
-      for(const auto& pair_recalc : population) current_total_pop += pair_recalc.second;
+      current_total_pop = total_population_count(population);
+      if (current_total_pop > max_population_size) {
+        population = trim_population_to_cap(population, max_population_size, rng_engine);
+        current_total_pop = total_population_count(population);
+      }
     } 
     
     // const int report_freq = std::max(1, n_steps / 10); // Reporting logic can be kept if desired
