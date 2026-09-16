@@ -67,7 +67,9 @@
 #'       Kriging-inferred fitness landscape from `fitKrig`.
 #'     \item `landscape_posterior_samples.Rds`: The full matrix of posterior
 #'       samples from the Kriging bootstraps in `fitKrig`.
-#'     \item `xval.Rds`: The cross-validation R-squared value (`Rxv`).
+#'     \item `xval.Rds`: Cross-validation output containing the R-squared value
+#'       (`R2R`) and the paired prediction/observation values used for xval
+#'       scatter plots.
 #'     \item `landscape_data.Rds`: Optional stable Kriging mean/median model
 #'       objects, written only when `landscape_data_output = TRUE`.
 #'   }
@@ -168,8 +170,9 @@ alfak <- function(yi, outdir, passage_times = NULL, minobs = 20,
     names(Krig_stable) <- c("mean", "median")
     saveRDS(Krig_stable, file = file.path(outdir, "landscape_data.Rds"))
   }
-  Rxv <- xval(fq_boot, krig_bootstrap_mode = krig_bootstrap_mode)
-  saveRDS(Rxv, file = file.path(outdir, "xval.Rds"))
+  xval_result <- xval(fq_boot, krig_bootstrap_mode = krig_bootstrap_mode)
+  saveRDS(xval_result, file = file.path(outdir, "xval.Rds"))
+  Rxv <- extract_xval_r2r(xval_result)
 
   ##END HERE.
 
@@ -1590,6 +1593,34 @@ fitKrig <- function(fq_boot, nboot, krig_bootstrap_mode = c("marginal", "joint")
 #' @noRd
 xval <- function(fq_boot, krig_bootstrap_mode = c("marginal", "joint")) {
   krig_bootstrap_mode <- validate_krig_bootstrap_mode(krig_bootstrap_mode)
+  build_xval_result <- function(r2r = NA_real_, tmp = NULL) {
+    if (is.null(tmp) || nrow(tmp) == 0) {
+      observations <- numeric(0)
+      predictions <- numeric(0)
+      xval_data <- data.frame(k = character(0),
+                              observation = numeric(0),
+                              prediction = numeric(0),
+                              stringsAsFactors = FALSE)
+    } else {
+      observations <- unname(tmp[, "test_f"])
+      predictions <- unname(tmp[, "est_f"])
+      point_names <- rownames(tmp)
+      if (is.null(point_names)) {
+        point_names <- rep(NA_character_, length(observations))
+      }
+      names(observations) <- point_names
+      names(predictions) <- point_names
+      xval_data <- data.frame(k = point_names,
+                              observation = observations,
+                              prediction = predictions,
+                              stringsAsFactors = FALSE)
+    }
+    list(R2R = as.numeric(r2r),
+         predictions = predictions,
+         observations = observations,
+         xval_data = xval_data)
+  }
+
   fboot <- cbind(fq_boot$final_fitness, fq_boot$nn_fitness)
   fq_str <- colnames(fq_boot$final_fitness)
   nn_str <- colnames(fq_boot$nn_fitness) # Can be NULL
@@ -1600,14 +1631,14 @@ xval <- function(fq_boot, krig_bootstrap_mode = c("marginal", "joint")) {
   combined_strs <- c(valid_fq_str, valid_nn_str)
   if(length(combined_strs) == 0 || ncol(fboot) == 0 || nrow(fboot) == 0) {
     warning("xval: No valid fitness data to perform cross-validation.")
-    return(NA_real_)
+    return(build_xval_result())
   }
   ktrain <- unname(parse_karyotype_ids(combined_strs))
 
   # Original ids logic for xval
   if(length(valid_fq_str) == 0) {
     warning("xval: No fq_str defined, cannot perform original xval logic based on fq_str.")
-    return(NA_real_)
+    return(build_xval_result())
   }
 
   ids <- unlist(lapply(seq_along(valid_fq_str), function(i_xval) {
@@ -1694,7 +1725,7 @@ xval <- function(fq_boot, krig_bootstrap_mode = c("marginal", "joint")) {
 
   if(nrow(tmp) < 2) { # R2R needs at least 2 points
     warning("Not enough valid observations after cross-validation to compute R2R.")
-    return(NA_real_)
+    return(build_xval_result(tmp = tmp))
   }
-  R2R(tmp[, 1], tmp[, 2])
+  build_xval_result(r2r = R2R(tmp[, 1], tmp[, 2]), tmp = tmp)
 }

@@ -100,7 +100,9 @@ The function primarily saves its results to RDS files in the \code{outdir}:
 Kriging-inferred fitness landscape from \code{fitKrig}.
 \item \code{landscape_posterior_samples.Rds}: The full matrix of posterior
 samples from the Kriging bootstraps in \code{fitKrig}.
-\item \code{xval.Rds}: The cross-validation R-squared value (\code{Rxv}).
+\item \code{xval.Rds}: Cross-validation output containing the R-squared value
+(\code{R2R}) and the paired prediction/observation values used for xval
+scatter plots.
 \item \code{landscape_data.Rds}: Optional stable Kriging mean/median model
 objects, written only when \code{landscape_data_output = TRUE}.
 }
