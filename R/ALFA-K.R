@@ -1716,11 +1716,19 @@ xval <- function(fq_boot, krig_bootstrap_mode = c("marginal", "joint")) {
       nstep.cv = ALFAK_KRIG_NSTEP_CV,
       give.warnings = TRUE
     )
-    est_f <- stats::predict(fit, test_k)
-    cbind(test_f, est_f)
+    est_f <- as.numeric(stats::predict(fit, test_k))
+    cbind(test_f = test_f, est_f = est_f)
   })
 
   tmp <- do.call(rbind, tmp_list)
+  if (!is.matrix(tmp) || ncol(tmp) != 2L) {
+    stop(sprintf(
+      "xval: expected two cross-validation columns, got %s (column names: %s).",
+      if (is.null(dim(tmp))) "no matrix" else ncol(tmp),
+      if (is.null(colnames(tmp))) "<none>" else paste(colnames(tmp), collapse = ", ")
+    ))
+  }
+  colnames(tmp) <- c("test_f", "est_f")
   tmp <- tmp[stats::complete.cases(tmp), , drop = FALSE] # Use stats::complete.cases
 
   if(nrow(tmp) < 2) { # R2R needs at least 2 points

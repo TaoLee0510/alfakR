@@ -894,7 +894,7 @@ test_that("birth-time fallback keeps neighbour estimation finite when roots are 
   expect_true(all(is.finite(res$nn_fitness)))
 })
 
-test_that("xval defaults to marginal column-wise bootstrap sampling", {
+test_that("xval saves prediction pairs when predict returns a named matrix", {
   fq_boot <- list(
     final_fitness = matrix(
       c(1, 10, 100,
@@ -915,11 +915,15 @@ test_that("xval defaults to marginal column-wise bootstrap sampling", {
           res <- alfakR:::xval(fq_boot)
           expect_type(res, "list")
           expect_true(is.numeric(res$R2R) && length(res$R2R) == 1)
+          expect_gt(length(res$predictions), 0L)
           expect_equal(length(res$predictions), length(res$observations))
           expect_equal(nrow(res$xval_data), length(res$predictions))
+          expect_equal(res$xval_data$prediction, unname(res$predictions))
+          expect_equal(res$xval_data$observation, unname(res$observations))
         },
         predict = function(object, x, ...) {
-          rep(mean(object$train_f), nrow(x))
+          matrix(rep(mean(object$train_f), nrow(x)), ncol = 1,
+                 dimnames = list(NULL, "krig_prediction"))
         },
         .package = "stats"
       )
